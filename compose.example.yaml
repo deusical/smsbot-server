@@ -1,0 +1,26 @@
+# Direct TLS template. Supply YOUR_HOST and YOUR_TLS_DIRECTORY locally.
+# No service is deployed by this example. Initialize volumes before starting.
+services:
+  smsbot:
+    build: .
+    image: smsbot-local
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    ports: ["127.0.0.1:8787:8787"]
+    command:
+      - --data=/var/lib/smsbot
+      - --key=/var/lib/smsbot-vault/master.key
+      - --listen=0.0.0.0:8787
+      - --origin=https://${SMSBOT_HOST:?Set SMSBOT_HOST}:8787
+      - --tls-cert=/run/tls/fullchain.pem
+      - --tls-key=/run/tls/privkey.pem
+    volumes:
+      - smsbot-state:/var/lib/smsbot
+      - smsbot-vault:/var/lib/smsbot-vault
+      - ${SMSBOT_TLS_DIRECTORY:?Set SMSBOT_TLS_DIRECTORY}:/run/tls:ro
+    tmpfs: [/tmp]
+volumes:
+  smsbot-state:
+  smsbot-vault:

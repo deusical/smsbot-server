@@ -1,0 +1,18 @@
+bin/
+.build-temp/
+web/node_modules/
+web/dist/
+internal/httpapi/assets/*
+!internal/httpapi/assets/.keep
+.env*
+*.db*
+*.key
+*.dpapi
+*.log
+coverage*
+playwright-report/
+test-results/
+web/.test-state/
+
+# Local implementation handoff
+docs/CHECKPOINT.md

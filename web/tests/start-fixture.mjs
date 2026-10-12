@@ -1,0 +1,11 @@
+import {mkdtempSync,mkdirSync,writeFileSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join,resolve} from 'node:path';
+import {spawn,spawnSync} from 'node:child_process';
+const root=mkdtempSync(join(tmpdir(),'smsbot-e2e-'));const data=join(root,'state');const key=join(root,'master.key');const owner=join(root,'owner.txt');
+const binary=resolve('../bin/'+(process.platform==='win32'?'smsbot.exe':'smsbot'));
+const setup=spawnSync(binary,['--data',data,'--key',key,'--init','--owner-file',owner],{stdio:'inherit'});
+if(setup.status!==0)process.exit(1);
+mkdirSync('.test-state',{recursive:true});writeFileSync('.test-state/connection.json',JSON.stringify({owner}));
+const child=spawn(binary,['--data',data,'--key',key,'--fixture','--listen','127.0.0.1:8788'],{stdio:'inherit'});
+process.on('SIGINT',()=>child.kill());process.on('SIGTERM',()=>child.kill());child.on('exit',code=>process.exit(code??0));

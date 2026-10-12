@@ -1,0 +1,13 @@
+# Server feature parity and acceptance
+
+Implemented and covered by synthetic tests: custom fixed/AI commands; profiles/model selection; per-model and per-command reasoning, temperature, output-token and answer-length controls; immutable queued settings/context; opt-in scoped memory/reset/revocation; approvals/expiry; cancellation/final-send trust checks; quiet hours; global request limits and reported-spend thresholds; offline playground; usage/activity; server/Android command recipe migration; retained text pagination/search/retention; manual compose; explicit phone text-history import without replay; encrypted offline backup/restore; private-origin/direct-TLS hosting; web and native forms and local/server ownership guards.
+
+The native client is tested against local HTTP mocks and the actual Go fixture API on a disposable AVD. Web tests include responsive layouts, asynchronous state/error behavior and configuration workflows. The fixture provider and sender perform no real requests.
+
+Transport-specific differences: Google chooses SMS/RCS/fallback; there is no direct carrier sender, SIM selection or Android SMS segmentation in server mode. Paired replies are delivered to the transport in full up to the configured cap. `!more` explains that policy. Provider retries are intentionally absent; a failure is terminal and visible. Service approvals expire after two minutes to avoid stale queued replies. Existing Android local-mode behavior is retained.
+
+History imports cover available complete text messages only, within retention. Attachments, arbitrary inbox creation and a guarantee of complete provider history are outside this milestone. Recipe files contain commands/settings, never enrolled identities or credentials. Cross-platform/unprotected key export is not implemented; recovery requires the original readable vault key. Public deployment remains outside scope.
+
+Outstanding human acceptance: private HTTPS/certificate/network setup on the actual phone; live AI/provider acceptance if authorized; locked/open/background phone cases; SMS/RCS and receipt evidence; clean Google restart/outage/browser-handoff behavior; extended cookie/token observation. Owner-reported live ping success is recorded separately. These are not replaced by emulator or fixture results.
+
+Independent review requirement: the owner authorized Gemini review subagents while implementation continues without subagents. Merge requires a successful independent review of the current PR HEAD with no actionable issues and passing relevant checks.

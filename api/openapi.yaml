@@ -1,0 +1,906 @@
+openapi: 3.1.0
+info:
+  title: SmsBot control API
+  version: 1.0.0
+  description: Server commands, configuration, retained text history and control API.
+    Fixture transport/provider are offline. Browser mutations require exact Origin;
+    native clients use revocable bearer credentials. New optional capabilities are
+    advertised by state.
+servers:
+- url: /api/v1
+security:
+- browserSession: []
+- clientCredential: []
+paths:
+  /login:
+    post:
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - token
+              additionalProperties: false
+              properties:
+                token:
+                  type: string
+                  writeOnly: true
+      responses:
+        '200':
+          description: HttpOnly owner session established
+        '401':
+          description: Invalid credentials
+        '429':
+          description: Login cooldown
+  /logout:
+    post:
+      responses:
+        '200':
+          description: Session revoked
+  /state:
+    get:
+      responses:
+        '200':
+          description: Current process/transport/bot state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/State'
+  /pause:
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - paused
+              additionalProperties: false
+              properties:
+                paused:
+                  type: boolean
+      responses:
+        '200':
+          description: Pause acknowledged, eligible queued requests cancelled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/State'
+  /conversations:
+    get:
+      responses:
+        '200':
+          description: First 25 inbox conversations or synthetic fixture set
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Conversation'
+  /enrollment:
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - conversation_id
+              - participant_id
+              additionalProperties: false
+              properties:
+                conversation_id:
+                  type: string
+                participant_id:
+                  type: string
+      responses:
+        '200':
+          description: Exact individual participant enrolled
+        '400':
+          description: Ineligible conversation or identity mismatch
+  /enrollment/{id}:
+    parameters:
+    - name: id
+      in: path
+      required: true
+      schema:
+        type: string
+    delete:
+      responses:
+        '200':
+          description: Enrollment removed and queued work cancelled
+  /activity:
+    get:
+      responses:
+        '200':
+          description: Latest 200 request metadata records, no message text
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Job'
+  /conversations/{id}/messages:
+    parameters:
+    - name: id
+      in: path
+      required: true
+      schema:
+        type: string
+    get:
+      responses:
+        '200':
+          description: Latest retained messages, including explicitly imported historical
+            text; descending by time
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id:
+                      type: string
+                    direction:
+                      type: string
+                      enum:
+                      - incoming
+                      - outgoing
+                    at:
+                      type: string
+                    text:
+                      type: string
+        '403':
+          description: Enrollment required
+  /clients:
+    get:
+      security:
+      - browserSession: []
+      responses:
+        '200':
+          description: Revocable client IDs and labels
+          never tokens: null
+    post:
+      security:
+      - browserSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - label
+              additionalProperties: false
+              properties:
+                label:
+                  type: string
+                  minLength: 1
+                  maxLength: 80
+      responses:
+        '201':
+          description: New ID
+          label and token returned once; do not persist in browser storage: null
+  /clients/{id}:
+    parameters:
+    - name: id
+      in: path
+      required: true
+      schema:
+        type: string
+    delete:
+      security:
+      - browserSession: []
+      responses:
+        '200':
+          description: Credential revoked
+  /fixture/incoming:
+    post:
+      description: Exists only in fixture mode; no Google/carrier/provider requests.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                id:
+                  type: string
+                conversation_id:
+                  type: string
+                participant_id:
+                  type: string
+                text:
+                  type: string
+                at:
+                  type: string
+                  format: date-time
+                historical:
+                  type: boolean
+                outgoing:
+                  type: boolean
+      responses:
+        '200':
+          description: Accepted boolean and fixture message ID
+        '404':
+          description: Unavailable in live mode
+  /config:
+    get:
+      description: Encrypted server bot configuration
+      responses:
+        '200':
+          description: Encrypted server bot configuration
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Configuration'
+        '400':
+          description: Invalid bounded request
+        '401':
+          description: Authentication required
+        '403':
+          description: Access denied
+        '409':
+          description: State unavailable or expired
+    put:
+      description: Replace validated configuration; queued generation snapshots are
+        unchanged
+      responses:
+        '200':
+          description: Replace validated configuration; queued generation snapshots
+            are unchanged
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Configuration'
+        '400':
+          description: Invalid bounded request
+        '401':
+          description: Authentication required
+        '403':
+          description: Access denied
+        '409':
+          description: State unavailable or expired
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Configuration'
+  /models:
+    get:
+      description: Cached public model catalog; no implicit provider request
+      responses:
+        '200':
+          description: Cached public model catalog; no implicit provider request
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Model'
+        '400':
+          description: Invalid bounded request
+        '401':
+          description: Authentication required
+        '403':
+          description: Access denied
+        '409':
+          description: State unavailable or expired
+  /models/refresh:
+    post:
+      description: Explicit OpenRouter catalog refresh; unavailable in fixture mode
+      responses:
+        '200':
+          description: Explicit OpenRouter catalog refresh; unavailable in fixture
+            mode
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Model'
+        '400':
+          description: Invalid bounded request
+        '401':
+          description: Authentication required
+        '403':
+          description: Access denied
+        '409':
+          description: State unavailable or expired
+  /provider-key:
+    get:
+      description: Owner-only configured flag; key never returned
+      responses:
+        '200':
+          description: Owner-only configured flag; key never returned
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                properties:
+                  configured: &id001
+                    type: boolean
+        '400':
+          description: Invalid bounded request
+        '401':
+          description: Authentication required
+        '403':
+          description: Access denied
+        '409':
+          description: State unavailable or expired
+      security:
+      - browserSession: []
+    put:
+      description: Owner-only encrypted provider key replacement; empty clears it
+      responses:
+        '200':
+          description: Owner-only encrypted provider key replacement; empty clears
+            it
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                properties:
+                  configured: *id001
+        '400':
+          description: Invalid bounded request
+        '401':
+          description: Authentication required
+        '403':
+          description: Access denied
+        '409':
+          description: State unavailable or expired
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                key:
+                  type: string
+                  maxLength: 4096
+              required:
+              - key
+      security:
+      - browserSession: []
+  /jobs/{id}/approve:
+    parameters:
+    - name: id
+      in: path
+      required: true
+      schema:
+        type: string
+    post:
+      description: Approve fresh pending job
+      responses:
+        '200':
+          description: Approve fresh pending job
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                properties:
+                  approved: *id001
+        '400':
+          description: Invalid bounded request
+        '401':
+          description: Authentication required
+        '403':
+          description: Access denied
+        '409':
+          description: State unavailable or expired
+  /jobs/{id}/cancel:
+    parameters:
+    - name: id
+      in: path
+      required: true
+      schema:
+        type: string
+    post:
+      description: Cancel eligible work; submitted messages cannot be recalled
+      responses:
+        '200':
+          description: Cancel eligible work; submitted messages cannot be recalled
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                properties:
+                  cancelled: *id001
+        '400':
+          description: Invalid bounded request
+        '401':
+          description: Authentication required
+        '403':
+          description: Access denied
+        '409':
+          description: State unavailable or expired
+  /playground:
+    post:
+      description: Offline preview of saved commands, including disabled recipes;
+        never sends or calls a provider
+      responses:
+        '200':
+          description: Offline preview of saved commands, including disabled recipes;
+            never sends or calls a provider
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                properties:
+                  text: &id002
+                    type: string
+                  model: *id002
+                  simulated:
+                    type: boolean
+                    const: true
+        '400':
+          description: Invalid bounded request
+        '401':
+          description: Authentication required
+        '403':
+          description: Access denied
+        '409':
+          description: State unavailable or expired
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                command: *id002
+                input:
+                  type: string
+                  maxLength: 12000
+              required:
+              - command
+  /recipes/export:
+    get:
+      description: Configuration recipe with commands disabled and sender restrictions
+        removed; no keys
+      responses:
+        '200':
+          description: Configuration recipe with commands disabled and sender restrictions
+            removed; no keys
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Configuration'
+        '400':
+          description: Invalid bounded request
+        '401':
+          description: Authentication required
+        '403':
+          description: Access denied
+        '409':
+          description: State unavailable or expired
+  /recipes/import:
+    post:
+      description: Validate server recipe, reject sender restrictions, replace configuration
+        with commands disabled
+      responses:
+        '200':
+          description: Validate server recipe, reject sender restrictions, replace
+            configuration with commands disabled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Configuration'
+        '400':
+          description: Invalid bounded request
+        '401':
+          description: Authentication required
+        '403':
+          description: Access denied
+        '409':
+          description: State unavailable or expired
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                configuration:
+                  $ref: '#/components/schemas/Configuration'
+              required:
+              - configuration
+  /conversations/{id}/history:
+    parameters:
+    - name: id
+      in: path
+      required: true
+      schema:
+        type: string
+    get:
+      description: Stable pages of encrypted retained text; search scans one bounded
+        page and may return no matches plus a next cursor
+      responses:
+        '200':
+          description: Stable pages of encrypted retained text; search scans one bounded
+            page and may return no matches plus a next cursor
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InboxPage'
+        '400':
+          description: Invalid bounded request
+        '401':
+          description: Authentication required
+        '403':
+          description: Access denied
+        '409':
+          description: State unavailable or expired
+      parameters:
+      - name: cursor
+        in: query
+        schema: *id002
+      - name: search
+        in: query
+        schema: *id002
+      - name: limit
+        in: query
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 50
+  /conversations/{id}/history/import:
+    parameters:
+    - name: id
+      in: path
+      required: true
+      schema:
+        type: string
+    post:
+      description: Explicitly import an available phone text page within retention.
+        Rechecks exact enrollment; imported commands never run. Attachments excluded;
+        exhausted pages do not prove complete Google history.
+      responses:
+        '200':
+          description: Explicitly import an available phone text page within retention.
+            Rechecks exact enrollment; imported commands never run. Attachments excluded;
+            exhausted pages do not prove complete Google history.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                properties:
+                  imported: &id003
+                    type: integer
+                  next_cursor: *id002
+                  available_pages_exhausted: *id001
+                  text_only: *id001
+                  observed_at: *id002
+        '400':
+          description: Invalid bounded request
+        '401':
+          description: Authentication required
+        '403':
+          description: Access denied
+        '409':
+          description: State unavailable or expired
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                cursor: *id002
+  /conversations/{id}/compose:
+    parameters:
+    - name: id
+      in: path
+      required: true
+      schema:
+        type: string
+    post:
+      description: Queue an explicit manual message after trust, pause, readiness,
+        quiet-hour and rate checks; no automatic replay
+      responses:
+        '202':
+          description: Queue an explicit manual message after trust, pause, readiness,
+            quiet-hour and rate checks; no automatic replay
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                properties:
+                  id: *id002
+                  queued: *id001
+        '400':
+          description: Invalid bounded request
+        '401':
+          description: Authentication required
+        '403':
+          description: Access denied
+        '409':
+          description: State unavailable or expired
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                text:
+                  type: string
+                  minLength: 1
+                  maxLength: 12000
+              required:
+              - text
+components:
+  securitySchemes:
+    browserSession:
+      type: apiKey
+      in: cookie
+      name: smsbot_session
+    clientCredential:
+      type: http
+      scheme: bearer
+  schemas:
+    State:
+      type: object
+      required:
+      - api_version
+      - paused
+      - transport_ready
+      - transport
+      - fixture
+      - capabilities
+      properties:
+        api_version:
+          type: integer
+          const: 1
+        paused:
+          type: boolean
+        transport_ready:
+          type: boolean
+        transport:
+          type: string
+          enum:
+          - fixture
+          - google_messages
+        fixture:
+          type: boolean
+        capabilities:
+          type: array
+          items:
+            type: string
+    Conversation:
+      type: object
+      properties:
+        id:
+          type: string
+        participant_id:
+          type: string
+        label:
+          type: string
+        protocol:
+          type: string
+        group:
+          type: boolean
+        writable:
+          type: boolean
+        enrolled:
+          type: boolean
+    Job:
+      type: object
+      properties:
+        id:
+          type: string
+        conversation_id:
+          type: string
+        command:
+          type: string
+        state:
+          type: string
+          enum:
+          - queued
+          - submitting
+          - submitted
+          - delivered
+          - read
+          - cancelled
+          - failed
+          - expired
+          - unknown_submission
+          - generating
+          - awaiting_approval
+        created_at:
+          type: string
+          format: date-time
+        transaction_id:
+          type: string
+        code:
+          type: string
+        prompt_tokens: *id003
+        completion_tokens: *id003
+        reasoning_tokens: *id003
+        model: *id002
+        cost: &id004
+          type: number
+        requested_reasoning: *id002
+    Generation:
+      type: object
+      additionalProperties: false
+      properties:
+        reasoning:
+          type: string
+          enum:
+          - default
+          - 'off'
+          - minimal
+          - low
+          - medium
+          - high
+          - xhigh
+          - max
+        answer_length:
+          type: string
+          enum:
+          - short
+          - standard
+          - detailed
+        tokens:
+          type: integer
+          minimum: 128
+          maximum: 8192
+        temperature:
+          type:
+          - number
+          - 'null'
+          minimum: 0
+          maximum: 2
+      required:
+      - reasoning
+      - answer_length
+      - tokens
+    Settings:
+      type: object
+      additionalProperties: false
+      properties:
+        hourly_limit: *id003
+        daily_limit: *id003
+        quiet_start: *id003
+        quiet_end: *id003
+        memory_hours: *id003
+        retention_days: *id003
+        max_chars: *id003
+        default_model: *id002
+        daily_budget: *id004
+        quiet_enabled: *id001
+        timezone: *id002
+        favorites:
+          type: array
+          items: *id002
+        model_generation:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/Generation'
+    Command:
+      type: object
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          pattern: ^[a-z][a-z0-9_-]{0,23}$
+        description: *id002
+        instructions: *id002
+        type:
+          type: string
+          enum:
+          - ai
+          - fixed
+        enabled: *id001
+        memory: *id001
+        approval: *id001
+        model: *id002
+        profile_id: *id002
+        allowed_conversations:
+          type: array
+          items: *id002
+        generation:
+          $ref: '#/components/schemas/Generation'
+      required:
+      - name
+      - type
+      - instructions
+    Profile:
+      type: object
+      additionalProperties: false
+      properties:
+        id: *id002
+        name: *id002
+        model: *id002
+        instructions: *id002
+      required:
+      - id
+      - name
+    Configuration:
+      type: object
+      additionalProperties: false
+      properties:
+        settings:
+          $ref: '#/components/schemas/Settings'
+        commands:
+          type: array
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/Command'
+        profiles:
+          type: array
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/Profile'
+      required:
+      - settings
+      - commands
+      - profiles
+    Model:
+      type: object
+      additionalProperties: false
+      properties:
+        id: *id002
+        name: *id002
+        context_length: *id003
+        parameters:
+          type: array
+          items: *id002
+        has_reasoning: *id001
+        reasoning_mandatory: *id001
+        reasoning_efforts:
+          type:
+          - array
+          - 'null'
+          items: *id002
+        input_price: *id004
+        output_price: *id004
+        pricing_known: *id001
+    Message:
+      type: object
+      additionalProperties: false
+      properties:
+        id: *id002
+        direction:
+          type: string
+          enum:
+          - incoming
+          - outgoing
+        at:
+          type: string
+          format: date-time
+        text: *id002
+    InboxPage:
+      type: object
+      additionalProperties: false
+      properties:
+        messages:
+          type: array
+          items:
+            $ref: '#/components/schemas/Message'
+        next_cursor: *id002
+      required:
+      - messages
+      - next_cursor

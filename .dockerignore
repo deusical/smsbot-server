@@ -1,0 +1,17 @@
+.git
+.github
+bin
+.build-temp
+web/node_modules
+web/dist
+internal/httpapi/assets
+web/.test-state
+web/playwright-report
+web/test-results
+**/*.db*
+**/*.key
+**/*.dpapi
+**/*.enc
+**/owner.txt
+**/*.log
+.env*

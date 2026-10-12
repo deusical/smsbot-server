@@ -1,0 +1,15 @@
+# Security and privacy
+
+This is a development milestone. Do not expose its loopback listener publicly. Optional direct TLS/private-origin hosting, offline backup/restore and retention are implemented. Personal deployment and independent security review remain separate acceptance steps.
+
+The service pins Go 1.27.2 and golang.org/x/net v0.60.0 after the initial dependency scan found patched security issues. Run security-check.ps1 against the current vulnerability database before promotion. The module-level OpenPGP advisory is tracked: the service does not import the affected packages and must not add them.
+
+Google cookies are broad account credentials, not narrowly scoped bot permissions. Pair locally; never paste them into agent conversations or browser dashboard fields. No cookie strings, personal content or raw upstream errors are logged. libgm logging is discarded. Setup accepts bounded stdin and parses copied cURL; it never executes it.
+
+AES-GCM binds ciphertext to a scope (job/message/session). Master keys live outside the database directory; Windows wraps them with CurrentUser DPAPI, Linux requires mode 0600 or stricter. DPAPI state cannot simply be copied to a different Windows identity or Linux host. Credentials are hashed in SQLite; Android credentials are Keystore-encrypted on the client.
+
+Keep the owner credential file local and protected. Browser sessions expire after 12 hours; Android credentials remain until revoked. This milestone has no owner-credential rotation UI and no client permission granularity beyond prohibiting credential administration and provider-key management. Messages/settings remain sensitive to someone controlling the host or authenticated owner.
+
+Enrollments use protocol participant IDs, not names or manually associated phone numbers. Groups, stale/historical data, outgoing echoes and incomplete attachments are excluded. Pause cannot retract already-submitted messages. Unknown submission is never retried automatically.
+
+Fixture tests use isolated directories and cannot create a Google connection. Live AI uses only OpenRouter when explicitly configured and invoked; the fixture provider cannot make HTTP requests. Tests/screenshot fixtures contain synthetic data only. Do not publish private state directories, keys, cookies, credentials or real screenshots.
