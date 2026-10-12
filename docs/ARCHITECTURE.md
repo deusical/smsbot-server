@@ -12,6 +12,7 @@ Selected stack: Go service, SQLite/local WAL, libgm adapter, React/TypeScript we
 - Google conversation refresh checks up to four independent full-detail requests concurrently, preserving inbox order and publishing the identity cache only after all checks succeed. Exact participant and pre-send identity checks remain required.
 - Dashboard Enable/Pause actions apply the state returned by the pause endpoint immediately, independently of conversation refresh. A revision check prevents state polls started before or during the action from overwriting the confirmed response. Failed mutations retain the previously displayed state and show the error.
 - Android: API-backed server screen, Keystore-encrypted connection, dispatch guards. Its existing local engine remains independent and unavailable in server mode.
+- Google startup account snapshots (`AccountChange.IsFake` in libgm) are informational and do not invalidate verified readiness. Actual account changes, logout, phone/data loss and active-session warnings still pause automation and require recovery. Diagnostics distinguish those event categories without recording account data.
 
 ## Processing
 

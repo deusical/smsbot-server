@@ -405,8 +405,27 @@ func (g *Google) Run(ctx context.Context, incoming func(Incoming), pause func(),
 				if m, ok := normalize(e, g.started); ok {
 					incoming(m)
 				}
-			case *events.GaiaLoggedOut, *events.AccountChange, *events.PhoneNotResponding, *events.NoDataReceived, *events.HackySetActiveMayFail:
-				g.diagnose("authentication_or_phone_unavailable", errors.New("unavailable"))
+			case *events.AccountChange:
+				// libgm synthesizes an account snapshot during startup. It is not
+				// an account switch; actual changes still require owner recovery.
+				if e.IsFake {
+					g.diagnose("account_snapshot", nil)
+					continue
+				}
+				g.diagnose("account_change", errors.New("unavailable"))
+				g.ready.Store(false)
+				pause()
+			case *events.GaiaLoggedOut, *events.PhoneNotResponding, *events.NoDataReceived, *events.HackySetActiveMayFail:
+				eventName := "google_logged_out"
+				switch e.(type) {
+				case *events.PhoneNotResponding:
+					eventName = "phone_not_responding"
+				case *events.NoDataReceived:
+					eventName = "no_data_received"
+				case *events.HackySetActiveMayFail:
+					eventName = "active_session_warning"
+				}
+				g.diagnose(eventName, errors.New("unavailable"))
 				g.ready.Store(false)
 				pause()
 			}
