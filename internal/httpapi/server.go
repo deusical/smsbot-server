@@ -13,7 +13,6 @@ import (
 	"smsbot-server/internal/store"
 	"smsbot-server/internal/transport"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -25,9 +24,6 @@ type Server struct {
 	Origin     string
 	Fixture    bool
 	mux        *http.ServeMux
-	failuresMu sync.Mutex
-	failures   int
-	cooldown   time.Time
 }
 
 func New(e *bot.Engine, origin string, fixture bool) *Server {
@@ -142,22 +138,11 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	if !s.decode(w, r, &in) {
 		return
 	}
-	s.failuresMu.Lock()
-	defer s.failuresMu.Unlock()
-	if time.Now().Before(s.cooldown) {
-		s.bad(w, 429, "try_later")
-		return
-	}
-	if !s.Engine.Store.Credential(in.Token, "owner") {
-		s.failures++
-		if s.failures >= 5 {
-			s.cooldown = time.Now().Add(time.Minute)
-			s.failures = 0
-		}
+	// Tolerate whitespace copied along with the credential file contents.
+	if !s.Engine.Store.Credential(strings.TrimSpace(in.Token), "owner") {
 		s.bad(w, 401, "invalid_credentials")
 		return
 	}
-	s.failures = 0
 	token := store.ID() + store.ID()
 	if e := s.Engine.Store.AddCredential(token, "Browser", "session", time.Now().Add(12*time.Hour).Unix()); e != nil {
 		s.bad(w, 500, "storage_error")

@@ -8,7 +8,7 @@ async function login(page: Page) {
   const token = readFileSync(descriptor.owner, "utf8");
   await page.goto("/");
   await page.getByLabel("Owner credential").fill(token);
-  await page.getByRole("button", { name: "Open dashboard" }).click();
+  await page.getByRole("button", { name: "Sign in" }).click();
   await expect(
     page.getByRole("heading", { name: "Home", exact: true }),
   ).toBeVisible();
@@ -21,21 +21,27 @@ test("authenticated command journey and credential revocation", async ({
     .getByRole("button", { name: "Conversations", exact: true })
     .click();
   const demo = page
-    .locator("article.conversation")
+    .locator("li.conversation")
     .filter({ hasText: "Demo conversation" });
-  await demo.getByRole("button", { name: "Enroll", exact: true }).click();
-  await expect(demo.getByRole("button", { name: "Remove" })).toBeVisible();
-  await page.getByRole("button", { name: "Enable bot" }).click();
-  await expect(page.getByRole("button", { name: "Pause bot" })).toBeVisible();
+  const enroll = demo.getByRole("switch", {
+    name: "Bot replies for Demo conversation",
+  });
+  // The switch reflects server state, so it flips once enrollment is confirmed.
+  await enroll.click();
+  await expect(enroll).toBeChecked();
+  const power = page.getByRole("switch", { name: "Bot sending" });
+  await power.click();
+  await expect(power).toBeChecked();
   await demo.getByRole("button", { name: /Demo conversation/ }).click();
   await page.getByRole("button", { name: "Simulate !ping" }).click();
   await expect(page.locator(".bubble.outgoing")).toContainText("pong");
   await page.getByRole("button", { name: "Activity", exact: true }).click();
-  await expect(page.locator("summary").first()).toContainText("submitted");
+  await expect(page.locator(".feed-row").first()).toContainText("Submitted");
   await page.getByRole("button", { name: "Settings", exact: true }).click();
-  await page.getByRole("button", { name: "Authorize Android client" }).click();
-  await expect(page.getByLabel("New client credential")).toBeVisible();
-  const token = await page.getByLabel("New client credential").inputValue();
+  await page.getByRole("button", { name: "Devices", exact: true }).click();
+  await page.getByRole("button", { name: "Add device" }).click();
+  await expect(page.getByLabel("New device credential")).toBeVisible();
+  const token = await page.getByLabel("New device credential").inputValue();
   const before = await page.request.get("/api/v1/state", {
     headers: { Authorization: `Bearer ${token}` },
   });
@@ -63,8 +69,11 @@ for (const settings of [
     });
     await page.emulateMedia({ colorScheme: settings.scheme });
     await login(page);
-    if (settings.scheme === "light")
-      await page.getByRole("button", { name: "Switch to light theme" }).click();
+    // The dashboard follows the system color scheme until toggled.
+    await expect(page.locator("html")).toHaveAttribute(
+      "data-theme",
+      settings.scheme,
+    );
     for (const name of [
       "Home",
       "Conversations",
@@ -170,10 +179,10 @@ test("actual fixture AI activity exposes flat telemetry and omitted zero token f
     expect(job).not.toHaveProperty("usage");
     await page.getByRole("button", { name: "Activity", exact: true }).click();
     const entry = page
-      .locator(".journal details")
+      .locator(".feed-row")
       .filter({ hasText: "e2eusage" });
     await expect(entry).toBeVisible();
-    await entry.locator("summary").click();
+    await entry.locator(".feed-main").click();
     await expect(entry).toContainText("fixture/model");
     await expect(entry).toContainText("0 tokens");
     await expect(entry).toContainText("0 reasoning tokens");
@@ -241,11 +250,11 @@ for (const heldEndpoint of ["conversations", "state"]) {
     page,
   }) => {
     await login(page);
-    const toggle = page.getByRole("button", { name: /^(Enable|Pause) bot$/ });
+    const toggle = page.getByRole("switch", { name: "Bot sending" });
     await expect(toggle).toBeEnabled();
-    if ((await toggle.textContent()) === "Pause bot") {
+    if ((await toggle.getAttribute("aria-checked")) === "true") {
       await toggle.click();
-      await expect(toggle).toHaveText("Enable bot");
+      await expect(toggle).not.toBeChecked();
       await expect(toggle).toBeEnabled();
     }
     let release!: () => void;
@@ -269,9 +278,9 @@ for (const heldEndpoint of ["conversations", "state"]) {
     try {
       await pending;
       await toggle.click();
-      await expect(toggle).toHaveText("Pause bot");
+      await expect(toggle).toBeChecked();
       await expect(toggle).toBeEnabled();
-      await expect(page.locator(".hero .pill")).toHaveText("ACTIVE");
+      await expect(page.locator(".hero-pill")).toHaveText("LIVE");
       expect(
         (await (await page.request.get("/api/v1/state")).json()).paused,
       ).toBe(false);
@@ -280,13 +289,13 @@ for (const heldEndpoint of ["conversations", "state"]) {
         const resumed = page.waitForResponse("**/api/v1/activity");
         release();
         await resumed;
-        await expect(toggle).toHaveText("Pause bot");
-        await expect(page.locator(".hero .pill")).toHaveText("ACTIVE");
+        await expect(toggle).toBeChecked();
+        await expect(page.locator(".hero-pill")).toHaveText("LIVE");
       }
       await toggle.click();
-      await expect(toggle).toHaveText("Enable bot");
+      await expect(toggle).not.toBeChecked();
       await expect(toggle).toBeEnabled();
-      await expect(page.locator(".hero .pill")).toHaveText("PAUSED");
+      await expect(page.locator(".hero-pill")).toHaveText("PAUSED");
       expect(
         (await (await page.request.get("/api/v1/state")).json()).paused,
       ).toBe(true);
@@ -300,11 +309,11 @@ test("rejected pause change leaves the displayed state unchanged", async ({
   page,
 }) => {
   await login(page);
-  const toggle = page.getByRole("button", { name: /^(Enable|Pause) bot$/ });
+  const toggle = page.getByRole("switch", { name: "Bot sending" });
   await expect(toggle).toBeEnabled();
-  if ((await toggle.textContent()) === "Pause bot") {
+  if ((await toggle.getAttribute("aria-checked")) === "true") {
     await toggle.click();
-    await expect(toggle).toHaveText("Enable bot");
+    await expect(toggle).not.toBeChecked();
     await expect(toggle).toBeEnabled();
   }
   await page.route("**/api/v1/pause", (route) =>
@@ -316,8 +325,8 @@ test("rejected pause change leaves the displayed state unchanged", async ({
   );
   await toggle.click();
   await expect(page.getByRole("alert")).toContainText("transport unavailable");
-  await expect(toggle).toHaveText("Enable bot");
-  await expect(page.locator(".hero .pill")).toHaveText("PAUSED");
+  await expect(toggle).not.toBeChecked();
+  await expect(page.locator(".hero-pill")).toHaveText("PAUSED");
   expect((await (await page.request.get("/api/v1/state")).json()).paused).toBe(
     true,
   );

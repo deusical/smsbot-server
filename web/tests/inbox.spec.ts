@@ -48,7 +48,7 @@ test("older pages preserve the viewport and new messages do not jump the reader"
       .filter({ hasText: "Demo conversation" })
       .getByRole("button", { name: /Demo conversation/ })
       .click();
-    const scroller = page.locator(".chat-messages");
+    const scroller = page.locator(".messages");
     await expect(scroller.locator(".bubble")).toHaveCount(50);
     await scroller.evaluate((el) => {
       el.scrollTop = 400;
@@ -87,7 +87,7 @@ async function login(page: Page) {
   const c = JSON.parse(readFileSync(".test-state/connection.json", "utf8"));
   await page.goto("/");
   await page.getByLabel("Owner credential").fill(readFileSync(c.owner, "utf8"));
-  await page.getByRole("button", { name: "Open dashboard" }).click();
+  await page.getByRole("button", { name: "Sign in" }).click();
   await expect(
     page.getByRole("heading", { name: "Home", exact: true }),
   ).toBeVisible();
@@ -147,26 +147,22 @@ test("owner captures ordinary text while paused and sends manually without autom
     await expect(
       page.getByRole("button", { name: "Send message", exact: true }),
     ).toBeDisabled();
-    await page
-      .getByRole("button", { name: /Enable bot|Resume sending/, exact: true })
-      .click();
-    await page.getByLabel("Manual message").fill("Synthetic web reply");
+    await page.getByRole("switch", { name: "Bot sending" }).click();
+    const reply = `Synthetic web reply ${Date.now()}`;
+    await page.getByLabel("Message", { exact: true }).fill(reply);
     await page
       .getByRole("button", { name: "Send message", exact: true })
-      .click();
-    await page
-      .getByRole("button", { name: "Confirm send", exact: true })
       .click();
     await expect(
       page
         .locator(".bubble.outgoing")
-        .filter({ hasText: "Synthetic web reply" }),
+        .filter({ hasText: reply }),
     ).toBeVisible();
     await expect(
       page
         .locator(".bubble.outgoing")
-        .filter({ hasText: "Synthetic web reply" }),
-    ).toContainText("You · Web");
+        .filter({ hasText: reply }),
+    ).toContainText("Sent from web");
     await page.evaluate(() => window.scrollTo(0, 0));
     await page.screenshot({
       path: "../docs/images/server-conversation-inbox.png",
@@ -191,6 +187,7 @@ test("conversation preferences save explicitly and survive polling", async ({
     page.getByRole("heading", { name: "Home", exact: true }),
   ).toBeVisible();
   await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("button", { name: "Messages & privacy" }).click();
   await page
     .getByLabel("Show all conversation messages", { exact: true })
     .check();
@@ -198,15 +195,10 @@ test("conversation preferences save explicitly and survive polling", async ({
     .getByLabel("Load older phone history when scrolling up", { exact: true })
     .check();
   await page.getByLabel("Automatic command replies", { exact: true }).uncheck();
-  await page
-    .getByRole("button", { name: "Save conversation settings", exact: true })
-    .click();
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
   await expect(
-    page.getByRole("button", {
-      name: "Save conversation settings",
-      exact: true,
-    }),
-  ).toBeDisabled();
+    page.getByRole("region", { name: "Unsaved changes" }),
+  ).toHaveCount(0);
   const s = await (await page.request.get("/api/v1/inbox/settings")).json();
   expect(s.enabled).toBe(true);
   expect(s.load_older).toBe(true);
@@ -227,9 +219,12 @@ test("scrolling older history preserves messages and never routes imported comma
       .filter({ hasText: "Demo conversation" })
       .getByRole("button", { name: /Demo conversation/ })
       .click();
+    // A short thread loads older phone history on its own when scrolled to the
+    // top; otherwise the button requests it.
     await page
       .getByRole("button", { name: "Load older messages", exact: true })
-      .click();
+      .click({ timeout: 3000 })
+      .catch(() => {});
     await expect(
       page
         .locator(".bubble.incoming")
@@ -237,7 +232,7 @@ test("scrolling older history preserves messages and never routes imported comma
     ).toBeVisible();
     await expect(
       page.getByText(
-        "No more available phone text. This does not establish complete history.",
+        "That’s everything your phone returned. Older messages may still exist.",
       ),
     ).toBeVisible();
   } finally {
@@ -270,28 +265,28 @@ test("lost compose acknowledgement retries the same intent without a second repl
       .filter({ hasText: "Demo conversation" })
       .getByRole("button", { name: /Demo conversation/ })
       .click();
-    await page
-      .getByRole("button", { name: "Resume sending", exact: true })
-      .click();
+    // Wait until the thread uses the inbox compose path (it offers phone history).
+    await expect(
+      page.getByRole("button", { name: "Load older messages", exact: true }),
+    ).toBeVisible();
+    await page.getByRole("switch", { name: "Bot sending" }).click();
     const message = `Synthetic retry ${Date.now()}`;
-    await page.getByLabel("Manual message").fill(message);
+    const box = page.getByLabel("Message", { exact: true });
+    await box.fill(message);
     await page
       .getByRole("button", { name: "Send message", exact: true })
       .click();
-    await page
-      .getByRole("button", { name: "Confirm send", exact: true })
-      .click();
+    await expect(
+      page.getByRole("alert").filter({ hasText: "Your text is kept" }),
+    ).toBeVisible();
     await expect(
       page.getByRole("button", { name: "Send message", exact: true }),
     ).toBeEnabled();
-    await expect(page.getByLabel("Manual message")).toHaveValue(message);
+    await expect(box).toHaveValue(message);
     await page
       .getByRole("button", { name: "Send message", exact: true })
       .click();
-    await page
-      .getByRole("button", { name: "Confirm send", exact: true })
-      .click();
-    await expect(page.getByLabel("Manual message")).toHaveValue("");
+    await expect(box).toHaveValue("");
     expect(ids).toHaveLength(2);
     expect(ids[1]).toBe(ids[0]);
     await expect(
@@ -309,6 +304,7 @@ test("settings conflict can reload the saved revision without reloading the dash
   await configure(page, false);
   await page.reload();
   await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("button", { name: "Messages & privacy" }).click();
   await page
     .getByLabel("Show all conversation messages", { exact: true })
     .check();
@@ -323,36 +319,25 @@ test("settings conflict can reload the saved revision without reloading the dash
       response.request().method() === "GET" &&
       (await response.json()).revision === settings.revision,
   );
-  await page
-    .getByRole("button", { name: "Save conversation settings", exact: true })
-    .click();
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
   await expect(
     page.getByRole("alert").filter({ hasText: "settings changed reload" }),
   ).toBeVisible();
   await expect(
     page.getByLabel("Show all conversation messages", { exact: true }),
   ).toBeChecked();
-  await page
-    .getByRole("button", {
-      name: "Reload saved conversation settings",
-      exact: true,
-    })
-    .click();
+  // Discard reloads the latest saved revision without reloading the page.
+  await page.getByRole("button", { name: "Discard", exact: true }).click();
   await expect(
     page.getByLabel("Show all conversation messages", { exact: true }),
   ).not.toBeChecked();
   await page
     .getByLabel("Show all conversation messages", { exact: true })
     .check();
-  await page
-    .getByRole("button", { name: "Save conversation settings", exact: true })
-    .click();
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
   await expect(
-    page.getByRole("button", {
-      name: "Save conversation settings",
-      exact: true,
-    }),
-  ).toBeDisabled();
+    page.getByRole("region", { name: "Unsaved changes" }),
+  ).toHaveCount(0);
   expect(
     (await (await page.request.get("/api/v1/inbox/settings")).json()).enabled,
   ).toBe(true);
@@ -414,7 +399,7 @@ test("background history polling queues an older-page click and keeps pause usab
     await older.click();
     await expect(older).toBeDisabled();
     await expect(
-      page.getByRole("button", { name: "Resume sending", exact: true }),
+      page.getByRole("switch", { name: "Bot sending" }),
     ).toBeEnabled();
     release();
     await expect(page.locator(".bubble")).toHaveCount(2);

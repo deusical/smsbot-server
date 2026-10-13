@@ -33,8 +33,6 @@ paths:
           description: HttpOnly owner session established
         '401':
           description: Invalid credentials
-        '429':
-          description: Login cooldown
   /logout:
     post:
       responses:

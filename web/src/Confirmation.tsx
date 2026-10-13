@@ -1,10 +1,9 @@
 import { useEffect, useRef, type ReactNode } from "react";
-import { Icon } from "./Icon";
 export function Confirmation({
   title,
   description,
   confirmLabel,
-  cancelLabel = "Keep editing",
+  cancelLabel = "Cancel",
   disabled = false,
   onConfirm,
   onCancel,
@@ -35,9 +34,6 @@ export function Confirmation({
         onCancel();
       }}
     >
-      <span className="modal-icon">
-        <Icon name="warning" size={24} />
-      </span>
       <h2>{title}</h2>
       <p>{description}</p>
       {children}
@@ -45,12 +41,17 @@ export function Confirmation({
         <button
           autoFocus
           type="button"
-          className="secondary"
+          className="ghost"
           onClick={onCancel}
         >
           {cancelLabel}
         </button>
-        <button type="button" disabled={disabled} onClick={onConfirm}>
+        <button
+          type="button"
+          className="primary"
+          disabled={disabled}
+          onClick={onConfirm}
+        >
           {confirmLabel}
         </button>
       </div>

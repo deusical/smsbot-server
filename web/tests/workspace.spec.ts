@@ -70,68 +70,55 @@ async function setup(page: Page) {
   await page
     .getByLabel("Owner credential")
     .fill(readFileSync(descriptor.owner, "utf8"));
-  await page.getByRole("button", { name: "Open dashboard" }).click();
+  await page.getByRole("button", { name: "Sign in" }).click();
   await expect(
     page.getByRole("heading", { name: "Home", exact: true }),
   ).toBeVisible();
   return () => config;
 }
-test("draft navigation requires an explicit choice and discard restores saved configuration", async ({
+test("drafts survive navigation and discard restores saved configuration", async ({
   page,
 }) => {
   await setup(page);
   await page.getByRole("button", { name: "Commands", exact: true }).click();
-  await page
-    .getByLabel("Command 1 description", { exact: true })
-    .fill("Unsaved draft");
+  const description = page.getByLabel("Description", { exact: true });
+  await description.fill("Unsaved draft");
+  const savebar = page.getByRole("region", { name: "Unsaved changes" });
+  await expect(savebar).toBeVisible();
+  // Navigation keeps the draft instead of interrupting with a dialog.
   await page.getByRole("button", { name: "Activity", exact: true }).click();
-  const dialog = page.getByRole("alertdialog", {
-    name: "Leave without saving?",
-  });
-  await expect(dialog).toBeVisible();
-  await expect(
-    dialog.getByRole("button", { name: "Keep editing" }),
-  ).toBeFocused();
-  await page.keyboard.press("Escape");
-  await expect(dialog).not.toBeVisible();
-  await expect(
-    page.getByLabel("Command 1 description", { exact: true }),
-  ).toHaveValue("Unsaved draft");
-  await page.getByRole("button", { name: "Discard draft" }).click();
-  await expect(
-    page.getByLabel("Command 1 description", { exact: true }),
-  ).toHaveValue("Synthetic greeting");
-  await page
-    .getByLabel("Command 1 description", { exact: true })
-    .fill("Another draft");
-  await page.getByRole("button", { name: "Activity", exact: true }).click();
-  await dialog.getByRole("button", { name: "Discard changes" }).click();
   await expect(
     page.getByRole("heading", { name: "Activity", exact: true }),
   ).toBeVisible();
+  await expect(page.getByRole("alertdialog")).toHaveCount(0);
+  await expect(savebar).toBeVisible();
   await page.getByRole("button", { name: "Commands", exact: true }).click();
-  await expect(
-    page.getByLabel("Command 1 description", { exact: true }),
-  ).toHaveValue("Synthetic greeting");
+  await expect(description).toHaveValue("Unsaved draft");
+  await savebar.getByRole("button", { name: "Discard" }).click();
+  await expect(description).toHaveValue("Synthetic greeting");
+  await expect(savebar).toHaveCount(0);
+  // Editing back to the saved value is not a change.
+  await description.fill("Another draft");
+  await expect(savebar).toBeVisible();
+  await description.fill("Synthetic greeting");
+  await expect(savebar).toHaveCount(0);
 });
 test("command templates and duplicates remain disabled with unique names", async ({
   page,
 }) => {
   const config = await setup(page);
   await page.getByRole("button", { name: "Commands", exact: true }).click();
-  await page
-    .getByRole("button", { name: "AI assistant", exact: false })
-    .click();
-  await page
-    .getByRole("button", { name: "Duplicate command 1", exact: true })
-    .click();
-  await expect(page.getByLabel("Enable command 2")).not.toBeChecked();
-  await expect(
-    page.getByLabel("Command 2 approval", { exact: true }),
-  ).toBeChecked();
-  await expect(page.getByLabel("Enable command 3")).not.toBeChecked();
-  await page.getByRole("button", { name: "Save configuration" }).click();
-  await expect(page.getByRole("status")).toContainText("Configuration saved");
+  await page.getByRole("button", { name: "New", exact: true }).click();
+  await page.getByRole("menuitem", { name: /AI assistant/ }).click();
+  await expect(page.getByLabel("Command name")).toHaveValue("ask");
+  await expect(page.getByLabel("Enabled", { exact: true })).not.toBeChecked();
+  await expect(page.getByLabel("Ask me before replying")).toBeChecked();
+  await page.getByRole("button", { name: /!hello/ }).click();
+  await page.getByRole("button", { name: "Duplicate command" }).click();
+  await expect(page.getByLabel("Command name")).toHaveValue("hello_copy");
+  await expect(page.getByLabel("Enabled", { exact: true })).not.toBeChecked();
+  await page.getByRole("button", { name: "Save changes" }).click();
+  await expect(page.getByRole("status")).toContainText("Changes saved");
   expect(config().commands.map((c) => c.name)).toEqual([
     "hello",
     "ask",
@@ -143,12 +130,18 @@ test("command templates and duplicates remain disabled with unique names", async
       .every((c) => !c.enabled),
   ).toBe(true);
   await page.getByLabel("Search commands").fill("ask");
-  await expect(page.getByLabel("Command 1 name", { exact: true })).toHaveCount(
-    0,
-  );
-  await expect(page.getByLabel("Command 2 name", { exact: true })).toHaveValue(
-    "ask",
-  );
+  await expect(page.locator(".command-item")).toHaveCount(1);
+  await expect(page.locator(".command-item")).toContainText("!ask");
+});
+test("invalid command names are explained before saving", async ({ page }) => {
+  const config = await setup(page);
+  await page.getByRole("button", { name: "Commands", exact: true }).click();
+  await page.getByLabel("Command name").fill("9bad");
+  await page.getByRole("button", { name: "Save changes" }).click();
+  await expect(
+    page.getByRole("region", { name: "Unsaved changes" }).getByRole("alert"),
+  ).toContainText("names start with a lowercase letter");
+  expect(config().commands[0].name).toBe("hello");
 });
 test("activity filters distinguish approvals and unknown outcomes without inventing cost", async ({
   page,
@@ -178,29 +171,31 @@ test("activity filters distinguish approvals and unknown outcomes without invent
     }),
   );
   await page.getByRole("button", { name: "Activity", exact: true }).click();
-  await expect(page.locator(".journal summary")).toHaveCount(2);
+  await expect(page.locator(".feed-row")).toHaveCount(2);
   await expect(page.locator(".activity-metrics")).toContainText(
     "1 request with unavailable cost",
   );
-  await page.getByRole("button", { name: /Needs review/ }).click();
-  await expect(page.locator(".journal summary")).toHaveCount(1);
-  await expect(page.locator(".journal summary")).toContainText("!check");
-  await page.getByRole("button", { name: /Attention/ }).click();
-  await expect(page.locator(".journal summary")).toContainText(
-    "unknown submission",
-  );
-  await page.locator(".journal summary").click();
-  await expect(page.locator(".event-detail")).toContainText("fixture/model");
-  await expect(page.locator(".event-detail")).toContainText("5 tokens");
-  await expect(page.locator(".event-detail")).toContainText(
+  await page.getByRole("button", { name: /^Needs approval/ }).click();
+  await expect(page.locator(".feed-row")).toHaveCount(1);
+  await expect(page.locator(".feed-row")).toContainText("!check");
+  await expect(page.getByRole("button", { name: "Approve" })).toBeVisible();
+  await page.getByRole("button", { name: /^Problems/ }).click();
+  await expect(page.locator(".feed-row")).toContainText("Uncertain");
+  await page.locator(".feed-main").click();
+  await expect(page.locator(".feed-detail")).toContainText("fixture/model");
+  await expect(page.locator(".feed-detail")).toContainText("5 tokens");
+  await expect(page.locator(".feed-detail")).toContainText(
     "0 reasoning tokens",
   );
-  await expect(page.locator(".event-detail")).toContainText("Cost unavailable");
+  await expect(page.locator(".feed-detail")).toContainText("Cost unavailable");
+  await expect(page.locator(".feed-detail")).toContainText(
+    "retried automatically",
+  );
   await expect(page.getByRole("button", { name: /retry/i })).toHaveCount(0);
   await page.getByLabel("Search activity").fill("nothing");
   await expect(page.getByText("Nothing matches this view")).toBeVisible();
-  await page.getByRole("button", { name: "Clear activity filters" }).click();
-  await expect(page.locator(".journal summary")).toHaveCount(2);
+  await page.getByRole("button", { name: "Clear filters" }).click();
+  await expect(page.locator(".feed-row")).toHaveCount(2);
 });
 test("model search reaches beyond the first page and retains a selected model", async ({
   page,
@@ -219,28 +214,34 @@ test("model search reaches beyond the first page and retains a selected model", 
     route.fulfill({ json: models }),
   );
   await page.getByRole("button", { name: "Settings", exact: true }).click();
+  const picker = page.getByRole("button", { name: /^Default model/ });
+  await picker.click();
   await page
     .getByLabel("Search default model", { exact: true })
     .fill("model 99");
-  await page
-    .getByLabel("Default model", { exact: true })
-    .selectOption("fixture/model-99");
+  await page.getByRole("option", { name: "Synthetic model 99" }).click();
+  await picker.click();
   await page
     .getByLabel("Search default model", { exact: true })
     .fill("model 1");
-  await expect(page.getByLabel("Default model", { exact: true })).toHaveValue(
-    "fixture/model-99",
-  );
-  await page.getByRole("button", { name: "Save configuration" }).click();
-  await expect(page.getByRole("status")).toContainText("Configuration saved");
+  await expect(
+    page.getByRole("option", { name: "Synthetic model 19" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("option", { name: "Synthetic model 98" }),
+  ).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await expect(picker).toContainText("Synthetic model 99");
+  await page.getByRole("button", { name: "Save changes" }).click();
+  await expect(page.getByRole("status")).toContainText("Changes saved");
   expect(cfg().settings.default_model).toBe("fixture/model-99");
 });
 test("conversation filters preserve enrollment and theme switches do not write browser storage", async ({
   page,
 }) => {
   await setup(page);
-  await page.getByRole("button", { name: "Switch to light theme" }).click();
-  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await page.getByRole("button", { name: "Switch to dark theme" }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
   expect(
     await page.evaluate(() => ({
       local: localStorage.length,
@@ -274,20 +275,17 @@ test("conversation filters preserve enrollment and theme switches do not write b
   await page
     .getByRole("button", { name: "Conversations", exact: true })
     .click();
-  await expect(page.locator("article.conversation")).toHaveCount(2, {
+  await expect(page.locator("li.conversation")).toHaveCount(2, {
     timeout: 10000,
   });
-  await page.getByRole("button", { name: "Enrolled", exact: true }).click();
-  await expect(page.locator("article.conversation")).toHaveCount(1);
+  await page.getByRole("button", { name: /^Bot on/ }).click();
+  await expect(page.locator("li.conversation")).toHaveCount(1);
   await page.getByLabel("Search conversations").fill("missing");
   await expect(page.getByText("No conversations found")).toBeVisible();
   await page.getByLabel("Search conversations").fill("");
   await page.getByRole("button", { name: "All", exact: true }).click();
   await expect(
-    page
-      .locator("article.conversation")
-      .filter({ hasText: "Synthetic Group" })
-      .getByRole("button", { name: "Enroll", exact: true }),
+    page.getByRole("switch", { name: "Bot replies for Synthetic Group" }),
   ).toBeDisabled();
 });
 
@@ -296,6 +294,7 @@ for (const viewport of [
   { name: "mobile", width: 390, height: 844 },
 ]) {
   test(`dark workspace visual coverage ${viewport.name}`, async ({ page }) => {
+    await page.emulateMedia({ colorScheme: "dark" });
     await page.setViewportSize({
       width: viewport.width,
       height: viewport.height,
@@ -371,7 +370,7 @@ for (const viewport of [
           },
         }),
     );
-    await expect(page.locator(".hero .pill")).toHaveText("ACTIVE");
+    await expect(page.locator(".hero-pill")).toHaveText("LIVE");
     for (const screen of [
       "Home",
       "Conversations",
@@ -385,15 +384,18 @@ for (const viewport of [
       ).toBeVisible();
       if (screen === "Conversations")
         await page
-          .getByRole("button", { name: /Demo conversation RCS/ })
+          .getByRole("button", { name: /Demo conversation/ })
+          .first()
           .click();
-      if (screen === "Commands")
-        await expect(
-          page.getByLabel("Command 1 name", { exact: true }),
-        ).toBeVisible();
+      if (screen === "Commands") {
+        // Mobile shows the command list first; open the editor explicitly.
+        if (viewport.name === "mobile")
+          await page.getByRole("button", { name: /!hello/ }).click();
+        await expect(page.getByLabel("Command name")).toBeVisible();
+      }
       if (screen === "Settings")
         await expect(
-          page.getByLabel("Default model", { exact: true }),
+          page.getByRole("button", { name: /^Default model/ }),
         ).toBeVisible();
       expect(
         await page.evaluate(

@@ -2,7 +2,11 @@
 
 ## Pass 1: workspace and daily workflows
 
-The current pass uses the existing API. It adds a dark workspace with a transient light theme, responsive navigation, connection overview, searchable conversations, an activity review queue, disabled command templates and duplication, catalog search, protected configuration drafts, and recipient/text confirmation for manual compose. Synthetic fixtures cover the interface; live transport acceptance remains separate.
+The first pass used the existing API. It adds a dark workspace with a transient light theme, responsive navigation, connection overview, searchable conversations, an activity review queue, disabled command templates and duplication, catalog search, protected configuration drafts, and recipient/text confirmation for manual compose. Synthetic fixtures cover the interface; live transport acceptance remains separate.
+
+## Pass 2: visual and workflow revamp
+
+A new visual system: aubergine/mint dark theme and lilac/teal light theme, with the system preference as the default. Commands appear as mono chips throughout. Home leads with live/paused status, a 24-hour request chart and inline approvals. Conversations uses a messenger layout with enrollment switches, search as you type and Enter-to-send compose with no confirmation dialog. Commands becomes a list/editor studio with an inline offline preview. Settings is split into sections. Drafts now survive navigation behind one save bar instead of a leave-page dialog. The Activity feed shows plain-language states with inline approve/cancel. The API is unchanged; uncertain sends still never retry, and idempotent compose keys are reused when the same text is sent again.
 
 ## Subsequent passes
 

@@ -93,6 +93,18 @@ func TestLoginCookieAndCSRF(t *testing.T) {
 	}
 }
 
+func TestFailedLoginsDoNotLockOutAndWhitespaceIsTrimmed(t *testing.T) {
+	s := apiSetup(t)
+	for i := 0; i < 10; i++ {
+		if w := req(s, "POST", "/api/v1/login", `{"token":"wrong"}`, "", s.Origin); w.Code != 401 {
+			t.Fatal(w.Code)
+		}
+	}
+	if w := req(s, "POST", "/api/v1/login", `{"token":" fixture-owner\r\n"}`, "", s.Origin); w.Code != 200 {
+		t.Fatal(w.Code, w.Body.String())
+	}
+}
+
 func TestRevokedBearerDoesNotFallBackToOwnerCookie(t *testing.T) {
 	s := apiSetup(t)
 	w := req(s, "POST", "/api/v1/login", `{"token":"fixture-owner"}`, "", s.Origin)

@@ -1,4 +1,10 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   api,
   ApiError,
@@ -8,21 +14,49 @@ import {
   type State,
   type InboxSettings,
 } from "./api";
-import { Confirmation } from "./Confirmation";
 import { Icon } from "./Icon";
+import { Avatar } from "./ui";
 type Props = {
   conversation: Conversation;
   state: State | null;
   busy: boolean;
   act: (fn: () => Promise<unknown>, refreshAfter?: boolean) => Promise<void>;
   inbox?: InboxSettings | null;
+  enrollControl?: ReactNode;
+  onBack?: () => void;
+  onResume?: () => void;
 };
+const senders: Record<string, string> = {
+  bot: "Bot reply",
+  web: "Sent from web",
+  phone: "Sent from phone",
+};
+function dayLabel(iso: string) {
+  const d = new Date(iso),
+    today = new Date();
+  const days = Math.round(
+    (new Date(today.toDateString()).getTime() -
+      new Date(d.toDateString()).getTime()) /
+      86400000,
+  );
+  if (days === 0) return "Today";
+  if (days === 1) return "Yesterday";
+  return d.toLocaleDateString([], {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    year: d.getFullYear() === today.getFullYear() ? undefined : "numeric",
+  });
+}
 export function ConversationHistory({
   conversation,
   state,
   busy,
   act,
   inbox,
+  enrollControl,
+  onBack,
+  onResume,
 }: Props) {
   const base = `${inbox?.enabled ? "/inbox" : ""}/conversations/${encodeURIComponent(conversation.id)}`;
   const scroll = useRef<HTMLDivElement>(null),
@@ -33,18 +67,21 @@ export function ConversationHistory({
       prepend: boolean;
     } | null>(null),
     sendKey = useRef(""),
-    sendIntentText = useRef("");
+    sendIntentText = useRef(""),
+    composer = useRef<HTMLTextAreaElement>(null);
   const [hasNew, setHasNew] = useState(false),
     [olderNotice, setOlderNotice] = useState("");
   const [messages, setMessages] = useState<Message[]>([]),
     [cursor, setCursor] = useState(""),
     [search, setSearch] = useState(""),
+    [searchOpen, setSearchOpen] = useState(false),
     [query, setQuery] = useState(""),
     [text, setText] = useState(""),
     [error, setError] = useState(""),
+    [sendError, setSendError] = useState(""),
+    [sending, setSending] = useState(false),
     [loading, setLoading] = useState(false),
     [notice, setNotice] = useState("");
-  const [confirmation, setConfirmation] = useState<string | null>(null);
   const messagesRef = useRef<Message[]>([]);
   messagesRef.current = messages;
   const request = useRef(1),
@@ -85,7 +122,7 @@ export function ConversationHistory({
         !result.next_cursor || result.next_cursor === importCursor,
       );
       setNotice(
-        `Imported ${result.imported} available text messages. Historical commands were not executed.`,
+        `Imported ${result.imported} message${result.imported === 1 ? "" : "s"} from your phone. Commands in old messages never run.`,
       );
       const first = messagesRef.current[0];
       const before = first
@@ -182,7 +219,7 @@ export function ConversationHistory({
         setError(
           e instanceof ApiError
             ? e.message.replaceAll("_", " ")
-            : "Could not load retained history.",
+            : "Could not load messages.",
         );
     } finally {
       if (resolveDone) {
@@ -208,9 +245,7 @@ export function ConversationHistory({
       if (cursor) await load(cursor, true);
       else if (inbox?.load_older && !importFinished) {
         await importPage();
-        setOlderNotice(
-          "Older phone text loaded. Available history may be incomplete.",
-        );
+        setOlderNotice("Loaded older messages from your phone.");
       }
     } finally {
       loadingOlder.current = false;
@@ -236,130 +271,274 @@ export function ConversationHistory({
     );
     return () => clearInterval(timer);
   }, [conversation.id, query, cursor]);
-  const canSend =
-    !!state &&
-    !state.paused &&
-    state.transport_ready &&
-    (conversation.enrolled || !!inbox?.enabled) &&
-    conversation.writable &&
-    !busy;
+  // Search as you type; the request guard discards results from older queries.
+  useEffect(() => {
+    const timer = setTimeout(() => setQuery(search.trim()), 300);
+    return () => clearTimeout(timer);
+  }, [search]);
+  useEffect(() => {
+    const el = composer.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = Math.min(el.scrollHeight, 200) + "px";
+  }, [text]);
+  const blocked = !state
+    ? "Connecting…"
+    : state.paused
+      ? "paused"
+      : !state.transport_ready
+        ? "Your phone isn’t connected, so messages can’t be sent right now."
+        : !conversation.writable
+          ? "This conversation can’t receive replies."
+          : !(conversation.enrolled || inbox?.enabled)
+            ? "Turn on bot replies to message this conversation."
+            : "";
+  const canSend = !blocked && !busy && !sending;
+  function send() {
+    const outgoing = text.trim();
+    if (!canSend || !outgoing) return;
+    // Reuse the idempotency key when retrying the same text after a lost response.
+    if (!sendKey.current || sendIntentText.current !== outgoing) {
+      sendKey.current = crypto.randomUUID();
+      sendIntentText.current = outgoing;
+    }
+    const requestId = sendKey.current;
+    setSending(true);
+    setSendError("");
+    api(
+      `${base}/compose`,
+      "POST",
+      inbox?.enabled
+        ? { text: outgoing, request_id: requestId }
+        : { text: outgoing },
+    )
+      .then(() => {
+        setText((current) => (current.trim() === outgoing ? "" : current));
+        sendKey.current = "";
+        sendIntentText.current = "";
+        void load("", true, request.current, true);
+      })
+      .catch((e) =>
+        setSendError(
+          e instanceof ApiError
+            ? `Not sent: ${e.message.replaceAll("_", " ")}. Your text is kept.`
+            : "The server didn’t confirm this message. Your text is kept; send again to retry safely.",
+        ),
+      )
+      .finally(() => {
+        setSending(false);
+        composer.current?.focus();
+      });
+  }
+  const showOlder = inbox?.enabled
+    ? !!cursor || (!!inbox.load_older && !importFinished)
+    : !!cursor;
+  let lastDay = "";
   return (
-    <>
-      <p className="muted">
-        Retained text from this conversation. Available history may be
-        incomplete.
-      </p>
-      {!inbox?.enabled && state?.capabilities.includes("history_import") && (
-        <details className="history-tools">
-          <summary>
-            <Icon name="clock" size={16} />
-            History import options
-          </summary>
-          <p className="muted">
-            Import available phone text into encrypted server storage.
-            Attachments are excluded, retention applies, and historical commands
-            never run.
-          </p>
+    <div className="thread">
+      <header className="thread-head">
+        {onBack && (
           <button
-            className="secondary"
-            disabled={
-              busy || loading || importFinished || !state.transport_ready
-            }
-            onClick={() => void importPage()}
+            type="button"
+            className="icon ghost only-mobile"
+            aria-label="Back to conversations"
+            onClick={onBack}
           >
-            {importFinished
-              ? "Available text pages imported"
-              : importCursor
-                ? "Import next phone history page"
-                : "Import phone text history"}
+            <Icon name="back" />
           </button>
-        </details>
-      )}
-      <form
-        className="search-form"
-        onSubmit={(e) => {
-          e.preventDefault();
-          setQuery(search);
-        }}
-      >
-        <label className="field">
-          Search retained history
+        )}
+        <Avatar label={conversation.label} />
+        <div className="thread-title">
+          <h2>{conversation.label}</h2>
+          <small>
+            {conversation.protocol}
+            {conversation.enrolled ? ", bot replies on" : ""}
+          </small>
+        </div>
+        <div className="thread-tools">
+          <button
+            type="button"
+            className={"icon ghost" + (searchOpen ? " on" : "")}
+            aria-label="Search this conversation"
+            aria-expanded={searchOpen}
+            onClick={() => {
+              if (searchOpen) setSearch("");
+              setSearchOpen(!searchOpen);
+            }}
+          >
+            <Icon name="search" size={18} />
+          </button>
+          {!inbox?.enabled && state?.capabilities.includes("history_import") && (
+            <button
+              type="button"
+              className="icon ghost"
+              title={
+                importFinished
+                  ? "All available phone history imported"
+                  : "Import older messages from your phone"
+              }
+              aria-label={
+                importFinished
+                  ? "All available phone history imported"
+                  : "Import phone history"
+              }
+              disabled={
+                busy || loading || importFinished || !state.transport_ready
+              }
+              onClick={() => void importPage()}
+            >
+              <Icon name="history" size={18} />
+            </button>
+          )}
+          {enrollControl}
+        </div>
+      </header>
+      {searchOpen && (
+        <label className="search thread-search">
+          <Icon name="search" size={16} />
           <input
+            autoFocus
             type="search"
-            placeholder="Find something in this conversation"
+            aria-label="Search messages"
+            placeholder="Search messages"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") {
+                setSearch("");
+                setSearchOpen(false);
+              }
+            }}
           />
         </label>
-        <button className="secondary" disabled={loading}>
-          <Icon name="search" size={15} />
-          Search history
-        </button>
-      </form>
+      )}
       {error && (
-        <p role="alert" className="error">
+        <p role="alert" className="inline-alert">
           {error}
         </p>
       )}
-      {messages.length === 0 ? (
-        <div className="empty">
-          <Icon name="conversations" size={24} />
-          <strong>
-            {loading
-              ? "Loading history…"
-              : query
-                ? "No messages match your search."
-                : "No retained messages yet."}
-          </strong>
-          {query && (
-            <button
-              className="secondary"
-              onClick={() => {
-                setSearch("");
-                setQuery("");
-              }}
-            >
-              Clear history search
-            </button>
-          )}
-        </div>
-      ) : (
-        <div
-          className={inbox?.enabled ? "messages chat-messages" : "messages"}
-          ref={scroll}
-          onScroll={() => {
-            const el = scroll.current;
-            if (!el || !inbox?.enabled) return;
-            if (el.scrollHeight - el.scrollTop - el.clientHeight < 80)
-              setHasNew(false);
-            if (el.scrollTop < 40) void loadOlder();
-          }}
-        >
-          {messages.map((m) => (
-            <div
-              key={m.id}
-              data-message-id={m.id}
-              className={"bubble " + m.direction}
-            >
-              <p>{m.text}</p>
-              <small>
-                {m.direction === "outgoing"
-                  ? m.origin === "web"
-                    ? "You · Web"
-                    : m.origin === "phone"
-                      ? "You · Phone"
-                      : "Outgoing"
-                  : "Incoming"}{" "}
-                · {new Date(m.at).toLocaleString()}
-                {m.status && ` · ${m.status}`}
-              </small>
-            </div>
-          ))}
-        </div>
+      {notice && (
+        <p role="status" className="inline-note">
+          {notice}
+          <button
+            type="button"
+            className="icon ghost"
+            aria-label="Dismiss"
+            onClick={() => setNotice("")}
+          >
+            <Icon name="x" size={14} />
+          </button>
+        </p>
       )}
+      {showOlder && (
+        <button
+          type="button"
+          className="older"
+          disabled={loading || (!!inbox?.enabled && busy)}
+          onClick={() => void loadOlder()}
+        >
+          Load older messages
+        </button>
+      )}
+      <div
+        className="messages"
+        ref={scroll}
+        onScroll={() => {
+          const el = scroll.current;
+          if (!el) return;
+          if (el.scrollHeight - el.scrollTop - el.clientHeight < 80)
+            setHasNew(false);
+          if (inbox?.enabled && el.scrollTop < 40) void loadOlder();
+        }}
+      >
+        {inbox?.enabled && !cursor && importFinished && (
+          <p className="history-end">
+            That’s everything your phone returned. Older messages may still
+            exist.
+          </p>
+        )}
+        {inbox?.enabled && olderNotice && (
+          <p role="status" className="sr-only">
+            {loading ? "Loading messages…" : olderNotice}
+          </p>
+        )}
+        {messages.length === 0 && (
+          <div className="thread-empty">
+            <strong>
+              {loading
+                ? "Loading messages…"
+                : query
+                  ? `No messages match “${query}”.`
+                  : "No messages here yet."}
+            </strong>
+            {query ? (
+              <button
+                type="button"
+                className="ghost small"
+                onClick={() => {
+                  setSearch("");
+                  setQuery("");
+                }}
+              >
+                Clear search
+              </button>
+            ) : (
+              !loading && (
+                <small>
+                  New texts appear as they arrive
+                  {!inbox?.enabled &&
+                  state?.capabilities.includes("history_import")
+                    ? ". Use the history button to import older ones."
+                    : "."}
+                </small>
+              )
+            )}
+          </div>
+        )}
+        {messages.map((m) => {
+          const day = dayLabel(m.at);
+          const divider = day !== lastDay;
+          lastDay = day;
+          const at = new Date(m.at);
+          return (
+            <div key={m.id} className="message-group">
+              {divider && (
+                <div className="day" role="separator">
+                  <span>{day}</span>
+                </div>
+              )}
+              <div
+                data-message-id={m.id}
+                className={
+                  "bubble " +
+                  m.direction +
+                  (m.direction === "outgoing" ? " from-" + (m.origin ?? "bot") : "")
+                }
+              >
+                <p>{m.text}</p>
+                <small>
+                  {m.direction === "outgoing" && (
+                    <span className="sender">
+                      {senders[m.origin ?? ""] ?? "Sent"}
+                    </span>
+                  )}
+                  <time dateTime={m.at} title={at.toLocaleString()}>
+                    {at.toLocaleTimeString([], {
+                      hour: "numeric",
+                      minute: "2-digit",
+                    })}
+                  </time>
+                  {m.status && <span className="msg-status">{m.status}</span>}
+                </small>
+              </div>
+            </div>
+          );
+        })}
+      </div>
       {hasNew && (
         <button
-          className="secondary"
+          type="button"
+          className="new-pill"
           onClick={() => {
             if (scroll.current)
               scroll.current.scrollTop = scroll.current.scrollHeight;
@@ -369,140 +548,97 @@ export function ConversationHistory({
           New messages ↓
         </button>
       )}
-      {inbox?.enabled && (
-        <>
-          <p role="status" className="muted">
-            {loading ? "Loading messages…" : olderNotice}
-          </p>
-          {(cursor || (inbox.load_older && !importFinished)) && (
-            <button
-              className="secondary"
-              disabled={loading || busy}
-              onClick={() => void loadOlder()}
-            >
-              Load older messages
-            </button>
-          )}
-          {!cursor && importFinished && (
-            <p className="muted">
-              No more available phone text. This does not establish complete
-              history.
-            </p>
-          )}
-        </>
-      )}
-      {!inbox?.enabled && cursor && (
-        <button
-          className="secondary"
-          disabled={loading}
-          onClick={() => void load(cursor, true)}
-        >
-          Load older messages
-        </button>
-      )}
       <form
-        className="compose"
+        className="composer"
         onSubmit={(e) => {
           e.preventDefault();
-          if (canSend && text.trim()) {
-            if (!sendKey.current || sendIntentText.current !== text.trim()) {
-              sendKey.current = crypto.randomUUID();
-              sendIntentText.current = text.trim();
-            }
-            setConfirmation(text);
-          }
+          send();
         }}
       >
-        <label className="field">
-          Manual message
+        {blocked && (
+          <div className="composer-blocked" role="status">
+            {blocked === "paused" ? (
+              <>
+                <span>Sending is paused.</span>
+                {onResume && (
+                  <button
+                    type="button"
+                    className="small primary"
+                    disabled={busy}
+                    onClick={onResume}
+                  >
+                    <Icon name="play" size={13} />
+                    Resume sending
+                  </button>
+                )}
+              </>
+            ) : (
+              <span>{blocked}</span>
+            )}
+          </div>
+        )}
+        {sendError && (
+          <p role="alert" className="inline-alert">
+            {sendError}
+          </p>
+        )}
+        <div className="composer-box">
           <textarea
+            ref={composer}
+            rows={1}
             maxLength={24000}
-            required
-            placeholder="Write a reply…"
+            aria-label="Message"
+            placeholder={`Text ${conversation.label}`}
             value={text}
             onChange={(e) => {
               setText(Array.from(e.target.value).slice(0, 12000).join(""));
-              setNotice("");
+              setSendError("");
+            }}
+            onKeyDown={(e) => {
+              if (
+                e.key === "Enter" &&
+                !e.shiftKey &&
+                !e.nativeEvent.isComposing
+              ) {
+                e.preventDefault();
+                send();
+              }
             }}
           />
-        </label>
-        <div className="compose-meta">
-          <small>
-            {Array.from(text).length.toLocaleString()} / 12,000 characters
-          </small>
-          <small>
-            {state?.paused
-              ? "Bot paused"
-              : !state?.transport_ready
-                ? "Phone unavailable"
-                : "Ready to queue"}
-          </small>
+          <button
+            className="send"
+            aria-label="Send message"
+            disabled={!canSend || !text.trim()}
+          >
+            {sending ? <span className="spinner" /> : <Icon name="send" size={18} />}
+          </button>
         </div>
-        <p className="muted">
-          Review the recipient and text before queuing. Submission status
-          appears in Activity.
-        </p>
-        <button disabled={!canSend || !text.trim()}>
-          Send message
-          <Icon name="arrow" size={16} />
-        </button>
+        <div className="composer-meta">
+          <small>Enter to send, Shift+Enter for a new line</small>
+          {text.length > 600 && (
+            <small>{Array.from(text).length.toLocaleString()} / 12,000</small>
+          )}
+          {state?.fixture && (
+            <button
+              type="button"
+              className="link"
+              disabled={busy || state.paused}
+              onClick={() =>
+                void act(async () => {
+                  await api("/fixture/incoming", "POST", {
+                    conversation_id: conversation.id,
+                    participant_id: conversation.participant_id,
+                    text: "!ping",
+                  });
+                  await load("", true);
+                })
+              }
+            >
+              Simulate !ping
+            </button>
+          )}
+        </div>
       </form>
-      {notice && (
-        <p role="status" className="banner">
-          {notice}
-        </p>
-      )}
-      {state?.fixture && (
-        <button
-          className="secondary"
-          disabled={busy || state.paused}
-          onClick={() =>
-            void act(async () => {
-              await api("/fixture/incoming", "POST", {
-                conversation_id: conversation.id,
-                participant_id: conversation.participant_id,
-                text: "!ping",
-              });
-              await load("", true);
-            })
-          }
-        >
-          Simulate !ping
-        </button>
-      )}
-      {confirmation !== null && (
-        <Confirmation
-          title="Queue this message?"
-          description={`This reply will be queued for ${conversation.label}. Delivery is not confirmed by queuing.`}
-          confirmLabel="Confirm send"
-          cancelLabel="Keep editing"
-          disabled={!canSend}
-          onCancel={() => setConfirmation(null)}
-          onConfirm={() => {
-            const outgoing = confirmation,
-              requestId = sendKey.current;
-            setConfirmation(null);
-            void act(async () => {
-              await api(
-                `${base}/compose`,
-                "POST",
-                inbox?.enabled
-                  ? { text: outgoing, request_id: requestId }
-                  : { text: outgoing },
-              );
-              setText((current) => (current === outgoing ? "" : current));
-              sendKey.current = "";
-              sendIntentText.current = "";
-              setNotice(
-                "Message queued. Check Activity for submission status.",
-              );
-              void load("", true, request.current, true);
-            }, false);
-          }}
-        >
-          <div className="compose-summary">{confirmation}</div>
-        </Confirmation>
-      )}
-    </>
+    </div>
   );
 }

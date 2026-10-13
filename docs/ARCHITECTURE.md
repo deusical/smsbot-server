@@ -27,7 +27,7 @@ Phone history imports store available pages without routing commands; retained h
 
 ## Authentication
 
-Owner initialization writes a random credential to a local owner file; the database stores only its hash. Login creates a 12-hour random browser session with HttpOnly/SameSite Strict cookies. State-changing browser requests require exact Origin. Login uses strict JSON plus bounded failed-attempt cooldown. Exact Host validation prevents DNS rebinding. API responses are no-store; CSP blocks remote scripts and framing.
+Owner initialization writes a random credential to a local owner file; the database stores only its hash. Login creates a 12-hour random browser session with HttpOnly/SameSite Strict cookies. State-changing browser requests require exact Origin. Login uses strict JSON and trims surrounding whitespace from the pasted credential; there is no failed-attempt lockout, since the owner credential is a long random value. Exact Host validation prevents DNS rebinding. API responses are no-store; CSP blocks remote scripts and framing.
 
 Owners create revocable random Android credentials. Client tokens cannot create/revoke credentials. Invalid bearer credentials never fall back to a browser cookie. Hosting defaults to loopback. Nonloopback binds require direct TLS and an exact HTTPS origin. A configured private HTTPS proxy can front loopback; forwarded headers never determine trust or origin.
 

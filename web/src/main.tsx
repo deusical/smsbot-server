@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   api,
@@ -6,16 +6,16 @@ import {
   type State,
   type Conversation,
   type Job,
-  type Client,
   type InboxSettings as InboxConfig,
-  inboxAllows,
 } from "./api";
-import { ConfigurationEditor } from "./Configuration";
-import { ConversationHistory } from "./ConversationHistory";
-import { InboxSettings } from "./InboxSettings";
-import { Activity } from "./Activity";
-import { Icon } from "./Icon";
+import { ActivityFeed, ActivityPage } from "./Activity";
+import { CommandsPage } from "./Commands";
 import { Confirmation } from "./Confirmation";
+import { ConversationsPage } from "./Conversations";
+import { Icon } from "./Icon";
+import { SettingsPage } from "./Settings";
+import { Avatar } from "./ui";
+import { useWorkspace } from "./workspace";
 import "./style.css";
 
 const pages = [
@@ -26,14 +26,13 @@ const pages = [
   "Settings",
 ] as const;
 type Page = (typeof pages)[number];
-const descriptions: Record<Page, string> = {
-  Home: "A clear view of your bot and everything it’s working on.",
-  Conversations:
-    "Choose who your bot can reply to, and keep the conversation in view.",
-  Commands: "Turn a message into something useful.",
-  Activity: "Follow every request, from arrival to outcome.",
-  Settings: "Your models, boundaries, and connected devices.",
+type Toast = { id: number; text: string };
+type ConversationPage = {
+  conversations: Conversation[];
+  next_cursor: string;
+  partial?: boolean;
 };
+
 function App() {
   const [page, setPage] = useState<Page>("Home"),
     [state, setState] = useState<State | null>(null);
@@ -42,26 +41,30 @@ function App() {
     [busy, setBusy] = useState(false),
     [error, setError] = useState("");
   const [conversations, setConversations] = useState<Conversation[]>([]),
-    [jobs, setJobs] = useState<Job[]>([]),
-    [clients, setClients] = useState<Client[]>([]);
-  const [selected, setSelected] = useState(""),
-    [newClient, setNewClient] = useState<Client | null>(null),
-    [clientLabel, setClientLabel] = useState("Android client");
-  const [theme, setTheme] = useState<"dark" | "light">("dark"),
-    [search, setSearch] = useState(""),
-    [conversationFilter, setConversationFilter] = useState("all");
-  const [configDirty, setDirty] = useState(false),
-    [destination, setDestination] = useState<Page | null>(null),
-    [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+    [jobs, setJobs] = useState<Job[]>([]);
+  const [selected, setSelected] = useState("");
+  const [theme, setTheme] = useState<"dark" | "light">(() =>
+    window.matchMedia?.("(prefers-color-scheme: light)").matches
+      ? "light"
+      : "dark",
+  );
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [inbox, setInbox] = useState<InboxConfig | null>(null),
-    [inboxDirty, setInboxDirty] = useState(false),
     [conversationCursor, setConversationCursor] = useState("");
   const [discoveryPartial, setDiscoveryPartial] = useState(false);
-  const dirty = configDirty || inboxDirty;
+  const [toasts, setToasts] = useState<Toast[]>([]),
+    [confirmSignOut, setConfirmSignOut] = useState(false);
   const paginatedConversations = useRef(false);
   const refreshing = useRef(false),
     stateRevision = useRef(0),
     sessionRevision = useRef(0);
+  const workspace = useWorkspace(signedIn, inbox, setInbox);
+  const dirty = workspace.dirty;
+  const notify = useCallback((text: string) => {
+    const id = Date.now() + Math.random();
+    setToasts((t) => [...t.slice(-2), { id, text }]);
+    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 3800);
+  }, []);
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
   }, [theme]);
@@ -71,13 +74,25 @@ function App() {
     window.addEventListener("beforeunload", before);
     return () => window.removeEventListener("beforeunload", before);
   }, [dirty]);
+  async function saveAll() {
+    if (await workspace.save()) notify("Changes saved.");
+  }
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s" && dirty) {
+        e.preventDefault();
+        void saveAll();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
   function navigate(next: Page) {
-    if (next === page || busy) return;
-    if (dirty) setDestination(next);
-    else {
-      setPage(next);
-      window.scrollTo(0, 0);
-    }
+    if (next === page) return;
+    if ((next === "Commands" || next === "Settings") && !dirty)
+      workspace.reload();
+    setPage(next);
+    window.scrollTo(0, 0);
   }
   function clearSession() {
     sessionRevision.current++;
@@ -85,13 +100,9 @@ function App() {
     setState(null);
     setJobs([]);
     setConversations([]);
-    setClients([]);
-    setNewClient(null);
-    setDirty(false);
     setPage("Home");
     setSelected("");
     setInbox(null);
-    setInboxDirty(false);
     setConversationCursor("");
     paginatedConversations.current = false;
   }
@@ -123,11 +134,9 @@ function App() {
       if (s.transport_ready) {
         stage = "conversations";
         if (inboxConfig?.enabled) {
-          const discovered = await api<{
-            conversations: Conversation[];
-            next_cursor: string;
-            partial?: boolean;
-          }>("/inbox/conversations");
+          const discovered = await api<ConversationPage>(
+            "/inbox/conversations",
+          );
           if (session !== sessionRevision.current) return;
           if (!paginatedConversations.current)
             setConversationCursor(discovered.next_cursor);
@@ -148,7 +157,7 @@ function App() {
         setError("");
       } else
         setError(
-          "Server reachable; phone connection unavailable. Conversation data may be stale.",
+          "Your phone isn’t connected. Conversations may be out of date.",
         );
       setLastUpdated(new Date());
     } catch (e) {
@@ -156,11 +165,11 @@ function App() {
       if (e instanceof ApiError && e.status === 401) clearSession();
       else if (stage === "conversations")
         setError(
-          "Could not refresh conversations. Displayed conversation data may be stale.",
+          "Could not refresh conversations. The list may be out of date.",
         );
       else if (e instanceof ApiError)
-        setError("Could not refresh server data. Displayed data may be stale.");
-      else setError("Connection lost. Displayed data may be stale.");
+        setError("Could not refresh from the server. Retrying…");
+      else setError("Connection lost. Retrying…");
     } finally {
       refreshing.current = false;
     }
@@ -170,21 +179,6 @@ function App() {
     const timer = setInterval(() => void refresh(), 3000);
     return () => clearInterval(timer);
   }, []);
-  useEffect(() => {
-    if (!signedIn) return;
-    let active = true;
-    if (page === "Settings")
-      api<Client[]>("/clients")
-        .then((x) => {
-          if (active) setClients(x);
-        })
-        .catch(() => {
-          if (active) setError("Could not load client access.");
-        });
-    return () => {
-      active = false;
-    };
-  }, [page, signedIn]);
   async function act(fn: () => Promise<unknown>, refreshAfter = true) {
     setBusy(true);
     setError("");
@@ -195,7 +189,7 @@ function App() {
       setError(
         e instanceof ApiError
           ? e.message.replaceAll("_", " ")
-          : "Could not connect to the server.",
+          : "Could not reach the server.",
       );
     } finally {
       setBusy(false);
@@ -212,66 +206,42 @@ function App() {
       setState(updated);
     }, false);
   }
+  async function signOut() {
+    await act(async () => {
+      await api("/logout", "POST");
+      clearSession();
+    }, false);
+  }
+  function loadMoreConversations() {
+    void act(async () => {
+      const p = await api<ConversationPage>(
+        `/inbox/conversations?cursor=${encodeURIComponent(conversationCursor)}`,
+      );
+      setConversations((old) => {
+        const m = new Map(old.map((c) => [c.id, c]));
+        for (const c of p.conversations) m.set(c.id, c);
+        return [...m.values()];
+      });
+      setDiscoveryPartial(!!p.partial);
+      paginatedConversations.current = true;
+      setConversationCursor(
+        p.next_cursor === conversationCursor ? "" : p.next_cursor,
+      );
+    }, false);
+  }
   const reviewCount = jobs.filter(
     (j) => j.state === "awaiting_approval",
   ).length;
-  const enrolled = conversations.filter((c) => c.enrolled);
-  const selectedConversation = conversations.find((c) => c.id === selected);
-  const visibleConversations = conversations.filter(
-    (c) =>
-      (conversationFilter === "all" ||
-        (conversationFilter === "enrolled" && c.enrolled) ||
-        (conversationFilter === "available" &&
-          !c.enrolled &&
-          !c.group &&
-          c.writable)) &&
-      `${c.label} ${c.protocol}`.toLowerCase().includes(search.toLowerCase()),
-  );
   if (!signedIn)
     return (
-      <div className="login-layout">
-        <section className="login-story">
-          <div className="brand">
-            <span className="mark">
-              <Icon name="commands" size={23} />
-            </span>
-            SmsBot<span className="brand-tag">PERSONAL WORKSPACE</span>
-          </div>
-          <div>
-            <p className="eyebrow">A LITTLE HELP. JUST A TEXT AWAY.</p>
-            <h1>
-              Your messages.
-              <br />
-              Your rules.
-              <br />
-              <em>Your bot.</em>
-            </h1>
-            <p>
-              A quiet place to manage commands, trusted conversations, and the
-              small things you’d like to automate.
-            </p>
-            <div className="login-flow">
-              <Icon name="conversations" />
-              <span>Message</span>
-              <Icon name="arrow" />
-              <Icon name="commands" />
-              <span>Command</span>
-              <Icon name="arrow" />
-              <Icon name="spark" />
-              <span>Reply</span>
-            </div>
-          </div>
-          <small>Self-hosted, with you in control.</small>
-        </section>
-        <main className="login">
-          <span className="pill">
-            <Icon name="shield" size={14} />
-            PRIVATE WORKSPACE
+      <div className="login">
+        <main className="login-card">
+          <span className="logo big" aria-hidden="true">
+            <Icon name="commands" size={30} />
           </span>
-          <h2>Welcome back.</h2>
-          <p>
-            Connect to your personal control room using the owner credential
-            from local setup.
+          <h1>SmsBot</h1>
+          <p className="muted">
+            Paste the owner credential from your server’s setup folder.
           </p>
           <form
             onSubmit={(e) => {
@@ -283,58 +253,48 @@ function App() {
               });
             }}
           >
-            <label htmlFor="owner">Owner credential</label>
+            <label htmlFor="owner" className="sr-only">
+              Owner credential
+            </label>
             <input
               id="owner"
               type="password"
               autoComplete="off"
-              placeholder="Enter your owner credential"
+              autoFocus
+              placeholder="Owner credential"
               value={token}
               onChange={(e) => setToken(e.target.value)}
               required
             />
-            <button disabled={busy || !token}>
-              {busy ? "Connecting…" : "Open dashboard"}
-              <Icon name="arrow" />
+            <button className="primary wide" disabled={busy || !token}>
+              {busy ? "Signing in…" : "Sign in"}
             </button>
           </form>
           {error && (
-            <p role="alert" className="error">
+            <p role="alert" className="inline-alert">
               {error}
             </p>
           )}
-          <div className="login-note">
-            <Icon name="shield" />
-            <small>
-              Your credential stays out of browser storage. Sessions use a
-              server-managed cookie.
-            </small>
-          </div>
+          <small className="muted login-foot">
+            <Icon name="shield" size={13} />
+            The credential isn’t stored in this browser.
+          </small>
         </main>
       </div>
     );
+  const live = !!state && !state.paused;
   return (
-    <div className="shell">
+    <div className={"shell page-" + page.toLowerCase()}>
       <a className="skip-link" href="#workspace">
         Skip to content
       </a>
-      <aside>
+      <aside className="rail">
         <div className="brand">
-          <span className="mark">
-            <Icon name="commands" size={22} />
+          <span className="logo" aria-hidden="true">
+            <Icon name="commands" size={18} />
           </span>
-          SmsBot
+          <span>SmsBot</span>
         </div>
-        <div className="workspace-label">
-          <span className="workspace-avatar">P</span>
-          <div>
-            <strong>Personal workspace</strong>
-            <small>
-              {state?.fixture ? "Offline demo" : "Self-hosted service"}
-            </small>
-          </div>
-        </div>
-        <p className="nav-label">WORKSPACE</p>
         <nav aria-label="Main navigation">
           {pages.map((p) => (
             <button
@@ -353,697 +313,450 @@ function App() {
             </button>
           ))}
         </nav>
-        <div className="aside-foot">
-          <div className="connection-card">
-            <span
-              className={
-                "dot " + (state?.transport_ready ? "ready" : "offline")
-              }
-            />
-            <div>
-              <strong>
-                {state?.transport_ready
-                  ? "Connection ready"
-                  : "Connection unavailable"}
-              </strong>
-              <small>
-                {state?.fixture ? "Synthetic fixture" : "Google Messages"}
-              </small>
-            </div>
-          </div>
-          <small>Made for your conversations.</small>
+        <div className="rail-foot">
+          <span
+            className={
+              "link-state " + (state?.transport_ready ? "ready" : "down")
+            }
+            title={
+              lastUpdated
+                ? "Last checked " + lastUpdated.toLocaleTimeString()
+                : undefined
+            }
+          >
+            <span className="dot" />
+            {state?.transport_ready ? "Phone connected" : "Phone offline"}
+          </span>
         </div>
       </aside>
       <main className="workspace" id="workspace">
-        <header>
-          <div>
-            <p className="eyebrow">
-              PERSONAL WORKSPACE <span>/ {page.toUpperCase()}</span>
-            </p>
-            <h1>{page}</h1>
-            <p className="page-description">{descriptions[page]}</p>
-          </div>
-          <div className="header-actions">
-            <button
-              className="icon-button secondary"
-              aria-label={
-                theme === "dark"
-                  ? "Switch to light theme"
-                  : "Switch to dark theme"
-              }
-              title="Change theme"
-              onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+        <header className="topbar">
+          <h1>{page}</h1>
+          {state?.fixture && (
+            <span
+              className="pill demo"
+              title="All conversations are synthetic. Nothing is sent and no AI is called."
             >
-              <Icon name={theme === "dark" ? "sun" : "moon"} />
-            </button>
-            <button
-              className={
-                state?.paused ? "enable-button" : "secondary pause-button"
-              }
-              disabled={
-                busy || !state || (state.paused && !state.transport_ready)
-              }
-              onClick={() => void togglePaused()}
-            >
-              <Icon name={state?.paused ? "play" : "pause"} size={16} />
-              {inbox?.enabled
-                ? state?.paused
-                  ? "Resume sending"
-                  : "Pause all sending"
-                : state?.paused
-                  ? "Enable bot"
-                  : "Pause bot"}
-            </button>
-          </div>
-        </header>
-        {state?.fixture && (
-          <div className="banner fixture-banner">
-            <Icon name="spark" />
-            <span>
-              Offline demo{" "}
-              <small>
-                All conversations are synthetic. No Google connection, SMS sends
-                or AI charges.
-              </small>
+              Demo data
             </span>
-          </div>
-        )}
+          )}
+          <span className="topbar-gap" />
+          <button
+            className="icon ghost"
+            aria-label={
+              theme === "dark" ? "Switch to light theme" : "Switch to dark theme"
+            }
+            title="Change theme"
+            onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+          >
+            <Icon name={theme === "dark" ? "sun" : "moon"} size={18} />
+          </button>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={live}
+            aria-label="Bot sending"
+            title={
+              live
+                ? "Pause all sending. Queued and waiting replies are cancelled."
+                : "Resume sending"
+            }
+            className={"power " + (live ? "on" : "off")}
+            disabled={busy || !state || (state.paused && !state.transport_ready)}
+            onClick={() => void togglePaused()}
+          >
+            <span className="power-track" aria-hidden="true">
+              <span className="power-knob" />
+            </span>
+            <span className="power-label">{live ? "Live" : "Paused"}</span>
+          </button>
+        </header>
         {error && (
-          <div className="error" role="alert">
-            <Icon name="warning" />
+          <div className="banner" role="alert">
+            <Icon name="warning" size={17} />
             {error}
           </div>
         )}
         {page === "Home" && (
-          <>
-            <section className="hero">
-              <div>
-                <span className="pill">
-                  <span
-                    className={"dot " + (state?.paused ? "paused" : "ready")}
-                  />
-                  {state?.paused
-                    ? "PAUSED"
-                    : inbox?.automatic_replies === false
-                      ? "MANUAL REPLIES"
-                      : "ACTIVE"}
-                </span>
-                <h2>
-                  {state?.paused
-                    ? "A moment of quiet."
-                    : "A little less on your plate."}
-                </h2>
-                <p>
-                  {state?.paused
-                    ? inbox?.enabled
-                      ? "All sending is paused. Your opted-in inbox continues receiving messages."
-                      : "Your workspace is ready. Enable your bot when you want it to respond to new commands."
-                    : inbox?.automatic_replies === false
-                      ? "Automatic command replies are off. You can reply manually in accessible conversations."
-                      : "Your bot is listening to trusted conversations. Follow requests here, even when your other interfaces are closed."}
-                </p>
-                <button
-                  className="secondary"
-                  onClick={() => navigate("Conversations")}
-                >
-                  Manage conversations
-                  <Icon name="arrow" size={17} />
-                </button>
-              </div>
-              <div className="flow-preview" aria-hidden="true">
-                {[
-                  {
-                    icon: "conversations",
-                    title: "A message arrives",
-                    detail: "From a trusted conversation",
-                  },
-                  {
-                    icon: "commands",
-                    title: "Your command runs",
-                    detail: "With your rules and model",
-                  },
-                  {
-                    icon: "check",
-                    title: "A helpful reply",
-                    detail: "You stay in control",
-                  },
-                ].map((step) => (
-                  <div key={step.icon}>
-                    <span>
-                      <Icon name={step.icon} />
-                    </span>
-                    <strong>{step.title}</strong>
-                    <small>{step.detail}</small>
-                  </div>
-                ))}
-              </div>
-            </section>
-            <div className="stats">
-              <article>
-                <span className="stat-label">
-                  Phone connection
-                  <Icon name="phone" />
-                </span>
-                <strong>
-                  {state?.transport_ready ? "Ready" : "Unavailable"}
-                </strong>
-                <p>
-                  {state?.fixture
-                    ? "Offline simulator"
-                    : "Paired Google Messages phone"}
-                </p>
-              </article>
-              <article>
-                <span className="stat-label">
-                  Trusted conversations
-                  <Icon name="shield" />
-                </span>
-                <strong>{enrolled.length.toString().padStart(2, "0")}</strong>
-                <p>Explicitly enrolled participants</p>
-              </article>
-              <article>
-                <span className="stat-label">
-                  Requests in view
-                  <Icon name="activity" />
-                </span>
-                <strong>{jobs.length.toString().padStart(2, "0")}</strong>
-                <p>
-                  {jobs.filter((j) => j.state === "unknown_submission").length}{" "}
-                  uncertain · {reviewCount} awaiting approval
-                </p>
-              </article>
-            </div>
-            <div className="overview-grid">
-              <section className="card">
-                <div className="section-heading">
-                  <div>
-                    <p className="eyebrow">THE LATEST</p>
-                    <h2>Recent activity</h2>
-                  </div>
-                  <button
-                    className="text-button"
-                    onClick={() => navigate("Activity")}
-                  >
-                    View journal
-                    <Icon name="arrow" size={16} />
-                  </button>
-                </div>
-                <Activity
-                  jobs={jobs.slice(0, 5)}
-                  conversations={conversations}
-                  compact
-                />
-              </section>
-              <section className="card quick-start">
-                <p className="eyebrow">YOUR NEXT MOVE</p>
-                <h2>Make it your own.</h2>
-                <p className="muted">
-                  Start with a useful command. Decide where it works and when
-                  you want to approve a reply.
-                </p>
-                <button
-                  className="quick-action"
-                  onClick={() => navigate("Commands")}
-                >
-                  <span className="quick-icon">
-                    <Icon name="commands" />
-                  </span>
-                  <span>
-                    <strong>Build a command</strong>
-                    <small>Fixed replies or AI instructions</small>
-                  </span>
-                  <Icon name="arrow" size={17} />
-                </button>
-                <button
-                  className="quick-action"
-                  onClick={() =>
-                    navigate(reviewCount ? "Activity" : "Settings")
-                  }
-                >
-                  <span className="quick-icon">
-                    <Icon name={reviewCount ? "clock" : "settings"} />
-                  </span>
-                  <span>
-                    <strong>
-                      {reviewCount
-                        ? "Review pending requests"
-                        : "Tune your workspace"}
-                    </strong>
-                    <small>
-                      {reviewCount
-                        ? `${reviewCount} waiting for your approval`
-                        : "Models, limits, and connected devices"}
-                    </small>
-                  </span>
-                  <Icon name="arrow" size={17} />
-                </button>
-                <div className="privacy-note">
-                  <Icon name="shield" size={18} />
-                  <small>
-                    Only enrolled individual conversations can run commands.
-                  </small>
-                </div>
-              </section>
-            </div>
-          </>
-        )}
-        {page === "Conversations" && (
-          <>
-            {inbox?.enabled && state?.inbox_capture_gap && (
-              <p role="status" className="banner">
-                Some messages could not be captured. Load older phone history to
-                recover available text.
-              </p>
-            )}
-            <div className="conversation-grid">
-              <section className="card thread-list">
-                <div className="section-heading">
-                  <h2>Your conversations</h2>
-                  <span className="count-badge">{conversations.length}</span>
-                </div>
-                <label className="search-control">
-                  <Icon name="search" />
-                  <input
-                    aria-label="Search conversations"
-                    type="search"
-                    placeholder="Find a conversation"
-                    value={search}
-                    onChange={(e) => setSearch(e.target.value)}
-                  />
-                </label>
-                <div
-                  className="filter-tabs"
-                  role="group"
-                  aria-label="Filter conversations"
-                >
-                  {[
-                    { id: "all", label: "All" },
-                    { id: "enrolled", label: "Enrolled" },
-                    { id: "available", label: "Available" },
-                  ].map((f) => (
-                    <button
-                      key={f.id}
-                      className={conversationFilter === f.id ? "selected" : ""}
-                      aria-pressed={conversationFilter === f.id}
-                      onClick={() => setConversationFilter(f.id)}
-                    >
-                      {f.label}
-                    </button>
-                  ))}
-                </div>
-                <div className="conversation-list">
-                  {visibleConversations.map((c) => (
-                    <article
-                      className={
-                        "conversation " + (selected === c.id ? "selected" : "")
-                      }
-                      key={c.id}
-                    >
-                      <span className="avatar" aria-hidden="true">
-                        {c.label.slice(0, 1).toUpperCase()}
-                      </span>
-                      <button
-                        className="thread-button"
-                        disabled={!c.enrolled && !inboxAllows(inbox, c)}
-                        onClick={() => setSelected(c.id)}
-                      >
-                        <strong>{c.label}</strong>
-                        <small>
-                          {c.protocol} ·{" "}
-                          {c.group
-                            ? "Group excluded"
-                            : c.enrolled
-                              ? "Enrolled"
-                              : "Not enrolled"}
-                        </small>
-                      </button>
-                      <button
-                        className="secondary"
-                        disabled={busy || c.group || !c.writable}
-                        onClick={() =>
-                          void act(() =>
-                            c.enrolled
-                              ? api(
-                                  `/enrollment/${encodeURIComponent(c.id)}`,
-                                  "DELETE",
-                                )
-                              : api("/enrollment", "POST", {
-                                  conversation_id: c.id,
-                                  participant_id: c.participant_id,
-                                }),
-                          )
-                        }
-                      >
-                        {c.enrolled ? "Remove" : "Enroll"}
-                      </button>
-                    </article>
-                  ))}
-                </div>
-                {!visibleConversations.length && (
-                  <div className="empty">
-                    <Icon name="search" />
-                    <strong>No conversations found</strong>
-                    <p>
-                      {search
-                        ? "Try another name or clear the filter."
-                        : "Available conversations appear when the paired phone is ready."}
-                    </p>
-                  </div>
-                )}
-                {discoveryPartial && (
-                  <p role="status" className="banner">
-                    Some conversations could not be refreshed. The available
-                    page is shown; try again later.
-                  </p>
-                )}
-                <p className="list-note">
-                  <Icon name="shield" size={15} />
-                  Enrollment authorizes a stable participant. Names are labels.
-                </p>
-                {inbox?.enabled && conversationCursor && (
-                  <button
-                    className="secondary"
-                    disabled={busy}
-                    onClick={() =>
-                      void act(async () => {
-                        const p = await api<{
-                          conversations: Conversation[];
-                          next_cursor: string;
-                          partial?: boolean;
-                        }>(
-                          `/inbox/conversations?cursor=${encodeURIComponent(conversationCursor)}`,
-                        );
-                        setConversations((old) => {
-                          const m = new Map(old.map((c) => [c.id, c]));
-                          for (const c of p.conversations) m.set(c.id, c);
-                          return [...m.values()];
-                        });
-                        setDiscoveryPartial(!!p.partial);
-                        paginatedConversations.current = true;
-                        setConversationCursor(
-                          p.next_cursor === conversationCursor
-                            ? ""
-                            : p.next_cursor,
-                        );
-                      }, false)
-                    }
-                  >
-                    Load more conversations
-                  </button>
-                )}
-              </section>
-              <section className="card inbox-card">
-                <div className="section-heading">
-                  <div>
-                    <p className="eyebrow">RETAINED HISTORY</p>
-                    <h2>
-                      {selectedConversation?.label ??
-                        "A conversation, in context."}
-                    </h2>
-                  </div>
-                  {selectedConversation?.enrolled && (
-                    <span className="pill">
-                      <Icon name="shield" size={13} />
-                      ENROLLED
-                    </span>
-                  )}
-                </div>
-                {!selected ? (
-                  <div className="empty inbox-empty">
-                    <div className="empty-art">
-                      <Icon name="conversations" size={36} />
-                    </div>
-                    <h3>Your conversations live here.</h3>
-                    <p>
-                      Select an accessible conversation to browse retained
-                      history, import available text, or compose a reply.
-                    </p>
-                  </div>
-                ) : selectedConversation &&
-                  (selectedConversation.enrolled ||
-                    inboxAllows(inbox, selectedConversation)) ? (
-                  <ConversationHistory
-                    key={
-                      selected +
-                      String(inboxAllows(inbox, selectedConversation))
-                    }
-                    conversation={selectedConversation}
-                    inbox={
-                      inboxAllows(inbox, selectedConversation)
-                        ? inbox
-                        : undefined
-                    }
-                    state={state}
-                    busy={busy}
-                    act={act}
-                  />
-                ) : (
-                  <div className="empty">
-                    This conversation is no longer enrolled.
-                  </div>
-                )}
-              </section>
-            </div>
-          </>
-        )}
-        {page === "Commands" && (
-          <ConfigurationEditor
-            key="commands"
-            page="Commands"
+          <Home
+            state={state}
+            inbox={inbox}
+            jobs={jobs}
             conversations={conversations}
+            commands={workspace.config?.commands ?? []}
             busy={busy}
             act={act}
-            onDirtyChange={setDirty}
+            onToggle={() => void togglePaused()}
+            navigate={navigate}
+            openConversation={(id) => {
+              setSelected(id);
+              navigate("Conversations");
+            }}
+          />
+        )}
+        {page === "Conversations" && (
+          <ConversationsPage
+            conversations={conversations}
+            inbox={inbox}
+            state={state}
+            busy={busy}
+            act={act}
+            selected={selected}
+            onSelect={setSelected}
+            partial={discoveryPartial}
+            canLoadMore={!!inbox?.enabled && !!conversationCursor}
+            onLoadMore={loadMoreConversations}
+            onResume={() => void togglePaused()}
+          />
+        )}
+        {page === "Commands" && (
+          <CommandsPage
+            workspace={workspace}
+            conversations={conversations}
+            busy={busy}
           />
         )}
         {page === "Activity" && (
-          <section className="card">
-            <div className="section-heading">
-              <div>
-                <p className="eyebrow">REQUEST JOURNAL</p>
-                <h2>Every request has a story.</h2>
-              </div>
-              <span className="pill">
-                <Icon name="activity" size={14} />
-                LIVE VIEW
-              </span>
-            </div>
-            <p className="muted">
-              Submitted means the transport accepted the request. Delivery and
-              read status require separate evidence.
-            </p>
-            <Activity
-              jobs={jobs}
-              conversations={conversations}
-              busy={busy}
-              act={act}
-            />
-          </section>
+          <ActivityPage
+            jobs={jobs}
+            conversations={conversations}
+            busy={busy}
+            act={act}
+          />
         )}
         {page === "Settings" && (
-          <>
-            {inbox && (
-              <InboxSettings
-                saved={inbox}
-                conversations={conversations}
-                onSaved={setInbox}
-                onDirtyChange={setInboxDirty}
-              />
-            )}
-            <ConfigurationEditor
-              key="settings"
-              page="Settings"
-              conversations={conversations}
-              busy={busy}
-              act={act}
-              onDirtyChange={setDirty}
-            />
-            <section className="card">
-              <div className="section-heading">
-                <div>
-                  <p className="eyebrow">CONNECTED DEVICES</p>
-                  <h2>Connection & access</h2>
-                </div>
-                <Icon name="phone" size={24} />
-              </div>
-              <div className="connection-summary">
-                <span
-                  className={
-                    "dot " + (state?.transport_ready ? "ready" : "offline")
-                  }
-                />
-                <strong>
-                  {state?.transport_ready
-                    ? "Connection ready"
-                    : "Connection unavailable"}
-                </strong>
-                <span>
-                  API v{state?.api_version} ·{" "}
-                  {state?.transport.replaceAll("_", " ")}
-                </span>
-              </div>
-              <p className="muted">
-                Create a revocable credential for a native Android client.
-                Client credentials can control the bot but cannot administer
-                credentials or provider keys.
-              </p>
-              <div className="access-form">
-                <label className="field">
-                  Device label
-                  <input
-                    aria-label="Device label"
-                    maxLength={80}
-                    value={clientLabel}
-                    onChange={(e) => setClientLabel(e.target.value)}
-                    placeholder="e.g. Personal phone"
-                  />
-                </label>
-                <button
-                  disabled={busy || !clientLabel.trim()}
-                  onClick={() =>
-                    void act(async () => {
-                      const client = await api<Client>("/clients", "POST", {
-                        label: clientLabel.trim(),
-                      });
-                      setNewClient(client);
-                      setClients(await api<Client[]>("/clients"));
-                    })
-                  }
-                >
-                  <Icon name="plus" size={17} />
-                  Authorize Android client
-                </button>
-              </div>
-              {newClient && (
-                <div className="credential">
-                  <strong>Copy this credential into Android once</strong>
-                  <p className="muted">
-                    It will not be shown again after dismissal.
-                  </p>
-                  <input
-                    aria-label="New client credential"
-                    readOnly
-                    type="password"
-                    value={newClient.token ?? ""}
-                  />
-                  <div className="actions">
-                    <button
-                      className="secondary"
-                      onClick={() =>
-                        void navigator.clipboard
-                          .writeText(newClient.token ?? "")
-                          .catch(() =>
-                            setError(
-                              "Clipboard unavailable; select the credential field locally.",
-                            ),
-                          )
-                      }
-                    >
-                      <Icon name="copy" size={16} />
-                      Copy credential
-                    </button>
-                    <button
-                      className="secondary"
-                      onClick={() => setNewClient(null)}
-                    >
-                      Dismiss
-                    </button>
-                  </div>
-                </div>
-              )}
-              {clients.map((c) => (
-                <div className="client" key={c.id}>
-                  <span className="avatar">
-                    <Icon name="phone" />
-                  </span>
-                  <span>
-                    <strong>{c.label}</strong>
-                    <small>Revocable client access</small>
-                  </span>
-                  <button
-                    className="secondary"
-                    disabled={busy}
-                    onClick={() =>
-                      void act(async () => {
-                        await api(`/clients/${c.id}`, "DELETE");
-                        setClients(await api<Client[]>("/clients"));
-                        if (newClient?.id === c.id) setNewClient(null);
-                      })
-                    }
-                  >
-                    Revoke
-                  </button>
-                </div>
-              ))}
-            </section>
-            <section className="card privacy-card">
-              <Icon name="shield" size={26} />
-              <div>
-                <h2>Private by design.</h2>
-                <p>
-                  Message bodies and provider credentials are encrypted on disk.
-                  Browser storage contains no credentials. Remote access
-                  requires your configured private HTTPS origin.
-                </p>
-                <button
-                  className="secondary"
-                  disabled={busy || dirty}
-                  onClick={() =>
-                    void act(async () => {
-                      await api("/logout", "POST");
-                      clearSession();
-                    }, false)
-                  }
-                >
-                  <Icon name="logout" size={16} />
-                  Sign out
-                </button>
-                {dirty && (
-                  <p className="muted">
-                    Save or discard your configuration draft before signing out.
-                  </p>
-                )}
-              </div>
-            </section>
-          </>
+          <SettingsPage
+            workspace={workspace}
+            conversations={conversations}
+            state={state}
+            busy={busy}
+            act={act}
+            notify={notify}
+            onSignOut={() =>
+              dirty ? setConfirmSignOut(true) : void signOut()
+            }
+          />
         )}
-        <footer>
-          <span>
-            SmsBot <span className="footer-separator">/</span>{" "}
-            {state?.fixture ? "Synthetic environment" : "Personal workspace"}
-          </span>
-          <span>
-            <span
-              className={
-                "dot " + (state?.transport_ready ? "ready" : "offline")
-              }
-            />
-            {lastUpdated
-              ? "Updated " +
-                lastUpdated.toLocaleTimeString([], {
-                  hour: "2-digit",
-                  minute: "2-digit",
-                })
-              : "Connecting"}{" "}
-            · {theme === "dark" ? "Dark" : "Light"} theme
-          </span>
-        </footer>
       </main>
-      {destination && (
+      {dirty && (
+        <div className="savebar" role="region" aria-label="Unsaved changes">
+          <span className="savebar-text">
+            {workspace.saveError ? (
+              <span role="alert" className="savebar-error">
+                <Icon name="warning" size={15} />
+                {workspace.saveError}
+              </span>
+            ) : (
+              "Unsaved changes"
+            )}
+          </span>
+          <button
+            type="button"
+            className="ghost"
+            disabled={workspace.saving}
+            onClick={workspace.discard}
+          >
+            Discard
+          </button>
+          <button
+            type="button"
+            className="primary"
+            disabled={workspace.saving}
+            onClick={() => void saveAll()}
+          >
+            {workspace.saving ? "Saving…" : "Save changes"}
+          </button>
+        </div>
+      )}
+      <div className="toasts" aria-live="polite">
+        {toasts.map((t) => (
+          <div key={t.id} className="toast" role="status">
+            <Icon name="check" size={15} />
+            {t.text}
+          </div>
+        ))}
+      </div>
+      {confirmSignOut && (
         <Confirmation
-          title="Leave without saving?"
-          description="Your configuration draft has unsaved changes. Save it first, or discard the draft to continue."
-          confirmLabel="Discard changes"
-          onCancel={() => setDestination(null)}
+          title="Sign out and discard changes?"
+          description="You have unsaved changes. Signing out throws them away."
+          confirmLabel="Sign out"
+          cancelLabel="Cancel"
+          onCancel={() => setConfirmSignOut(false)}
           onConfirm={() => {
-            setDirty(false);
-            setPage(destination);
-            setDestination(null);
-            window.scrollTo(0, 0);
+            setConfirmSignOut(false);
+            workspace.discard();
+            void signOut();
           }}
         />
       )}
     </div>
   );
 }
+
+function Home({
+  state,
+  inbox,
+  jobs,
+  conversations,
+  commands,
+  busy,
+  act,
+  onToggle,
+  navigate,
+  openConversation,
+}: {
+  state: State | null;
+  inbox: InboxConfig | null;
+  jobs: Job[];
+  conversations: Conversation[];
+  commands: { name: string; enabled: boolean; type: string }[];
+  busy: boolean;
+  act: (fn: () => Promise<unknown>, refreshAfter?: boolean) => Promise<void>;
+  onToggle: () => void;
+  navigate: (p: Page) => void;
+  openConversation: (id: string) => void;
+}) {
+  const enrolled = conversations.filter((c) => c.enrolled);
+  const live = !!state && !state.paused;
+  const manual = inbox?.enabled && inbox.automatic_replies === false;
+  const waiting = jobs.filter((j) => j.state === "awaiting_approval");
+  const uncertain = jobs.filter((j) => j.state === "unknown_submission").length;
+  const enabled = commands.filter((c) => c.enabled);
+  const status = !state
+    ? "Connecting"
+    : state.paused
+      ? "Paused"
+      : manual
+        ? "Manual"
+        : "Live";
+  const summary = !state
+    ? "Checking the server…"
+    : !state.transport_ready
+      ? "Your phone is offline. Nothing can be sent until it reconnects."
+      : state.paused
+        ? inbox?.enabled
+          ? "Nothing will be sent. Incoming messages are still saved."
+          : "Nothing will be sent until you go live."
+        : manual
+          ? "Automatic replies are off. You can still text by hand."
+          : enrolled.length
+            ? `Answering commands from ${enrolled.length} ${enrolled.length === 1 ? "person" : "people"}.`
+            : "Live, but no one can use commands yet. Turn on bot replies for a conversation.";
+  return (
+    <div className="home">
+      <section className={"hero-status " + status.toLowerCase()}>
+        <div className="hero-copy">
+          <span className="hero-state">
+            <span className="pulse" aria-hidden="true" />
+            <span className="hero-pill">{status.toUpperCase()}</span>
+          </span>
+          <p className="hero-line">{summary}</p>
+          <div className="hero-actions">
+            <button
+              type="button"
+              className={live ? "ghost" : "primary"}
+              disabled={busy || !state || (state.paused && !state.transport_ready)}
+              onClick={onToggle}
+            >
+              <Icon name={live ? "pause" : "play"} size={15} />
+              {live ? "Pause sending" : "Go live"}
+            </button>
+            {!enrolled.length && (
+              <button
+                type="button"
+                className="ghost"
+                onClick={() => navigate("Conversations")}
+              >
+                Choose conversations
+              </button>
+            )}
+          </div>
+        </div>
+        <Pulse jobs={jobs} />
+      </section>
+      <div className="metric-strip">
+        <button
+          type="button"
+          className={"metric" + (waiting.length ? " hot" : "")}
+          onClick={() => navigate("Activity")}
+        >
+          <span>Needs approval</span>
+          <strong>{waiting.length}</strong>
+        </button>
+        <button
+          type="button"
+          className={"metric" + (uncertain ? " warn" : "")}
+          onClick={() => navigate("Activity")}
+        >
+          <span>Uncertain sends</span>
+          <strong>{uncertain}</strong>
+        </button>
+        <button
+          type="button"
+          className="metric"
+          onClick={() => navigate("Conversations")}
+        >
+          <span>Bot replies on</span>
+          <strong>{enrolled.length}</strong>
+        </button>
+        <button
+          type="button"
+          className="metric"
+          onClick={() => navigate("Commands")}
+        >
+          <span>Commands enabled</span>
+          <strong>{enabled.length}</strong>
+        </button>
+      </div>
+      <div className="home-grid">
+        <section className="panel">
+          <div className="panel-head">
+            <h2>
+              {waiting.length ? "Waiting for you" : "Recent requests"}
+            </h2>
+            <button
+              type="button"
+              className="link"
+              onClick={() => navigate("Activity")}
+            >
+              All activity
+            </button>
+          </div>
+          {jobs.length ? (
+            <ActivityFeed
+              jobs={[
+                ...waiting,
+                ...jobs.filter((j) => j.state !== "awaiting_approval"),
+              ].slice(0, 6)}
+              conversations={conversations}
+              busy={busy}
+              act={act}
+              compact
+            />
+          ) : (
+            <div className="empty small">
+              <strong>No requests yet</strong>
+              <p>
+                Text <code className="bang">!ping</code> from a conversation
+                with bot replies on to check everything works.
+              </p>
+            </div>
+          )}
+        </section>
+        <div className="home-side">
+          <section className="panel">
+            <div className="panel-head">
+              <h2>People</h2>
+              <button
+                type="button"
+                className="link"
+                onClick={() => navigate("Conversations")}
+              >
+                Manage
+              </button>
+            </div>
+            {enrolled.length ? (
+              <ul className="people">
+                {enrolled.slice(0, 6).map((c) => (
+                  <li key={c.id}>
+                    <button type="button" onClick={() => openConversation(c.id)}>
+                      <Avatar label={c.label} />
+                      <span>{c.label}</span>
+                      <small>{c.protocol}</small>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="muted">No one has bot replies on.</p>
+            )}
+          </section>
+          <section className="panel">
+            <div className="panel-head">
+              <h2>Commands</h2>
+              <button
+                type="button"
+                className="link"
+                onClick={() => navigate("Commands")}
+              >
+                Edit
+              </button>
+            </div>
+            <div className="bang-cloud">
+              {["ping", "help", "status"].map((n) => (
+                <code key={n} className="bang quiet">
+                  !{n}
+                </code>
+              ))}
+              {enabled.map((c) => (
+                <code key={c.name} className={"bang " + c.type}>
+                  !{c.name}
+                </code>
+              ))}
+              {commands.length > enabled.length && (
+                <small className="muted">
+                  {commands.length - enabled.length} off
+                </small>
+              )}
+            </div>
+          </section>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Requests per hour over the last 24 hours, from the loaded activity window. */
+function Pulse({ jobs }: { jobs: Job[] }) {
+  const now = Date.now();
+  const buckets = Array.from({ length: 24 }, () => ({ ok: 0, other: 0 }));
+  for (const j of jobs) {
+    const age = (now - Date.parse(j.created_at)) / 3600000;
+    if (age < 0 || age >= 24) continue;
+    const b = buckets[23 - Math.floor(age)];
+    if (["submitted", "delivered", "read"].includes(j.state)) b.ok++;
+    else b.other++;
+  }
+  const max = Math.max(1, ...buckets.map((b) => b.ok + b.other));
+  const total = buckets.reduce((t, b) => t + b.ok + b.other, 0);
+  // Activity returns the latest 200 requests; if all of them fall inside the
+  // window, the real count may be higher.
+  const oldest = jobs.length ? Date.parse(jobs[jobs.length - 1].created_at) : now;
+  const label = jobs.length >= 200 && now - oldest < 86400000 ? `${total}+` : `${total}`;
+  return (
+    <figure className="pulse-chart">
+      <figcaption>
+        <strong>{label}</strong>
+        <span>request{total === 1 ? "" : "s"} in the last 24 hours</span>
+      </figcaption>
+      <div className="bars" role="img" aria-label={`${label} requests in the last 24 hours`}>
+        {buckets.map((b, i) => {
+          const hour = new Date(now - (23 - i) * 3600000);
+          return (
+            <span
+              key={i}
+              className="bar"
+              title={`${hour.toLocaleTimeString([], { hour: "numeric" })}: ${b.ok + b.other}`}
+            >
+              <span
+                className="fill other"
+                style={{ height: `${((b.ok + b.other) / max) * 100}%` }}
+              />
+              <span
+                className="fill ok"
+                style={{ height: `${(b.ok / max) * 100}%` }}
+              />
+            </span>
+          );
+        })}
+      </div>
+      <div className="bars-axis" aria-hidden="true">
+        <span>24h ago</span>
+        <span>now</span>
+      </div>
+    </figure>
+  );
+}
+
 createRoot(document.getElementById("root")!).render(<App />);

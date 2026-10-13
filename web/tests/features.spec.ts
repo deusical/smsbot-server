@@ -75,7 +75,7 @@ async function setup(page: Page) {
   await page
     .getByLabel("Owner credential")
     .fill(readFileSync(descriptor.owner, "utf8"));
-  await page.getByRole("button", { name: "Open dashboard" }).click();
+  await page.getByRole("button", { name: "Sign in" }).click();
   await expect(
     page.getByRole("heading", { name: "Home", exact: true }),
   ).toBeVisible();
@@ -98,31 +98,31 @@ test("natural command forms save AI controls and playground remains offline", as
     });
   });
   await page.getByRole("button", { name: "Commands", exact: true }).click();
-  await page.getByLabel("Command 1 type", { exact: true }).selectOption("ai");
   await page
-    .getByLabel("Command 1 instructions", { exact: true })
+    .getByRole("group", { name: "Command type" })
+    .getByRole("button", { name: "AI", exact: true })
+    .click();
+  await page
+    .getByLabel("Instructions", { exact: true })
     .fill("Answer the synthetic input.");
-  await page.getByLabel("Command 1 memory", { exact: true }).check();
-  await page.getByLabel("Command 1 approval", { exact: true }).check();
-  await page.getByLabel("Override command 1 generation").check();
-  await page
-    .getByLabel("Command 1 reasoning", { exact: true })
-    .selectOption("high");
-  await page.getByLabel("Command 1 temperature (optional)").fill("0.3");
-  await page.getByRole("button", { name: "Save configuration" }).click();
-  await expect(page.getByRole("status")).toContainText("Configuration saved");
+  await page.getByLabel("Remember the conversation").check();
+  await page.getByLabel("Ask me before replying").check();
+  await page.getByLabel("Custom generation settings").check();
+  await page.getByLabel("Reasoning", { exact: true }).selectOption("high");
+  await page.getByLabel("Temperature", { exact: true }).fill("0.3");
+  await page.getByRole("button", { name: "Save changes" }).click();
+  await expect(page.getByRole("status")).toContainText("Changes saved");
   expect(configuration().commands[0]).toMatchObject({
     type: "ai",
     memory: true,
     approval: true,
     generation: { reasoning: "high", temperature: 0.3 },
   });
-  await page.getByLabel("Playground command").selectOption("hello");
-  await page.getByLabel("Playground input").fill("Offline sample");
-  await page.getByRole("button", { name: "Preview command" }).click();
-  await expect(page.getByRole("status").last()).toContainText(
-    "Synthetic preview",
-  );
+  await page.getByLabel("Preview input").fill("Offline sample");
+  await page.getByRole("button", { name: "Preview", exact: true }).click();
+  await expect(
+    page.getByRole("status").filter({ hasText: "Synthetic preview" }),
+  ).toBeVisible();
   expect(playground).toEqual({ command: "hello", input: "Offline sample" });
   await page.evaluate(() => window.scrollTo(0, 0));
   await page.screenshot({
@@ -147,22 +147,23 @@ test("settings preserve model defaults, provider key stays transient, recipe imp
     return route.fulfill({ json: initial });
   });
   await page.getByRole("button", { name: "Settings", exact: true }).click();
-  await page
-    .getByLabel("Model reasoning", { exact: true })
-    .selectOption("default");
-  await page.getByLabel("Daily AI budget (USD)").fill("2.5");
-  await page.getByLabel("Enable quiet hours").check();
-  await page.getByRole("button", { name: "Save configuration" }).click();
-  await expect(page.getByRole("status")).toContainText("Configuration saved");
+  await page.getByLabel("Reasoning", { exact: true }).selectOption("low");
+  await page.getByLabel("Reasoning", { exact: true }).selectOption("default");
+  await page.getByRole("button", { name: "Limits & quiet hours" }).click();
+  await page.getByLabel("Daily AI budget").fill("2.5");
+  await page.getByLabel("Quiet hours", { exact: true }).check();
+  await page.getByRole("button", { name: "Save changes" }).click();
+  await expect(page.getByRole("status")).toContainText("Changes saved");
   expect(configuration().settings).toMatchObject({
     daily_budget: 2.5,
     quiet_enabled: true,
     model_generation: { "fixture/model": { reasoning: "default" } },
   });
+  await page.getByRole("button", { name: "Providers", exact: true }).click();
   await page
     .getByLabel("OpenRouter API key", { exact: true })
     .fill("SYNTHETIC_PROVIDER_KEY");
-  await page.getByRole("button", { name: "Save provider key" }).click();
+  await page.getByRole("button", { name: "Save key" }).click();
   await expect(
     page.getByLabel("OpenRouter API key", { exact: true }),
   ).toHaveValue("");
@@ -173,6 +174,7 @@ test("settings preserve model defaults, provider key stays transient, recipe imp
       session: sessionStorage.length,
     })),
   ).toEqual({ local: 0, session: 0 });
+  await page.getByRole("button", { name: "Import & export" }).click();
   await page
     .getByLabel("Import recipe")
     .setInputFiles({
@@ -180,7 +182,9 @@ test("settings preserve model defaults, provider key stays transient, recipe imp
       mimeType: "application/json",
       buffer: Buffer.from(JSON.stringify(initial)),
     });
-  await expect(page.getByRole("status")).toContainText("Commands are disabled");
+  await expect(
+    page.getByRole("status").filter({ hasText: "Commands are disabled" }),
+  ).toBeVisible();
   expect(imported).toEqual({ configuration: initial });
 });
 
@@ -218,25 +222,24 @@ test("compatible endpoint key is transient and catalog refresh is explicit", asy
     });
   });
   await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("button", { name: "Providers", exact: true }).click();
+  await page.getByLabel("Base URL").fill("http://127.0.0.1:8317/v1");
   await page
-    .getByLabel("Compatible API base URL")
-    .fill("http://127.0.0.1:8317/v1");
-  await page
-    .getByLabel("Compatible API access key")
+    .getByLabel("API key", { exact: true })
     .fill("SYNTHETIC_ACCESS_KEY");
-  await page.getByRole("button", { name: "Save compatible provider" }).click();
-  await expect(
-    page.getByLabel("Compatible API access key"),
-  ).toHaveValue("");
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page.getByLabel("API key", { exact: true })).toHaveValue("");
   expect(submitted).toEqual({
     base_url: "http://127.0.0.1:8317/v1",
     key: "SYNTHETIC_ACCESS_KEY",
   });
-  await page.getByRole("button", { name: "Refresh compatible catalog" }).click();
-  await expect(page.getByText("Compatible model catalog refreshed.")).toBeVisible();
+  await page.getByRole("button", { name: "AI models", exact: true }).click();
+  await page.getByRole("button", { name: "Refresh compatible" }).click();
+  await expect(page.getByText("Compatible models refreshed.")).toBeVisible();
   expect(refreshes).toBe(1);
+  await page.getByRole("button", { name: /^Default model/ }).click();
   await expect(page.getByLabel("Search default model")).toBeVisible();
-  const options = await page.getByLabel("Default model").locator("option").allTextContents();
+  const options = await page.locator(".option-name").allTextContents();
   expect(options).toContain("gemini-3.8-flash-high · Compatible API");
   expect(
     await page.evaluate(() => ({
@@ -246,7 +249,7 @@ test("compatible endpoint key is transient and catalog refresh is explicit", asy
   ).toEqual({ local: 0, session: 0 });
 });
 
-test("history search and pagination preserve messages, compose queues explicitly", async ({
+test("history search and pagination preserve messages, compose sends on Enter", async ({
   page,
 }) => {
   await setup(page);
@@ -328,7 +331,7 @@ test("history search and pagination preserve messages, compose queues explicitly
       return route.fulfill({ json: { id: "fixture-job", queued: true } });
     },
   );
-  await expect(page.locator(".hero .pill")).toHaveText("ACTIVE", {
+  await expect(page.locator(".hero-pill")).toHaveText("LIVE", {
     timeout: 10000,
   });
   await page
@@ -343,19 +346,21 @@ test("history search and pagination preserve messages, compose queues explicitly
   await expect(page.locator(".messages")).toContainText(
     "Recent synthetic text",
   );
-  await page.getByLabel("Search retained history").fill("Matched");
-  await page.getByRole("button", { name: "Search history" }).click();
+  await page.getByRole("button", { name: "Search this conversation" }).click();
+  // Search runs as you type.
+  await page.getByLabel("Search messages").fill("Matched");
   await expect(page.locator(".messages")).toContainText(
     "Matched synthetic text",
   );
   await expect(page.locator(".messages")).not.toContainText(
     "Recent synthetic text",
   );
-  await page.getByLabel("Manual message").fill("Explicit synthetic reply");
-  await page.getByRole("button", { name: "Send message", exact: true }).click();
-  expect(compose).toBeUndefined();
-  await page.getByRole("button", { name: "Confirm send", exact: true }).click();
-  await expect(page.getByRole("status")).toContainText("Message queued");
+  const box = page.getByLabel("Message", { exact: true });
+  await box.fill("Explicit synthetic reply");
+  // Enter sends directly; Shift+Enter would add a line instead.
+  await box.press("Enter");
+  await expect(box).toHaveValue("");
+  await expect(page.getByRole("alertdialog")).toHaveCount(0);
   expect(compose).toEqual({ text: "Explicit synthetic reply" });
 });
 
@@ -385,15 +390,14 @@ test("approval failures remain visible and requests can be cancelled", async ({
     return route.fulfill({ json: { cancelled: true } });
   });
   await page.getByRole("button", { name: "Activity", exact: true }).click();
-  await expect(page.locator("summary").first()).toContainText(
-    "awaiting approval",
+  await expect(page.locator(".feed-row").first()).toContainText(
+    "Needs approval",
     { timeout: 10000 },
   );
-  await page.locator("summary").first().click();
-  await page.getByRole("button", { name: "Approve request" }).click();
+  await page.getByRole("button", { name: "Approve", exact: true }).click();
   await expect(page.getByRole("alert")).toContainText("approval expired");
-  await page.getByRole("button", { name: "Cancel request" }).click();
-  await expect(page.locator("summary").first()).toContainText("cancelled");
+  await page.getByRole("button", { name: "Cancel !hello" }).click();
+  await expect(page.locator(".feed-row").first()).toContainText("Cancelled");
 });
 
 test("unsupported saved temperature can be removed and unknown reasoning is not offered", async ({
@@ -428,19 +432,17 @@ test("unsupported saved temperature can be removed and unknown reasoning is not 
   );
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await expect(
-    page.getByRole("button", { name: "Clear unsupported temperature" }),
+    page.getByRole("button", { name: "Clear temperature" }),
   ).toBeVisible();
   expect(
     await page
-      .getByLabel("Model reasoning", { exact: true })
+      .getByLabel("Reasoning", { exact: true })
       .locator("option")
       .allTextContents(),
   ).toEqual(["Model default"]);
-  await page
-    .getByRole("button", { name: "Clear unsupported temperature" })
-    .click();
-  await page.getByRole("button", { name: "Save configuration" }).click();
-  await expect(page.getByRole("status")).toContainText("Configuration saved");
+  await page.getByRole("button", { name: "Clear temperature" }).click();
+  await page.getByRole("button", { name: "Save changes" }).click();
+  await expect(page.getByRole("status")).toContainText("Changes saved");
   expect(
     saved.settings.model_generation["fixture/model"].temperature,
   ).toBeUndefined();
