@@ -13,7 +13,7 @@ A self-hosted personal command bot for a paired Google Messages phone, with a Re
 - Encrypted message bodies, queued plans and pairing sessions. SQLite WAL on local disk; master key outside the database directory. Windows key protection uses CurrentUser DPAPI.
 - Persisted outbound transaction IDs; interrupted submissions become uncertain and are not automatically retried. Correlated Google status events can advance submitted/delivered/read state.
 - Explicit offline fixture transport, with synthetic conversations and no Google or provider connections.
-- Responsive system-theme web UI: Home, Conversations, Commands, Activity, Settings.
+- Responsive dark web workspace with a light-theme toggle, searchable conversations and activity, disabled command templates/duplication, model search, protected configuration drafts and confirmed manual compose.
 - Opt-in paired transport and local cookie/emoji pairing helper, pinned to the tested libgm revision.
 
 The Android app's Settings > Self-hosted server connects with a revocable client credential. Server mode disables local SMS/notification automation, cancels eligible queued work and leaves local mode paused when restored. The Android app remains a native Kotlin/Compose interface.
@@ -105,5 +105,7 @@ Approvals and queued plans expire after two minutes in this service. Requests ar
 Server recipe import replaces configuration with commands disabled; Android `smsbot.commands` v1 packs append disabled commands, reject duplicate names/sender restrictions, preserve explicit generation overrides and omit SMS segment settings. Server keys, enrollments and local phone secrets are never automatically migrated.
 
 See [feature parity](docs/PARITY.md), [recovery](docs/BACKUP.md), [API contract](api/openapi.yaml) and [validation](docs/VALIDATION.md).
+
+![Synthetic web workspace](docs/images/server-workspace.png)
 
 ![Synthetic web command editor](docs/images/server-commands.png)
