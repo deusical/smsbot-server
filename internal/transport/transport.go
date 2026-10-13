@@ -24,6 +24,11 @@ type Incoming struct {
 	At             time.Time `json:"at"`
 	Historical     bool      `json:"historical"`
 	Outgoing       bool      `json:"outgoing"`
+	TransactionID  string    `json:"transaction_id,omitempty"`
+	Status         string    `json:"status,omitempty"`
+}
+type ConversationLookup interface {
+	LookupConversation(context.Context, string) (Conversation, error)
 }
 type Receipt struct {
 	State     string

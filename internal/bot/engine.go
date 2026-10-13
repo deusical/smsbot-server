@@ -9,17 +9,22 @@ import (
 	"smsbot-server/internal/transport"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
+	"unicode/utf8"
 )
 
 type Engine struct {
-	Store      *store.Store
-	Transport  transport.Transport
-	Provider   Provider
-	mu         sync.Mutex
-	dispatchMu sync.Mutex
-	now        func() time.Time
-	pending    map[string]context.CancelFunc
+	Store          *store.Store
+	Transport      transport.Transport
+	Provider       Provider
+	mu             sync.Mutex
+	dispatchMu     sync.Mutex
+	now            func() time.Time
+	pending        map[string]context.CancelFunc
+	captureQueue   chan captureItem
+	captureConsent atomic.Pointer[captureConsent]
+	captureGap     atomic.Bool
 }
 
 func New(s *store.Store, t transport.Transport) *Engine {
@@ -32,7 +37,11 @@ func New(s *store.Store, t transport.Transport) *Engine {
 			_ = s.SetPublicSetting("model_catalog", models)
 		}
 	}
-	return &Engine{Store: s, Transport: t, Provider: provider, now: time.Now, pending: map[string]context.CancelFunc{}}
+	e := &Engine{Store: s, Transport: t, Provider: provider, now: time.Now, pending: map[string]context.CancelFunc{}, captureQueue: make(chan captureItem, 512)}
+	if settings, err := e.InboxSettings(); err == nil {
+		e.publishCaptureConsent(settings)
+	}
+	return e
 }
 func (e *Engine) Pause(value bool) error {
 	e.mu.Lock()
@@ -104,6 +113,10 @@ func (e *Engine) Approve(id string) error {
 	return err
 }
 func (e *Engine) validConversation(ctx context.Context, conv, peer string) (bool, error) {
+	if _, ok := e.Transport.(transport.ConversationLookup); ok {
+		c, err := e.lookupConversation(ctx, conv)
+		return err == nil && c.ParticipantID == peer && !c.Group && c.Writable, err
+	}
 	list, err := e.Transport.Conversations(ctx)
 	if err != nil {
 		return false, err
@@ -116,6 +129,10 @@ func (e *Engine) validConversation(ctx context.Context, conv, peer string) (bool
 	return false, nil
 }
 func (e *Engine) Accept(ctx context.Context, m transport.Incoming) (bool, error) {
+	// Ordinary chat text never needs a command identity RPC or engine lock.
+	if !strings.HasPrefix(strings.TrimSpace(m.Text), "!") {
+		return false, nil
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	age := e.now().Sub(m.At)
@@ -129,6 +146,13 @@ func (e *Engine) Accept(ctx context.Context, m transport.Incoming) (bool, error)
 	if paused || !e.Transport.Ready() || !e.Store.Enrolled(m.ConversationID, m.ParticipantID) {
 		return false, nil
 	}
+	inbox, err := e.InboxSettings()
+	if err != nil {
+		return false, err
+	}
+	if !inbox.AutomaticReplies {
+		return false, nil
+	}
 	valid, err := e.validConversation(ctx, m.ConversationID, m.ParticipantID)
 	if err != nil || !valid {
 		return false, err
@@ -140,6 +164,7 @@ func (e *Engine) Accept(ctx context.Context, m transport.Incoming) (bool, error)
 	if quiet(cfg.Settings, e.now()) {
 		return false, nil
 	}
+
 	text := strings.TrimSpace(m.Text)
 	id := store.Hash(m.ConversationID + "\x00" + m.ID)
 	var exists int
@@ -267,7 +292,22 @@ func (e *Engine) check(ctx context.Context, j store.Job, p store.Plan) (Configur
 	if quiet(cfg.Settings, e.now()) {
 		return cfg, "quiet_hours", nil
 	}
-	if !e.Store.Enrolled(j.ConversationID, p.Participant) {
+	inbox, err := e.InboxSettings()
+	if err != nil {
+		return cfg, "", err
+	}
+	if !p.Manual && !inbox.AutomaticReplies {
+		return cfg, "automatic_replies_disabled", nil
+	}
+	if p.InboxOwnerOnly {
+		c, err := e.lookupConversation(ctx, j.ConversationID)
+		if err != nil {
+			return cfg, "", err
+		}
+		if !inbox.Allows(c) || c.ParticipantID != p.Participant {
+			return cfg, "inbox_access_disabled", nil
+		}
+	} else if !e.Store.Enrolled(j.ConversationID, p.Participant) {
 		return cfg, "unenrolled", nil
 	}
 	valid, err := e.validConversation(ctx, j.ConversationID, p.Participant)
@@ -470,7 +510,9 @@ func (e *Engine) Dispatch(ctx context.Context) error {
 		return err
 	}
 	// The send is serialized with pause/enrollment; once invoked its outcome may be uncertain.
-	receipt, senderr := e.Transport.Send(ctx, j.ConversationID, txn, p.Reply)
+	sendctx, cancelSend := context.WithTimeout(ctx, 30*time.Second)
+	receipt, senderr := e.Transport.Send(sendctx, j.ConversationID, txn, p.Reply)
+	cancelSend()
 	if senderr != nil {
 		state, code := "unknown_submission", "transport_outcome_unknown"
 		if errors.Is(senderr, transport.ErrNotSubmitted) {
@@ -486,6 +528,14 @@ func (e *Engine) Dispatch(ctx context.Context) error {
 		return err
 	}
 	if err = e.Store.SaveMessage(txn, j.ConversationID, "outgoing", p.Reply); err != nil {
+		e.mu.Unlock()
+		return err
+	}
+	origin := "bot"
+	if p.Manual {
+		origin = "web"
+	}
+	if _, err = e.Store.DB.Exec("INSERT INTO message_meta VALUES(?,?,'submitted',?) ON CONFLICT(message) DO UPDATE SET origin=excluded.origin,owner_only=excluded.owner_only,status=CASE WHEN message_meta.status IN ('read','delivered') THEN message_meta.status ELSE 'submitted' END", txn, origin, p.InboxOwnerOnly); err != nil {
 		e.mu.Unlock()
 		return err
 	}
@@ -519,7 +569,7 @@ func (e *Engine) Compose(ctx context.Context, conv, text string) (string, error)
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	text = strings.TrimSpace(text)
-	if text == "" || len(text) > 12000 {
+	if text == "" || utf8.RuneCountInString(text) > 12000 {
 		return "", errors.New("invalid_message")
 	}
 	cfg, err := e.Configuration()
@@ -533,11 +583,11 @@ func (e *Engine) Compose(ctx context.Context, conv, text string) (string, error)
 	if paused || !e.Transport.Ready() || quiet(cfg.Settings, e.now()) {
 		return "", errors.New("bot_unavailable")
 	}
-	limitOK, err := e.Store.Limits(e.now().UTC(), cfg.Settings.HourlyLimit, cfg.Settings.DailyLimit, 0, 0)
+	permitted, err := e.Store.Limits(e.now().UTC(), cfg.Settings.HourlyLimit, cfg.Settings.DailyLimit, 0, 0)
 	if err != nil {
 		return "", err
 	}
-	if !limitOK {
+	if !permitted {
 		return "", errors.New("request_limit_reached")
 	}
 	list, err := e.Transport.Conversations(ctx)
@@ -631,5 +681,8 @@ func (e *Engine) Reconcile(conv, txn, state, reported string) error {
 	if !ok || desired < previous {
 		return nil
 	}
-	return e.Store.Complete(id, state, reported)
+	if err = e.Store.Complete(id, state, reported); err != nil {
+		return err
+	}
+	return e.Store.UpdateMessageStatus(conv, txn, state)
 }

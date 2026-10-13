@@ -8,6 +8,7 @@ import (
 )
 
 func (s *Server) featureRoutes() {
+	s.inboxRoutes()
 	s.mux.HandleFunc("GET /api/v1/config", s.protected(s.config))
 	s.mux.HandleFunc("PUT /api/v1/config", s.protected(s.saveConfig))
 	s.mux.HandleFunc("GET /api/v1/models", s.protected(s.models))

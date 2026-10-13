@@ -3,7 +3,6 @@ package bot
 import (
 	"context"
 	"errors"
-	"smsbot-server/internal/store"
 	"smsbot-server/internal/transport"
 	"time"
 )
@@ -11,28 +10,28 @@ import (
 // ImportHistory has no command execution path. It only retains an explicitly
 // requested text page for a currently enrolled individual conversation.
 func (e *Engine) ImportHistory(ctx context.Context, conv, cursor string) (map[string]any, error) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
 	source, ok := e.Transport.(transport.HistorySource)
 	if !ok {
 		return nil, errors.New("history_import_unavailable")
 	}
-	convs, err := e.Transport.Conversations(ctx)
+	c, err := e.lookupConversation(ctx, conv)
+	if err != nil || c.Group || !c.Writable || !e.Store.Enrolled(conv, c.ParticipantID) {
+		return nil, errors.New("enrollment_required")
+	}
+	trustedPeer := c.ParticipantID
+	page, err := source.FetchHistory(ctx, conv, trustedPeer, cursor)
 	if err != nil {
 		return nil, err
 	}
-	trustedPeer := ""
-	for _, c := range convs {
-		if c.ID == conv && !c.Group && c.Writable && e.Store.Enrolled(conv, c.ParticipantID) {
-			trustedPeer = c.ParticipantID
-			break
-		}
+	verified, err := e.lookupConversation(ctx, conv)
+	if err != nil || verified.Group || !verified.Writable || verified.ParticipantID != trustedPeer {
+		return nil, errors.New("conversation_identity_changed")
 	}
-	if trustedPeer == "" {
-		return nil, errors.New("enrollment_required")
-	}
-	page, err := source.FetchHistory(ctx, conv, trustedPeer, cursor)
-	if err != nil {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if err = ctx.Err(); err != nil {
 		return nil, err
 	}
 	if !e.Store.Enrolled(conv, trustedPeer) {
@@ -47,8 +46,7 @@ func (e *Engine) ImportHistory(ctx context.Context, conv, cursor string) (map[st
 		if m.At.Before(e.now().AddDate(0, 0, -cfg.Settings.RetentionDays)) {
 			continue
 		}
-		id := store.Hash(conv + "\x00" + m.ID)
-		if err = e.Store.SaveMessageAt(id, conv, m.Direction, m.Text, m.At); err != nil {
+		if err = e.Store.SaveLegacyImported(conv, m.ID, m.TransactionID, m.Direction, m.Text, m.Status, m.At); err != nil {
 			return nil, err
 		}
 		count++

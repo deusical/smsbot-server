@@ -20,11 +20,11 @@ The Android app's Settings > Self-hosted server connects with a revocable client
 
 ## Not implemented or verified yet
 
-The paired transport sends a complete reply up to the configured character cap; Android-only SMS segment/SIM controls do not apply. Text-history import is explicit, respects retention, excludes attachments and never routes imported commands. Exhausting available pages does not establish complete Google history.
+The paired transport sends a complete reply up to the configured character cap; Android-only SMS segment/SIM controls do not apply. Text-history import is explicit, respects retention, excludes attachments and never routes imported commands. Exhausting available pages does not establish complete Google history. Both import paths match messages to recorded sends using explicit upstream/transaction IDs. Re-import repairs older duplicate rows when that exact link is available; equal text and nearby timestamps never trigger deduplication.
 
 Provider generation and delivery acceptance on the real phone, personal HTTPS/private-network setup, locked/open/background-phone cases, sustained authentication and browser handoff remain owner-controlled acceptance checks. Automated provider checks use local mocks or the HTTP-free fixture provider. Public hosting, portable cross-platform key recovery and attachment history are outside this development milestone.
 
-The owner reports a successful live `!ping` after cookie recovery. Full live acceptance, reconnect behavior, long-term uptime, locked-phone behavior, competing paired clients and Linux live Google operation remain pending. Offline Linux container startup/recovery has been rehearsed. Network/authentication events pause automation; restart and inspect before reenabling. Do not promise unattended reliability yet. See the [completion plan](docs/COMPLETION_PLAN.md) for feature, client and deployment work alongside authentication observation.
+The owner reports a successful live `!ping` after cookie recovery. Full live acceptance, reconnect behavior, long-term uptime, locked-phone behavior, competing paired clients and Linux live Google operation remain pending. Offline Linux container startup/recovery has been rehearsed. Network/authentication events pause automation; restart and inspect before reenabling. An overloaded receive-event queue also pauses automation and discards command input across the gap. Queue availability recovers after draining, while replies remain paused for owner review; diagnostics distinguish overload from connection failure. Do not promise unattended reliability yet. See the [completion plan](docs/COMPLETION_PLAN.md) for feature, client and deployment work alongside authentication observation.
 
 ## Develop on Windows
 
@@ -95,6 +95,14 @@ Playwright starts its own isolated fixture service and ephemeral synthetic crede
 AGPL-3.0-or-later. The paired adapter uses [mautrix/gmessages libgm](https://github.com/mautrix/gmessages/tree/main/pkg/libgm); its license and notices must be preserved. The separate Android project retains its existing MIT license. Do not copy upstream server code into Android under an assumed MIT license.
 
 ## Configure the server bot
+
+### Full conversation inbox
+
+In web **Settings > Conversations & history**, enable **Show all conversation messages** for all eligible individual conversations or explicitly selected conversations. This owner-only option retains ordinary incoming text and outgoing phone messages as well as command traffic. Capture works while sending is paused. An owner warning identifies possible capture gaps after a lookup failure or overload; importing available history may recover missed text. Inbox access does not enroll a sender for bot commands, enable AI memory, or grant existing Android credentials access to the additional text. Selection binds stable conversation/participant IDs; groups and attachments remain excluded.
+
+Enable **Load older phone history when scrolling up** to fetch available text in small pages after retained server history. Older pages preserve your position; new live messages offer a **New messages** button when you are reading above the bottom. Available Google history may be incomplete and the configured retention period applies. Historical commands never execute. Conversation discovery supports loading additional inbox pages beyond the initial 25 threads.
+
+Turn **Automatic command replies** off to converse manually without command automation. Manual replies still require confirmation, a ready transport, an accessible individual conversation, quiet-hour/request-limit checks, and global sending to be enabled. The global **Pause all sending** control (**Pause bot** in command-only mode) stops all sending. Repeated submission of the same owner compose request cannot queue a second reply; uncertain sends are never retried automatically. Turning capture off stops collection and access through the full inbox, without deleting retained text. These owner preferences are excluded from recipes and backups; backups preserve private-message visibility and deduplication aliases.
 
 In web Commands, create fixed replies with `{input}` or AI instructions; select a model/profile, optional memory, restrictions and approval. In Settings, refresh the public OpenRouter catalog or configure an OpenAI-compatible API base URL and access key, then refresh that endpoint's model catalog. The compatible endpoint can be OpenAI or a local gateway that implements `/models` and `/chat/completions`. Keys and endpoint settings are encrypted and never returned with a key to either client. Fixture AI uses a deterministic synthetic provider and requires no real key.
 

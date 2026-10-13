@@ -20,6 +20,12 @@ type inboxCursor struct {
 }
 
 func (s *Store) MessagePage(conv, before, search string, limit int) (InboxPage, error) {
+	return s.messagePage(conv, before, search, limit, false)
+}
+func (s *Store) OwnerMessagePage(conv, before, search string, limit int) (InboxPage, error) {
+	return s.messagePage(conv, before, search, limit, true)
+}
+func (s *Store) messagePage(conv, before, search string, limit int, owner bool) (InboxPage, error) {
 	out := InboxPage{Messages: []Message{}}
 	if limit < 1 || limit > 100 {
 		return out, errors.New("message limit must be between 1 and 100")
@@ -37,7 +43,7 @@ func (s *Store) MessagePage(conv, before, search string, limit int) (InboxPage, 
 			return out, errors.New("invalid message cursor")
 		}
 	}
-	rows, e := s.DB.Query(`SELECT id,direction,at,payload FROM messages WHERE conversation=? AND (?='' OR at<? OR (at=? AND id<?)) ORDER BY at DESC,id DESC LIMIT ?`, conv, before, cursor.At, cursor.At, cursor.ID, limit+1)
+	rows, e := s.DB.Query(`SELECT m.id,m.direction,m.at,m.payload,coalesce(meta.origin,'bot'),coalesce(meta.status,'') FROM messages m LEFT JOIN message_meta meta ON meta.message=m.id WHERE m.conversation=? AND (? OR coalesce(meta.owner_only,0)=0) AND (?='' OR m.at<? OR (m.at=? AND m.id<?)) ORDER BY m.at DESC,m.id DESC LIMIT ?`, conv, owner, before, cursor.At, cursor.At, cursor.ID, limit+1)
 	if e != nil {
 		return out, e
 	}
@@ -47,7 +53,7 @@ func (s *Store) MessagePage(conv, before, search string, limit int) (InboxPage, 
 	for rows.Next() {
 		var m Message
 		var enc string
-		if e = rows.Scan(&m.ID, &m.Direction, &m.At, &enc); e != nil {
+		if e = rows.Scan(&m.ID, &m.Direction, &m.At, &enc, &m.Origin, &m.Status); e != nil {
 			return out, e
 		}
 		if count == limit {

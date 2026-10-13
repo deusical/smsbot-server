@@ -70,6 +70,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	limit := int64(32 * 1024)
+	if (strings.HasPrefix(r.URL.Path, "/api/v1/inbox/conversations/") || strings.HasPrefix(r.URL.Path, "/api/v1/conversations/")) && strings.HasSuffix(r.URL.Path, "/compose") {
+		limit = 128 * 1024
+	}
+	if r.URL.Path == "/api/v1/inbox/settings" {
+		limit = 256 * 1024
+	}
 	if r.URL.Path == "/api/v1/config" || r.URL.Path == "/api/v1/recipes/import" {
 		limit = 2 * 1024 * 1024
 	}
@@ -122,7 +128,7 @@ func (s *Server) protected(fn http.HandlerFunc) http.HandlerFunc {
 			}
 		}
 		// Client credentials can control the bot, but cannot grant/revoke other credentials.
-		if isClient && (strings.HasPrefix(r.URL.Path, "/api/v1/clients") || r.URL.Path == "/api/v1/provider-key" || r.URL.Path == "/api/v1/compatible-provider" || r.URL.Path == "/api/v1/models/refresh-compatible") {
+		if isClient && (strings.HasPrefix(r.URL.Path, "/api/v1/clients") || strings.HasPrefix(r.URL.Path, "/api/v1/inbox/") || r.URL.Path == "/api/v1/provider-key" || r.URL.Path == "/api/v1/compatible-provider" || r.URL.Path == "/api/v1/models/refresh-compatible") {
 			s.bad(w, 403, "owner_required")
 			return
 		}
@@ -177,7 +183,11 @@ func (s *Server) state(w http.ResponseWriter, r *http.Request) {
 		s.bad(w, 500, "storage_error")
 		return
 	}
-	s.json(w, 200, map[string]any{"api_version": 1, "paused": p, "transport_ready": s.Engine.Transport.Ready(), "transport": map[bool]string{true: "fixture", false: "google_messages"}[s.Fixture], "fixture": s.Fixture, "capabilities": []string{"fixed_commands", "enrollment", "activity", "encrypted_inbox", "configuration", "models", "history", "history_import", "playground", "approvals", "manual_compose", "recipes", "ai_commands"}})
+	value := map[string]any{"api_version": 1, "paused": p, "transport_ready": s.Engine.Transport.Ready(), "transport": map[bool]string{true: "fixture", false: "google_messages"}[s.Fixture], "fixture": s.Fixture, "capabilities": []string{"fixed_commands", "enrollment", "activity", "encrypted_inbox", "configuration", "models", "history", "history_import", "playground", "approvals", "manual_compose", "recipes", "ai_commands", "full_inbox"}}
+	if r.Header.Get("Authorization") == "" {
+		value["inbox_capture_gap"] = s.Engine.InboxCaptureGap()
+	}
+	s.json(w, 200, value)
 }
 func (s *Server) pause(w http.ResponseWriter, r *http.Request) {
 	var in struct {
@@ -331,7 +341,7 @@ func (s *Server) incoming(w http.ResponseWriter, r *http.Request) {
 	if m.At.IsZero() {
 		m.At = time.Now().UTC()
 	}
-	accepted, e := s.Engine.Accept(r.Context(), m)
+	accepted, e := s.Engine.Receive(r.Context(), m)
 	if e != nil {
 		s.bad(w, 500, "processing_error")
 		return

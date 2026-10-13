@@ -1919,6 +1919,14 @@ footer > span:last-child {
 .compose-meta small {
   font-size: 10px;
 }
+.chat-messages {
+  height: min(58vh, 640px);
+  min-height: 240px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  overflow-anchor: none;
+  padding: 12px;
+}
 
 .hero .pill:has(.dot.ready) {
   color: var(--success);

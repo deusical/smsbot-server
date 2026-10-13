@@ -8,18 +8,78 @@ import (
 	"google.golang.org/protobuf/proto"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 type HistoricalMessage struct {
-	ID        string
-	Direction string
-	Text      string
-	At        time.Time
+	ID            string
+	Direction     string
+	Text          string
+	At            time.Time
+	TransactionID string
+	Status        string
 }
 type HistoryPage struct {
 	Messages   []HistoricalMessage
 	NextCursor string
 }
+type ConversationPage struct {
+	Conversations []Conversation `json:"conversations"`
+	NextCursor    string         `json:"next_cursor"`
+	Partial       bool           `json:"partial,omitempty"`
+}
+type ConversationPageSource interface {
+	DiscoverConversations(context.Context, string) (ConversationPage, error)
+}
+
+func (f *Fixture) DiscoverConversations(ctx context.Context, cursor string) (ConversationPage, error) {
+	if cursor != "" {
+		return ConversationPage{}, errors.New("invalid_conversation_cursor")
+	}
+	list, err := f.Conversations(ctx)
+	return ConversationPage{Conversations: list}, err
+}
+func (g *Google) DiscoverConversations(ctx context.Context, cursor string) (ConversationPage, error) {
+	if !g.Ready() {
+		return ConversationPage{}, errors.New("transport_unavailable")
+	}
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	var pointer *gmproto.Cursor
+	if cursor != "" {
+		if len(cursor) > 4096 {
+			return ConversationPage{}, errors.New("invalid_conversation_cursor")
+		}
+		b, err := base64.RawURLEncoding.DecodeString(cursor)
+		pointer = &gmproto.Cursor{}
+		if err != nil || proto.Unmarshal(b, pointer) != nil {
+			return ConversationPage{}, errors.New("invalid_conversation_cursor")
+		}
+	}
+	return g.discovery.get(ctx, cursor, func(ctx context.Context) (ConversationPage, error) {
+		res, err := g.client.ListConversations(ctx, &gmproto.ListConversationsRequest{Count: 25, Folder: gmproto.ListConversationsRequest_INBOX, Cursor: pointer})
+		if err != nil {
+			return ConversationPage{}, err
+		}
+		ids := make([]string, len(res.GetConversations()))
+		for i, c := range res.GetConversations() {
+			ids[i] = c.GetConversationID()
+		}
+		conversations, partial := discoveryConversations(ctx, ids, g.LookupConversation)
+		out := ConversationPage{Conversations: conversations, Partial: partial}
+		if res.GetCursor() != nil {
+			b, err := proto.Marshal(res.GetCursor())
+			if err != nil {
+				return out, err
+			}
+			if len(b) > 0 {
+				out.NextCursor = base64.RawURLEncoding.EncodeToString(b)
+			}
+		}
+		return out, nil
+	})
+}
+
 type HistorySource interface {
 	FetchHistory(context.Context, string, string, string) (HistoryPage, error)
 }
@@ -101,7 +161,7 @@ func historicalText(m *gmproto.Message, conv string) (HistoricalMessage, bool) {
 			return HistoricalMessage{}, false
 		}
 		text.WriteString(part.GetMessageContent().GetContent())
-		if text.Len() > 12000 {
+		if utf8.RuneCountInString(text.String()) > 12000 {
 			return HistoricalMessage{}, false
 		}
 	}
@@ -112,5 +172,15 @@ func historicalText(m *gmproto.Message, conv string) (HistoricalMessage, bool) {
 	if at.After(time.Now().Add(5 * time.Second)) {
 		return HistoricalMessage{}, false
 	}
-	return HistoricalMessage{ID: m.GetMessageID(), Direction: direction, Text: text.String(), At: at}, true
+	status := ""
+	if direction == "outgoing" {
+		status = "submitted"
+		if m.GetMessageStatus().GetStatus() == gmproto.MessageStatusType_OUTGOING_DELIVERED {
+			status = "delivered"
+		}
+		if m.GetMessageStatus().GetStatus() == gmproto.MessageStatusType_OUTGOING_DISPLAYED {
+			status = "read"
+		}
+	}
+	return HistoricalMessage{ID: m.GetMessageID(), Direction: direction, Text: text.String(), At: at, TransactionID: m.GetTmpID(), Status: status}, true
 }

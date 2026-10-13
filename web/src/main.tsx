@@ -7,9 +7,12 @@ import {
   type Conversation,
   type Job,
   type Client,
+  type InboxSettings as InboxConfig,
+  inboxAllows,
 } from "./api";
 import { ConfigurationEditor } from "./Configuration";
 import { ConversationHistory } from "./ConversationHistory";
+import { InboxSettings } from "./InboxSettings";
 import { Activity } from "./Activity";
 import { Icon } from "./Icon";
 import { Confirmation } from "./Confirmation";
@@ -47,9 +50,15 @@ function App() {
   const [theme, setTheme] = useState<"dark" | "light">("dark"),
     [search, setSearch] = useState(""),
     [conversationFilter, setConversationFilter] = useState("all");
-  const [dirty, setDirty] = useState(false),
+  const [configDirty, setDirty] = useState(false),
     [destination, setDestination] = useState<Page | null>(null),
     [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [inbox, setInbox] = useState<InboxConfig | null>(null),
+    [inboxDirty, setInboxDirty] = useState(false),
+    [conversationCursor, setConversationCursor] = useState("");
+  const [discoveryPartial, setDiscoveryPartial] = useState(false);
+  const dirty = configDirty || inboxDirty;
+  const paginatedConversations = useRef(false);
   const refreshing = useRef(false),
     stateRevision = useRef(0),
     sessionRevision = useRef(0);
@@ -81,6 +90,10 @@ function App() {
     setDirty(false);
     setPage("Home");
     setSelected("");
+    setInbox(null);
+    setInboxDirty(false);
+    setConversationCursor("");
+    paginatedConversations.current = false;
   }
   async function refresh() {
     if (refreshing.current) return;
@@ -93,15 +106,45 @@ function App() {
       if (session !== sessionRevision.current) return;
       if (revision === stateRevision.current) setState(s);
       setSignedIn(true);
+      let inboxConfig: InboxConfig | null = null;
+      if (s.capabilities.includes("full_inbox")) {
+        inboxConfig = await api<InboxConfig>("/inbox/settings");
+        if (session !== sessionRevision.current) return;
+        setInbox((previous) =>
+          previous && previous.revision > inboxConfig!.revision
+            ? previous
+            : inboxConfig,
+        );
+      }
       stage = "activity";
       const activity = await api<Job[]>("/activity");
       if (session !== sessionRevision.current) return;
       setJobs(activity);
       if (s.transport_ready) {
         stage = "conversations";
-        const rows = await api<Conversation[]>("/conversations");
-        if (session !== sessionRevision.current) return;
-        setConversations(rows);
+        if (inboxConfig?.enabled) {
+          const discovered = await api<{
+            conversations: Conversation[];
+            next_cursor: string;
+            partial?: boolean;
+          }>("/inbox/conversations");
+          if (session !== sessionRevision.current) return;
+          if (!paginatedConversations.current)
+            setConversationCursor(discovered.next_cursor);
+          setConversations((previous) => {
+            const m = new Map(previous.map((c) => [c.id, c]));
+            for (const c of discovered.conversations) m.set(c.id, c);
+            return [...m.values()];
+          });
+          setDiscoveryPartial(!!discovered.partial);
+        } else {
+          const rows = await api<Conversation[]>("/conversations");
+          if (session !== sessionRevision.current) return;
+          setConversations(rows);
+          setConversationCursor("");
+          paginatedConversations.current = false;
+          setDiscoveryPartial(false);
+        }
         setError("");
       } else
         setError(
@@ -363,7 +406,13 @@ function App() {
               onClick={() => void togglePaused()}
             >
               <Icon name={state?.paused ? "play" : "pause"} size={16} />
-              {state?.paused ? "Enable bot" : "Pause bot"}
+              {inbox?.enabled
+                ? state?.paused
+                  ? "Resume sending"
+                  : "Pause all sending"
+                : state?.paused
+                  ? "Enable bot"
+                  : "Pause bot"}
             </button>
           </div>
         </header>
@@ -393,7 +442,11 @@ function App() {
                   <span
                     className={"dot " + (state?.paused ? "paused" : "ready")}
                   />
-                  {state?.paused ? "PAUSED" : "ACTIVE"}
+                  {state?.paused
+                    ? "PAUSED"
+                    : inbox?.automatic_replies === false
+                      ? "MANUAL REPLIES"
+                      : "ACTIVE"}
                 </span>
                 <h2>
                   {state?.paused
@@ -402,8 +455,12 @@ function App() {
                 </h2>
                 <p>
                   {state?.paused
-                    ? "Your workspace is ready. Enable your bot when you want it to respond to new commands."
-                    : "Your bot is listening to trusted conversations. Follow requests here, even when your other interfaces are closed."}
+                    ? inbox?.enabled
+                      ? "All sending is paused. Your opted-in inbox continues receiving messages."
+                      : "Your workspace is ready. Enable your bot when you want it to respond to new commands."
+                    : inbox?.automatic_replies === false
+                      ? "Automatic command replies are off. You can reply manually in accessible conversations."
+                      : "Your bot is listening to trusted conversations. Follow requests here, even when your other interfaces are closed."}
                 </p>
                 <button
                   className="secondary"
@@ -551,148 +608,203 @@ function App() {
           </>
         )}
         {page === "Conversations" && (
-          <div className="conversation-grid">
-            <section className="card thread-list">
-              <div className="section-heading">
-                <h2>Your conversations</h2>
-                <span className="count-badge">{conversations.length}</span>
-              </div>
-              <label className="search-control">
-                <Icon name="search" />
-                <input
-                  aria-label="Search conversations"
-                  type="search"
-                  placeholder="Find a conversation"
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                />
-              </label>
-              <div
-                className="filter-tabs"
-                role="group"
-                aria-label="Filter conversations"
-              >
-                {[
-                  { id: "all", label: "All" },
-                  { id: "enrolled", label: "Enrolled" },
-                  { id: "available", label: "Available" },
-                ].map((f) => (
-                  <button
-                    key={f.id}
-                    className={conversationFilter === f.id ? "selected" : ""}
-                    aria-pressed={conversationFilter === f.id}
-                    onClick={() => setConversationFilter(f.id)}
-                  >
-                    {f.label}
-                  </button>
-                ))}
-              </div>
-              <div className="conversation-list">
-                {visibleConversations.map((c) => (
-                  <article
-                    className={
-                      "conversation " + (selected === c.id ? "selected" : "")
-                    }
-                    key={c.id}
-                  >
-                    <span className="avatar" aria-hidden="true">
-                      {c.label.slice(0, 1).toUpperCase()}
-                    </span>
-                    <button
-                      className="thread-button"
-                      disabled={!c.enrolled}
-                      onClick={() => setSelected(c.id)}
-                    >
-                      <strong>{c.label}</strong>
-                      <small>
-                        {c.protocol} ·{" "}
-                        {c.group
-                          ? "Group excluded"
-                          : c.enrolled
-                            ? "Enrolled"
-                            : "Not enrolled"}
-                      </small>
-                    </button>
-                    <button
-                      className="secondary"
-                      disabled={busy || c.group || !c.writable}
-                      onClick={() =>
-                        void act(() =>
-                          c.enrolled
-                            ? api(
-                                `/enrollment/${encodeURIComponent(c.id)}`,
-                                "DELETE",
-                              )
-                            : api("/enrollment", "POST", {
-                                conversation_id: c.id,
-                                participant_id: c.participant_id,
-                              }),
-                        )
-                      }
-                    >
-                      {c.enrolled ? "Remove" : "Enroll"}
-                    </button>
-                  </article>
-                ))}
-              </div>
-              {!visibleConversations.length && (
-                <div className="empty">
-                  <Icon name="search" />
-                  <strong>No conversations found</strong>
-                  <p>
-                    {search
-                      ? "Try another name or clear the filter."
-                      : "Available conversations appear when the paired phone is ready."}
-                  </p>
-                </div>
-              )}
-              <p className="list-note">
-                <Icon name="shield" size={15} />
-                Enrollment authorizes a stable participant. Names are labels.
+          <>
+            {inbox?.enabled && state?.inbox_capture_gap && (
+              <p role="status" className="banner">
+                Some messages could not be captured. Load older phone history to
+                recover available text.
               </p>
-            </section>
-            <section className="card inbox-card">
-              <div className="section-heading">
-                <div>
-                  <p className="eyebrow">RETAINED HISTORY</p>
-                  <h2>
-                    {selectedConversation?.label ??
-                      "A conversation, in context."}
-                  </h2>
+            )}
+            <div className="conversation-grid">
+              <section className="card thread-list">
+                <div className="section-heading">
+                  <h2>Your conversations</h2>
+                  <span className="count-badge">{conversations.length}</span>
                 </div>
-                {selectedConversation?.enrolled && (
-                  <span className="pill">
-                    <Icon name="shield" size={13} />
-                    ENROLLED
-                  </span>
-                )}
-              </div>
-              {!selected ? (
-                <div className="empty inbox-empty">
-                  <div className="empty-art">
-                    <Icon name="conversations" size={36} />
+                <label className="search-control">
+                  <Icon name="search" />
+                  <input
+                    aria-label="Search conversations"
+                    type="search"
+                    placeholder="Find a conversation"
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                  />
+                </label>
+                <div
+                  className="filter-tabs"
+                  role="group"
+                  aria-label="Filter conversations"
+                >
+                  {[
+                    { id: "all", label: "All" },
+                    { id: "enrolled", label: "Enrolled" },
+                    { id: "available", label: "Available" },
+                  ].map((f) => (
+                    <button
+                      key={f.id}
+                      className={conversationFilter === f.id ? "selected" : ""}
+                      aria-pressed={conversationFilter === f.id}
+                      onClick={() => setConversationFilter(f.id)}
+                    >
+                      {f.label}
+                    </button>
+                  ))}
+                </div>
+                <div className="conversation-list">
+                  {visibleConversations.map((c) => (
+                    <article
+                      className={
+                        "conversation " + (selected === c.id ? "selected" : "")
+                      }
+                      key={c.id}
+                    >
+                      <span className="avatar" aria-hidden="true">
+                        {c.label.slice(0, 1).toUpperCase()}
+                      </span>
+                      <button
+                        className="thread-button"
+                        disabled={!c.enrolled && !inboxAllows(inbox, c)}
+                        onClick={() => setSelected(c.id)}
+                      >
+                        <strong>{c.label}</strong>
+                        <small>
+                          {c.protocol} ·{" "}
+                          {c.group
+                            ? "Group excluded"
+                            : c.enrolled
+                              ? "Enrolled"
+                              : "Not enrolled"}
+                        </small>
+                      </button>
+                      <button
+                        className="secondary"
+                        disabled={busy || c.group || !c.writable}
+                        onClick={() =>
+                          void act(() =>
+                            c.enrolled
+                              ? api(
+                                  `/enrollment/${encodeURIComponent(c.id)}`,
+                                  "DELETE",
+                                )
+                              : api("/enrollment", "POST", {
+                                  conversation_id: c.id,
+                                  participant_id: c.participant_id,
+                                }),
+                          )
+                        }
+                      >
+                        {c.enrolled ? "Remove" : "Enroll"}
+                      </button>
+                    </article>
+                  ))}
+                </div>
+                {!visibleConversations.length && (
+                  <div className="empty">
+                    <Icon name="search" />
+                    <strong>No conversations found</strong>
+                    <p>
+                      {search
+                        ? "Try another name or clear the filter."
+                        : "Available conversations appear when the paired phone is ready."}
+                    </p>
                   </div>
-                  <h3>Your conversations live here.</h3>
-                  <p>
-                    Select an enrolled conversation to browse retained history,
-                    import available text, or compose a reply.
+                )}
+                {discoveryPartial && (
+                  <p role="status" className="banner">
+                    Some conversations could not be refreshed. The available
+                    page is shown; try again later.
                   </p>
+                )}
+                <p className="list-note">
+                  <Icon name="shield" size={15} />
+                  Enrollment authorizes a stable participant. Names are labels.
+                </p>
+                {inbox?.enabled && conversationCursor && (
+                  <button
+                    className="secondary"
+                    disabled={busy}
+                    onClick={() =>
+                      void act(async () => {
+                        const p = await api<{
+                          conversations: Conversation[];
+                          next_cursor: string;
+                          partial?: boolean;
+                        }>(
+                          `/inbox/conversations?cursor=${encodeURIComponent(conversationCursor)}`,
+                        );
+                        setConversations((old) => {
+                          const m = new Map(old.map((c) => [c.id, c]));
+                          for (const c of p.conversations) m.set(c.id, c);
+                          return [...m.values()];
+                        });
+                        setDiscoveryPartial(!!p.partial);
+                        paginatedConversations.current = true;
+                        setConversationCursor(
+                          p.next_cursor === conversationCursor
+                            ? ""
+                            : p.next_cursor,
+                        );
+                      }, false)
+                    }
+                  >
+                    Load more conversations
+                  </button>
+                )}
+              </section>
+              <section className="card inbox-card">
+                <div className="section-heading">
+                  <div>
+                    <p className="eyebrow">RETAINED HISTORY</p>
+                    <h2>
+                      {selectedConversation?.label ??
+                        "A conversation, in context."}
+                    </h2>
+                  </div>
+                  {selectedConversation?.enrolled && (
+                    <span className="pill">
+                      <Icon name="shield" size={13} />
+                      ENROLLED
+                    </span>
+                  )}
                 </div>
-              ) : selectedConversation?.enrolled ? (
-                <ConversationHistory
-                  key={selected}
-                  conversation={selectedConversation}
-                  state={state}
-                  busy={busy}
-                  act={act}
-                />
-              ) : (
-                <div className="empty">
-                  This conversation is no longer enrolled.
-                </div>
-              )}
-            </section>
-          </div>
+                {!selected ? (
+                  <div className="empty inbox-empty">
+                    <div className="empty-art">
+                      <Icon name="conversations" size={36} />
+                    </div>
+                    <h3>Your conversations live here.</h3>
+                    <p>
+                      Select an accessible conversation to browse retained
+                      history, import available text, or compose a reply.
+                    </p>
+                  </div>
+                ) : selectedConversation &&
+                  (selectedConversation.enrolled ||
+                    inboxAllows(inbox, selectedConversation)) ? (
+                  <ConversationHistory
+                    key={
+                      selected +
+                      String(inboxAllows(inbox, selectedConversation))
+                    }
+                    conversation={selectedConversation}
+                    inbox={
+                      inboxAllows(inbox, selectedConversation)
+                        ? inbox
+                        : undefined
+                    }
+                    state={state}
+                    busy={busy}
+                    act={act}
+                  />
+                ) : (
+                  <div className="empty">
+                    This conversation is no longer enrolled.
+                  </div>
+                )}
+              </section>
+            </div>
+          </>
         )}
         {page === "Commands" && (
           <ConfigurationEditor
@@ -730,6 +842,14 @@ function App() {
         )}
         {page === "Settings" && (
           <>
+            {inbox && (
+              <InboxSettings
+                saved={inbox}
+                conversations={conversations}
+                onSaved={setInbox}
+                onDirtyChange={setInboxDirty}
+              />
+            )}
             <ConfigurationEditor
               key="settings"
               page="Settings"

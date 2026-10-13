@@ -26,6 +26,9 @@ type backupMessage struct {
 	Direction    string `json:"direction"`
 	At           string `json:"at"`
 	Payload      string `json:"payload"`
+	OwnerOnly    bool   `json:"owner_only,omitempty"`
+	Origin       string `json:"origin,omitempty"`
+	Status       string `json:"status,omitempty"`
 }
 type backupSnapshot struct {
 	Format     int                `json:"format"`
@@ -35,6 +38,11 @@ type backupSnapshot struct {
 	Jobs       []backupJob        `json:"jobs"`
 	Messages   []backupMessage    `json:"messages"`
 	Usage      []backupUsage      `json:"usage,omitempty"`
+	Aliases    []backupAlias      `json:"aliases,omitempty"`
+}
+type backupAlias struct {
+	Alias   string `json:"alias"`
+	Message string `json:"message"`
 }
 type backupUsage struct {
 	Job        string   `json:"job"`
@@ -117,17 +125,34 @@ func (s *Store) ExportBackup() ([]byte, error) {
 	if e != nil {
 		return nil, e
 	}
-	rows, e = tx.Query("SELECT id,conversation,direction,at,payload FROM messages")
+	rows, e = tx.Query("SELECT m.id,m.conversation,m.direction,m.at,m.payload,coalesce(meta.owner_only,0),coalesce(meta.origin,''),coalesce(meta.status,'') FROM messages m LEFT JOIN message_meta meta ON meta.message=m.id")
 	if e != nil {
 		return nil, e
 	}
 	for rows.Next() {
 		var v backupMessage
-		if e = rows.Scan(&v.ID, &v.Conversation, &v.Direction, &v.At, &v.Payload); e != nil {
+		if e = rows.Scan(&v.ID, &v.Conversation, &v.Direction, &v.At, &v.Payload, &v.OwnerOnly, &v.Origin, &v.Status); e != nil {
 			rows.Close()
 			return nil, e
 		}
 		b.Messages = append(b.Messages, v)
+	}
+	e = rows.Err()
+	rows.Close()
+	if e != nil {
+		return nil, e
+	}
+	rows, e = tx.Query("SELECT alias,message FROM message_alias")
+	if e != nil {
+		return nil, e
+	}
+	for rows.Next() {
+		var a backupAlias
+		if e = rows.Scan(&a.Alias, &a.Message); e != nil {
+			rows.Close()
+			return nil, e
+		}
+		b.Aliases = append(b.Aliases, a)
 	}
 	e = rows.Err()
 	rows.Close()
@@ -268,6 +293,17 @@ func (s *Store) RestoreBackup(data []byte) error {
 			return errors.New("invalid backup message")
 		}
 		if _, e = tx.Exec("INSERT INTO messages VALUES(?,?,?,?,?)", v.ID, v.Conversation, v.Direction, v.At, v.Payload); e != nil {
+			return e
+		}
+		if _, e = tx.Exec("INSERT INTO message_meta VALUES(?,?,?,?)", v.ID, v.Origin, v.Status, v.OwnerOnly); e != nil {
+			return e
+		}
+	}
+	for _, a := range b.Aliases {
+		if a.Alias == "" || a.Message == "" {
+			return errors.New("invalid backup alias")
+		}
+		if _, e = tx.Exec("INSERT INTO message_alias VALUES(?,?)", a.Alias, a.Message); e != nil {
 			return e
 		}
 	}

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   api,
   ApiError,
@@ -6,6 +6,7 @@ import {
   type History,
   type Message,
   type State,
+  type InboxSettings,
 } from "./api";
 import { Confirmation } from "./Confirmation";
 import { Icon } from "./Icon";
@@ -14,8 +15,27 @@ type Props = {
   state: State | null;
   busy: boolean;
   act: (fn: () => Promise<unknown>, refreshAfter?: boolean) => Promise<void>;
+  inbox?: InboxSettings | null;
 };
-export function ConversationHistory({ conversation, state, busy, act }: Props) {
+export function ConversationHistory({
+  conversation,
+  state,
+  busy,
+  act,
+  inbox,
+}: Props) {
+  const base = `${inbox?.enabled ? "/inbox" : ""}/conversations/${encodeURIComponent(conversation.id)}`;
+  const scroll = useRef<HTMLDivElement>(null),
+    scrollSnapshot = useRef<{
+      top: number;
+      height: number;
+      bottom: boolean;
+      prepend: boolean;
+    } | null>(null),
+    sendKey = useRef(""),
+    sendIntentText = useRef("");
+  const [hasNew, setHasNew] = useState(false),
+    [olderNotice, setOlderNotice] = useState("");
   const [messages, setMessages] = useState<Message[]>([]),
     [cursor, setCursor] = useState(""),
     [search, setSearch] = useState(""),
@@ -25,46 +45,131 @@ export function ConversationHistory({ conversation, state, busy, act }: Props) {
     [loading, setLoading] = useState(false),
     [notice, setNotice] = useState("");
   const [confirmation, setConfirmation] = useState<string | null>(null);
+  const messagesRef = useRef<Message[]>([]);
+  messagesRef.current = messages;
   const request = useRef(1),
-    inFlight = useRef(0);
+    inFlight = useRef(0),
+    inFlightDone = useRef<{ generation: number; done: Promise<void> } | null>(
+      null,
+    ),
+    foreground = useRef({ generation: 1, count: 0 });
+  function beginForeground(generation: number) {
+    if (foreground.current.generation !== generation)
+      foreground.current = { generation, count: 0 };
+    foreground.current.count++;
+    setLoading(true);
+  }
+  function endForeground(generation: number) {
+    if (foreground.current.generation === generation) {
+      foreground.current.count--;
+      if (generation === request.current && foreground.current.count === 0)
+        setLoading(false);
+    }
+  }
   const [importCursor, setImportCursor] = useState(""),
     [importFinished, setImportFinished] = useState(false);
   async function importPage() {
-    await act(async () => {
+    const generation = request.current;
+    beginForeground(generation);
+    try {
       const result = await api<{ imported: number; next_cursor: string }>(
-        `/conversations/${encodeURIComponent(conversation.id)}/history/import`,
+        `${base}/history/import`,
         "POST",
         { cursor: importCursor },
       );
-      setImportCursor(result.next_cursor);
-      setImportFinished(!result.next_cursor);
+      if (generation !== request.current) return;
+      setImportCursor(
+        result.next_cursor === importCursor ? "" : result.next_cursor,
+      );
+      setImportFinished(
+        !result.next_cursor || result.next_cursor === importCursor,
+      );
       setNotice(
         `Imported ${result.imported} available text messages. Historical commands were not executed.`,
       );
-      await load();
-    }, false);
+      const first = messagesRef.current[0];
+      const before = first
+        ? btoa(JSON.stringify({ at: first.at, id: first.id }))
+            .replaceAll("+", "-")
+            .replaceAll("/", "_")
+            .replaceAll("=", "")
+        : "";
+      await load(before, true);
+    } catch (e) {
+      if (generation === request.current)
+        setError(
+          e instanceof Error
+            ? e.message.replaceAll("_", " ")
+            : "Could not import phone history",
+        );
+    } finally {
+      endForeground(generation);
+    }
   }
   useEffect(() => {
     setImportCursor("");
     setImportFinished(false);
   }, [conversation.id]);
-  async function load(next = "", append = false, generation = request.current) {
-    if (generation !== request.current || inFlight.current === generation)
+  async function load(
+    next = "",
+    append = false,
+    generation = request.current,
+    background = false,
+  ) {
+    if (generation !== request.current) return;
+    if (
+      background &&
+      foreground.current.generation === generation &&
+      foreground.current.count > 0
+    )
       return;
-    inFlight.current = generation;
-    setLoading(true);
+    if (!background) beginForeground(generation);
+    let resolveDone: (() => void) | undefined;
     try {
+      while (inFlight.current === generation) {
+        if (background) return;
+        await inFlightDone.current?.done;
+        if (generation !== request.current) return;
+      }
+      if (generation !== request.current) return;
+      inFlight.current = generation;
+      inFlightDone.current = {
+        generation,
+        done: new Promise<void>((resolve) => {
+          resolveDone = resolve;
+        }),
+      };
       const params = new URLSearchParams({ limit: "50", search: query });
       if (next) params.set("cursor", next);
-      const result = await api<History>(
-        `/conversations/${encodeURIComponent(conversation.id)}/history?${params}`,
-      );
+      const result = await api<History>(`${base}/history?${params}`);
       if (generation === request.current) {
+        const el = scroll.current;
+        scrollSnapshot.current = el
+          ? {
+              top: el.scrollTop,
+              height: el.scrollHeight,
+              bottom:
+                !append ||
+                el.scrollHeight - el.scrollTop - el.clientHeight < 80,
+              prepend: !!next,
+            }
+          : null;
+        if (
+          append &&
+          !next &&
+          el &&
+          el.scrollHeight - el.scrollTop - el.clientHeight >= 80 &&
+          result.messages.some(
+            (m) => !messagesRef.current.some((old) => old.id === m.id),
+          )
+        )
+          setHasNew(true);
         setMessages((previous) => {
           const map = new Map((append ? previous : []).map((m) => [m.id, m]));
           for (const m of result.messages) map.set(m.id, m);
           return [...map.values()].sort(
-            (a, b) => Date.parse(a.at) - Date.parse(b.at),
+            (a, b) =>
+              Date.parse(a.at) - Date.parse(b.at) || a.id.localeCompare(b.id),
           );
         });
         setCursor((previous) =>
@@ -80,8 +185,35 @@ export function ConversationHistory({ conversation, state, busy, act }: Props) {
             : "Could not load retained history.",
         );
     } finally {
-      if (generation === request.current) setLoading(false);
-      if (inFlight.current === generation) inFlight.current = 0;
+      if (resolveDone) {
+        if (inFlight.current === generation) inFlight.current = 0;
+        resolveDone();
+      }
+      if (!background) endForeground(generation);
+    }
+  }
+  useLayoutEffect(() => {
+    const el = scroll.current,
+      s = scrollSnapshot.current;
+    if (!el) return;
+    if (!s || s.bottom) el.scrollTop = el.scrollHeight;
+    else el.scrollTop = s.top + (s.prepend ? el.scrollHeight - s.height : 0);
+    scrollSnapshot.current = null;
+  }, [messages]);
+  const loadingOlder = useRef(false);
+  async function loadOlder() {
+    if (loadingOlder.current || loading) return;
+    loadingOlder.current = true;
+    try {
+      if (cursor) await load(cursor, true);
+      else if (inbox?.load_older && !importFinished) {
+        await importPage();
+        setOlderNotice(
+          "Older phone text loaded. Available history may be incomplete.",
+        );
+      }
+    } finally {
+      loadingOlder.current = false;
     }
   }
   useEffect(() => {
@@ -98,14 +230,17 @@ export function ConversationHistory({ conversation, state, busy, act }: Props) {
   }, [conversation.id, query]);
   useEffect(() => {
     const generation = request.current;
-    const timer = setInterval(() => void load("", true, generation), 3000);
+    const timer = setInterval(
+      () => void load("", true, generation, true),
+      3000,
+    );
     return () => clearInterval(timer);
   }, [conversation.id, query, cursor]);
   const canSend =
     !!state &&
     !state.paused &&
     state.transport_ready &&
-    conversation.enrolled &&
+    (conversation.enrolled || !!inbox?.enabled) &&
     conversation.writable &&
     !busy;
   return (
@@ -114,7 +249,7 @@ export function ConversationHistory({ conversation, state, busy, act }: Props) {
         Retained text from this conversation. Available history may be
         incomplete.
       </p>
-      {state?.capabilities.includes("history_import") && (
+      {!inbox?.enabled && state?.capabilities.includes("history_import") && (
         <details className="history-tools">
           <summary>
             <Icon name="clock" size={16} />
@@ -189,19 +324,74 @@ export function ConversationHistory({ conversation, state, busy, act }: Props) {
           )}
         </div>
       ) : (
-        <div className="messages">
+        <div
+          className={inbox?.enabled ? "messages chat-messages" : "messages"}
+          ref={scroll}
+          onScroll={() => {
+            const el = scroll.current;
+            if (!el || !inbox?.enabled) return;
+            if (el.scrollHeight - el.scrollTop - el.clientHeight < 80)
+              setHasNew(false);
+            if (el.scrollTop < 40) void loadOlder();
+          }}
+        >
           {messages.map((m) => (
-            <div key={m.id} className={"bubble " + m.direction}>
+            <div
+              key={m.id}
+              data-message-id={m.id}
+              className={"bubble " + m.direction}
+            >
               <p>{m.text}</p>
               <small>
-                {m.direction === "outgoing" ? "Your bot" : "Incoming"} ·{" "}
-                {new Date(m.at).toLocaleString()}
+                {m.direction === "outgoing"
+                  ? m.origin === "web"
+                    ? "You · Web"
+                    : m.origin === "phone"
+                      ? "You · Phone"
+                      : "Outgoing"
+                  : "Incoming"}{" "}
+                · {new Date(m.at).toLocaleString()}
+                {m.status && ` · ${m.status}`}
               </small>
             </div>
           ))}
         </div>
       )}
-      {cursor && (
+      {hasNew && (
+        <button
+          className="secondary"
+          onClick={() => {
+            if (scroll.current)
+              scroll.current.scrollTop = scroll.current.scrollHeight;
+            setHasNew(false);
+          }}
+        >
+          New messages ↓
+        </button>
+      )}
+      {inbox?.enabled && (
+        <>
+          <p role="status" className="muted">
+            {loading ? "Loading messages…" : olderNotice}
+          </p>
+          {(cursor || (inbox.load_older && !importFinished)) && (
+            <button
+              className="secondary"
+              disabled={loading || busy}
+              onClick={() => void loadOlder()}
+            >
+              Load older messages
+            </button>
+          )}
+          {!cursor && importFinished && (
+            <p className="muted">
+              No more available phone text. This does not establish complete
+              history.
+            </p>
+          )}
+        </>
+      )}
+      {!inbox?.enabled && cursor && (
         <button
           className="secondary"
           disabled={loading}
@@ -214,24 +404,32 @@ export function ConversationHistory({ conversation, state, busy, act }: Props) {
         className="compose"
         onSubmit={(e) => {
           e.preventDefault();
-          if (canSend && text.trim()) setConfirmation(text);
+          if (canSend && text.trim()) {
+            if (!sendKey.current || sendIntentText.current !== text.trim()) {
+              sendKey.current = crypto.randomUUID();
+              sendIntentText.current = text.trim();
+            }
+            setConfirmation(text);
+          }
         }}
       >
         <label className="field">
           Manual message
           <textarea
-            maxLength={10000}
+            maxLength={24000}
             required
             placeholder="Write a reply…"
             value={text}
             onChange={(e) => {
-              setText(e.target.value);
+              setText(Array.from(e.target.value).slice(0, 12000).join(""));
               setNotice("");
             }}
           />
         </label>
         <div className="compose-meta">
-          <small>{text.length.toLocaleString()} / 10,000 characters</small>
+          <small>
+            {Array.from(text).length.toLocaleString()} / 12,000 characters
+          </small>
           <small>
             {state?.paused
               ? "Bot paused"
@@ -281,19 +479,24 @@ export function ConversationHistory({ conversation, state, busy, act }: Props) {
           disabled={!canSend}
           onCancel={() => setConfirmation(null)}
           onConfirm={() => {
-            const outgoing = confirmation;
+            const outgoing = confirmation,
+              requestId = sendKey.current;
             setConfirmation(null);
             void act(async () => {
               await api(
-                `/conversations/${encodeURIComponent(conversation.id)}/compose`,
+                `${base}/compose`,
                 "POST",
-                { text: outgoing },
+                inbox?.enabled
+                  ? { text: outgoing, request_id: requestId }
+                  : { text: outgoing },
               );
-              setText("");
+              setText((current) => (current === outgoing ? "" : current));
+              sendKey.current = "";
+              sendIntentText.current = "";
               setNotice(
                 "Message queued. Check Activity for submission status.",
               );
-              await load("", true);
+              void load("", true, request.current, true);
             }, false);
           }}
         >

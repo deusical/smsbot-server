@@ -721,6 +721,194 @@ paths:
                   maxLength: 12000
               required:
               - text
+  /inbox/settings:
+    get:
+      description: Read encrypted owner inbox preferences
+      security:
+      - browserSession: []
+      responses:
+        '200':
+          description: Read encrypted owner inbox preferences
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OwnerInboxSettings'
+        '401':
+          description: Authentication required
+        '403':
+          description: Owner required
+        '409':
+          description: Unavailable or stale settings revision
+    put:
+      description: Save owner inbox preferences using optimistic revision
+      security:
+      - browserSession: []
+      responses:
+        '200':
+          description: Save owner inbox preferences using optimistic revision
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OwnerInboxSettings'
+        '401':
+          description: Authentication required
+        '403':
+          description: Owner required
+        '409':
+          description: Unavailable or stale settings revision
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OwnerInboxSettings'
+  /inbox/conversations:
+    get:
+      description: Discover another page of individual conversations
+      security:
+      - browserSession: []
+      responses:
+        '200':
+          description: Discover another page of individual conversations
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  conversations:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Conversation'
+                  partial:
+                    type: boolean
+                    description: Some conversations could not be resolved; available entries are shown.
+                  next_cursor:
+                    type: string
+        '401':
+          description: Authentication required
+        '403':
+          description: Owner required
+        '409':
+          description: Unavailable or stale settings revision
+        '503':
+          description: Phone discovery unavailable
+      parameters:
+      - name: cursor
+        in: query
+        schema:
+          type: string
+          maxLength: 4096
+  /inbox/conversations/{id}/history:
+    parameters:
+    - name: id
+      in: path
+      required: true
+      schema:
+        type: string
+    get:
+      description: Read owner-only retained history after checking current identity
+        and access
+      security:
+      - browserSession: []
+      responses:
+        '200':
+          description: Read owner-only retained history after checking current identity
+            and access
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InboxPage'
+        '401':
+          description: Authentication required
+        '403':
+          description: Owner required
+        '409':
+          description: Unavailable or stale settings revision
+      parameters:
+      - name: cursor
+        in: query
+        schema:
+          type: string
+      - name: search
+        in: query
+        schema:
+          type: string
+      - name: limit
+        in: query
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 100
+  /inbox/conversations/{id}/history/import:
+    parameters:
+    - name: id
+      in: path
+      required: true
+      schema:
+        type: string
+    post:
+      description: Fetch available phone text; historical commands never run
+      security:
+      - browserSession: []
+      responses:
+        '200':
+          description: Fetch available phone text; historical commands never run
+        '401':
+          description: Authentication required
+        '403':
+          description: Owner required
+        '409':
+          description: Unavailable or stale settings revision
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                cursor:
+                  type: string
+                  maxLength: 4096
+  /inbox/conversations/{id}/compose:
+    parameters:
+    - name: id
+      in: path
+      required: true
+      schema:
+        type: string
+    post:
+      description: Queue confirmed owner manual reply with idempotency key; pause and
+        final access checks apply
+      security:
+      - browserSession: []
+      responses:
+        '401':
+          description: Authentication required
+        '403':
+          description: Owner required
+        '409':
+          description: Unavailable or stale settings revision
+        '202':
+          description: Queued once; does not establish delivery
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+              - text
+              - request_id
+              properties:
+                text:
+                  type: string
+                  maxLength: 12000
+                request_id:
+                  type: string
+                  minLength: 16
+                  maxLength: 100
 components:
   securitySchemes:
     browserSession:
@@ -741,6 +929,9 @@ components:
       - fixture
       - capabilities
       properties:
+        inbox_capture_gap:
+          type: boolean
+          description: Owner-only warning that optional capture may have missed messages since startup.
         api_version:
           type: integer
           const: 1
@@ -974,6 +1165,10 @@ components:
           type: string
           format: date-time
         text: *id002
+        origin:
+          type: string
+        status:
+          type: string
     InboxPage:
       type: object
       additionalProperties: false
@@ -986,3 +1181,46 @@ components:
       required:
       - messages
       - next_cursor
+
+    OwnerInboxSettings:
+      type: object
+      additionalProperties: false
+      required:
+      - enabled
+      - scope
+      - conversations
+      - load_older
+      - automatic_replies
+      - revision
+      properties:
+        enabled:
+          type: boolean
+          default: false
+        scope:
+          type: string
+          enum:
+          - all
+          - selected
+        conversations:
+          type: array
+          maxItems: 500
+          items:
+            type: object
+            additionalProperties: false
+            required:
+            - conversation
+            - participant
+            properties:
+              conversation:
+                type: string
+              participant:
+                type: string
+        load_older:
+          type: boolean
+          default: false
+        automatic_replies:
+          type: boolean
+          default: true
+        revision:
+          type: integer
+          minimum: 0

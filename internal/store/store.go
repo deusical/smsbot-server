@@ -33,20 +33,21 @@ type Job struct {
 	RequestedReasoning string   `json:"requested_reasoning,omitempty"`
 }
 type Plan struct {
-	Reply        string          `json:"reply"`
-	Participant  string          `json:"participant"`
-	Input        string          `json:"input,omitempty"`
-	Instructions string          `json:"instructions,omitempty"`
-	Model        string          `json:"model,omitempty"`
-	Generation   json.RawMessage `json:"generation,omitempty"`
-	Memory       bool            `json:"memory,omitempty"`
-	MemoryHours  int             `json:"memory_hours,omitempty"`
-	MemoryEpoch  int64           `json:"memory_epoch,omitempty"`
-	Context      []Turn          `json:"context,omitempty"`
-	Approval     bool            `json:"approval,omitempty"`
-	Approved     bool            `json:"approved,omitempty"`
-	MaxChars     int             `json:"max_chars,omitempty"`
-	Manual       bool            `json:"manual,omitempty"`
+	Reply          string          `json:"reply"`
+	Participant    string          `json:"participant"`
+	Input          string          `json:"input,omitempty"`
+	Instructions   string          `json:"instructions,omitempty"`
+	Model          string          `json:"model,omitempty"`
+	Generation     json.RawMessage `json:"generation,omitempty"`
+	Memory         bool            `json:"memory,omitempty"`
+	MemoryHours    int             `json:"memory_hours,omitempty"`
+	MemoryEpoch    int64           `json:"memory_epoch,omitempty"`
+	Context        []Turn          `json:"context,omitempty"`
+	Approval       bool            `json:"approval,omitempty"`
+	Approved       bool            `json:"approved,omitempty"`
+	MaxChars       int             `json:"max_chars,omitempty"`
+	Manual         bool            `json:"manual,omitempty"`
+	InboxOwnerOnly bool            `json:"inbox_owner_only,omitempty"`
 }
 
 func ID() string {
@@ -83,11 +84,25 @@ func (s *Store) migrate() error {
 	if e := s.DB.QueryRow("PRAGMA user_version").Scan(&version); e != nil {
 		return e
 	}
-	if version > 2 {
+	if version > 3 {
 		return errors.New("database is newer than this service")
 	}
-	if version == 2 {
+	if version == 3 {
 		return nil
+	}
+	if version == 2 {
+		tx, e := s.DB.Begin()
+		if e != nil {
+			return e
+		}
+		defer tx.Rollback()
+		_, e = tx.Exec(`CREATE TABLE IF NOT EXISTS message_meta(message TEXT PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,origin TEXT NOT NULL,status TEXT NOT NULL,owner_only INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS message_alias(alias TEXT PRIMARY KEY,message TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE);
+PRAGMA user_version=3;`)
+		if e != nil {
+			return e
+		}
+		return tx.Commit()
 	}
 	tx, e := s.DB.Begin()
 	if e != nil {
@@ -127,7 +142,10 @@ func (s *Store) migrate() error {
 		if _, e = tx.Exec(`CREATE TABLE usage(job TEXT PRIMARY KEY,model TEXT NOT NULL,prompt_tokens INTEGER NOT NULL,completion_tokens INTEGER NOT NULL,reasoning_tokens INTEGER NOT NULL,cost REAL); CREATE TABLE memory(scope TEXT PRIMARY KEY,payload TEXT NOT NULL,expires TEXT NOT NULL); PRAGMA user_version=2;`); e != nil {
 			return e
 		}
-		return tx.Commit()
+		if e = tx.Commit(); e != nil {
+			return e
+		}
+		return s.migrate()
 	}
 	_, e = tx.Exec(`
  CREATE TABLE settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);
@@ -142,7 +160,10 @@ func (s *Store) migrate() error {
 	if e != nil {
 		return e
 	}
-	return tx.Commit()
+	if e = tx.Commit(); e != nil {
+		return e
+	}
+	return s.migrate()
 }
 func (s *Store) Paused() (bool, error) {
 	var value string
@@ -200,12 +221,29 @@ func (s *Store) Enqueue(id, conv, command string, p Plan) (bool, error) {
 	if p.Approval && !p.Approved {
 		state = "awaiting_approval"
 	}
-	r, e := s.DB.Exec("INSERT OR IGNORE INTO jobs(id,conversation,command,state,created,plan) VALUES(?,?,?,?,?,?)", id, conv, command, state, time.Now().UTC().Format(time.RFC3339Nano), enc)
+	tx, e := s.DB.Begin()
+	if e != nil {
+		return false, e
+	}
+	defer tx.Rollback()
+	r, e := tx.Exec("INSERT OR IGNORE INTO jobs(id,conversation,command,state,created,plan) VALUES(?,?,?,?,?,?)", id, conv, command, state, time.Now().UTC().Format(time.RFC3339Nano), enc)
 	if e != nil {
 		return false, e
 	}
 	n, e := r.RowsAffected()
-	return n == 1, e
+	if e != nil {
+		return false, e
+	}
+	if n == 1 && p.InboxOwnerOnly {
+		digest, err := s.Vault.Seal("compose-intent:"+id, []byte(Hash(p.Reply)))
+		if err != nil {
+			return false, err
+		}
+		if _, err = tx.Exec("INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", "compose_intent:"+id, digest); err != nil {
+			return false, err
+		}
+	}
+	return n == 1, tx.Commit()
 }
 func (s *Store) Next() (Job, Plan, error) {
 	var j Job
@@ -287,10 +325,12 @@ type Message struct {
 	Direction string `json:"direction"`
 	At        string `json:"at"`
 	Text      string `json:"text"`
+	Origin    string `json:"origin,omitempty"`
+	Status    string `json:"status,omitempty"`
 }
 
 func (s *Store) Messages(conv string) ([]Message, error) {
-	rows, e := s.DB.Query("SELECT id,direction,at,payload FROM messages WHERE conversation=? ORDER BY at DESC LIMIT 100", conv)
+	rows, e := s.DB.Query("SELECT id,direction,at,payload FROM messages WHERE conversation=? AND NOT EXISTS(SELECT 1 FROM message_meta WHERE message=id AND owner_only=1) ORDER BY at DESC LIMIT 100", conv)
 	if e != nil {
 		return nil, e
 	}

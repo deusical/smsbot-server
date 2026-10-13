@@ -33,8 +33,8 @@ func TestIncomingNormalization(t *testing.T) {
 	}
 	m.IsOld = false
 	m.MessageStatus.Status = gmproto.MessageStatusType_OUTGOING_COMPLETE
-	if _, ok := normalize(m, now.Add(-time.Second)); ok {
-		t.Fatal("outgoing echo accepted")
+	if out, ok := normalize(m, now.Add(-time.Second)); !ok || !out.Outgoing {
+		t.Fatal("outgoing echo was not marked as display-only outgoing")
 	}
 	m.MessageStatus.Status = gmproto.MessageStatusType_INCOMING_COMPLETE
 	if _, ok := normalize(m, now.Add(time.Second)); ok {

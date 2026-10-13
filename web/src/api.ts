@@ -1,5 +1,6 @@
 export type State = {
   api_version: number;
+  inbox_capture_gap?: boolean;
   paused: boolean;
   transport_ready: boolean;
   transport: string;
@@ -35,7 +36,31 @@ export type Message = {
   direction: string;
   at: string;
   text: string;
+  origin?: string;
+  status?: string;
 };
+export type InboxSettings = {
+  enabled: boolean;
+  scope: "all" | "selected";
+  conversations: { conversation: string; participant: string }[];
+  load_older: boolean;
+  automatic_replies: boolean;
+  revision: number;
+};
+export function inboxAllows(
+  s: InboxSettings | null | undefined,
+  c: Conversation,
+): boolean {
+  return (
+    !!s?.enabled &&
+    !c.group &&
+    c.writable &&
+    (s.scope === "all" ||
+      s.conversations.some(
+        (b) => b.conversation === c.id && b.participant === c.participant_id,
+      ))
+  );
+}
 export type Client = { id: string; label: string; token?: string };
 export type Generation = {
   reasoning: string;

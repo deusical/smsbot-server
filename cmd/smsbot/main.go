@@ -262,11 +262,13 @@ func runWithInput(args []string, input io.Reader) error {
 		return e
 	}
 	adapterDone := make(chan struct{})
+	captureDone := make(chan struct{})
+	go func() { defer close(captureDone); engine.RunCapture(ctx) }()
 	if google != nil {
 		go func() {
 			defer close(adapterDone)
 			google.Run(ctx, func(m transport.Incoming) {
-				if _, err := engine.Accept(ctx, m); err != nil {
+				if _, err := engine.Ingest(ctx, m); err != nil {
 					_ = engine.Pause(true)
 				}
 			}, func() { _ = engine.Pause(true) }, func(conv, txn, state, reported string) {
@@ -307,6 +309,7 @@ func runWithInput(args []string, input io.Reader) error {
 			cancel()
 			<-workerDone
 			<-adapterDone
+			<-captureDone
 			return errors.New("HTTP service failed")
 		}
 	}
@@ -316,5 +319,6 @@ func runWithInput(args []string, input io.Reader) error {
 	e = server.Shutdown(shutdown)
 	<-workerDone
 	<-adapterDone
+	<-captureDone
 	return e
 }

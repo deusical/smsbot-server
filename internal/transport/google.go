@@ -32,23 +32,94 @@ type Google struct {
 	settings      *gmproto.Settings
 	conversations map[string]*gmproto.Conversation
 	updates       chan any
+	queueMu       sync.Mutex
+	overflow      atomic.Bool
+	healthFailure atomic.Bool
+	overflowWake  chan struct{}
 	started       time.Time
 	saveMu        sync.Mutex
 	Diagnostic    func(AuthDiagnostic)
+	discovery     conversationPageCache
 }
 
 func NewGoogle(v *vault.Vault, path string) *Google {
-	return &Google{vault: v, path: path, updates: make(chan any, 256), conversations: map[string]*gmproto.Conversation{}}
+	return &Google{vault: v, path: path, updates: make(chan any, 256), overflowWake: make(chan struct{}, 1), conversations: map[string]*gmproto.Conversation{}}
 }
 func (g *Google) attach(auth *libgm.AuthData) {
 	g.client = libgm.NewClient(auth, nil, zerolog.New(io.Discard), exhttp.SensibleClientSettings)
-	g.client.SetEventHandler(func(event any) {
-		select {
-		case g.updates <- event:
-		default:
-			g.ready.Store(false)
+	g.client.SetEventHandler(g.enqueue)
+}
+
+// libgm invokes this synchronously on its receive loop. Never wait for the
+// consumer, touch storage, or make a phone request here.
+func (g *Google) enqueue(event any) {
+	switch e := event.(type) {
+	case *events.AccountChange:
+		if !e.IsFake {
+			g.healthFailure.Store(true)
 		}
-	})
+	case *events.ListenFatalError, *events.ListenTemporaryError, *events.PingFailed,
+		*events.GaiaLoggedOut, *events.PhoneNotResponding, *events.NoDataReceived, *events.HackySetActiveMayFail:
+		// Preserve the failure even if its diagnostic event cannot be queued.
+		g.healthFailure.Store(true)
+	case *events.AuthTokenRefreshed, *gmproto.Settings, *gmproto.Conversation:
+	case *libgm.WrappedMessage:
+		if e == nil || e.Message == nil {
+			return
+		}
+		// Historical incoming messages cannot run commands or reconcile sends.
+		// Retain outgoing status events for transaction reconciliation.
+		if e.IsOld {
+			switch e.GetMessageStatus().GetStatus() {
+			case gmproto.MessageStatusType_OUTGOING_COMPLETE, gmproto.MessageStatusType_OUTGOING_DELIVERED, gmproto.MessageStatusType_OUTGOING_DISPLAYED:
+				if e.GetTmpID() == "" {
+					return
+				}
+			default:
+				return
+			}
+		}
+	default:
+		return
+	}
+	g.queueMu.Lock()
+	defer g.queueMu.Unlock()
+	select {
+	case g.updates <- event:
+	default:
+		g.overflow.Store(true)
+		select {
+		case g.overflowWake <- struct{}{}:
+		default:
+		}
+	}
+}
+
+func (g *Google) beginOverflowRecovery(pause func()) {
+	pause()
+	// No work from before the gap may be submitted later. Refresh identities
+	// through the normal full-detail picker before accepting new commands.
+	g.listMu.Lock()
+	g.mu.Lock()
+	g.listed = time.Time{}
+	g.list = nil
+	g.conversations = map[string]*gmproto.Conversation{}
+	g.settings = nil
+	g.mu.Unlock()
+	g.listMu.Unlock()
+	g.discovery.invalidate()
+	g.diagnose("event_queue_overflow", errors.New("unavailable"))
+}
+
+func (g *Google) finishOverflowRecovery() bool {
+	g.queueMu.Lock()
+	defer g.queueMu.Unlock()
+	if len(g.updates) != 0 {
+		return false
+	}
+	g.started = time.Now()
+	g.overflow.Store(false)
+	return true
 }
 func ParseCookies(input string) (map[string]string, error) {
 	cookies := map[string]string{}
@@ -173,7 +244,9 @@ func (g *Google) Close() error {
 	}
 	return g.Save()
 }
-func (g *Google) Ready() bool { return g.ready.Load() && g.client != nil && g.client.IsConnected() }
+func (g *Google) Ready() bool {
+	return g.ready.Load() && !g.healthFailure.Load() && !g.overflow.Load() && g.client != nil && g.client.IsConnected()
+}
 func peer(c *gmproto.Conversation) string {
 	ids := map[string]bool{}
 	for _, p := range c.GetParticipants() {
@@ -196,6 +269,25 @@ func peer(c *gmproto.Conversation) string {
 }
 func eligible(c *gmproto.Conversation) bool {
 	return c != nil && !c.GetIsGroupChat() && !c.GetReadOnly() && peer(c) != "" && c.GetDefaultOutgoingID() != ""
+}
+func (g *Google) LookupConversation(ctx context.Context, id string) (Conversation, error) {
+	if !g.Ready() {
+		return Conversation{}, errors.New("phone connection unavailable")
+	}
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	c, err := g.client.GetConversation(ctx, id)
+	if err != nil || c.GetConversationID() != id {
+		return Conversation{}, errors.New("ineligible_conversation")
+	}
+	g.mu.Lock()
+	g.conversations[id] = c
+	g.mu.Unlock()
+	label := c.GetName()
+	if label == "" {
+		label = "Individual conversation"
+	}
+	return Conversation{ID: id, ParticipantID: peer(c), Label: label, Protocol: c.GetType().String(), Group: c.GetIsGroupChat(), Writable: eligible(c)}, nil
 }
 func (g *Google) Conversations(ctx context.Context) ([]Conversation, error) {
 	g.listMu.Lock()
@@ -324,8 +416,19 @@ func normalize(w *libgm.WrappedMessage, started time.Time) (Incoming, bool) {
 	if w == nil || w.Message == nil || w.IsOld || w.GetMessageID() == "" || len(w.GetMessageInfo()) == 0 {
 		return Incoming{}, false
 	}
+	outgoing := false
+	status := ""
 	switch w.GetMessageStatus().GetStatus() {
 	case gmproto.MessageStatusType_INCOMING_COMPLETE, gmproto.MessageStatusType_INCOMING_DELIVERED, gmproto.MessageStatusType_INCOMING_DISPLAYED:
+	case gmproto.MessageStatusType_OUTGOING_COMPLETE:
+		outgoing = true
+		status = "submitted"
+	case gmproto.MessageStatusType_OUTGOING_DELIVERED:
+		outgoing = true
+		status = "delivered"
+	case gmproto.MessageStatusType_OUTGOING_DISPLAYED:
+		outgoing = true
+		status = "read"
 	default:
 		return Incoming{}, false
 	}
@@ -340,17 +443,30 @@ func normalize(w *libgm.WrappedMessage, started time.Time) (Incoming, bool) {
 		}
 		text.WriteString(p.GetMessageContent().GetContent())
 	}
-	return Incoming{ID: w.GetMessageID(), ConversationID: w.GetConversationID(), ParticipantID: w.GetParticipantID(), Text: text.String(), At: at}, true
+	return Incoming{ID: w.GetMessageID(), ConversationID: w.GetConversationID(), ParticipantID: w.GetParticipantID(), Text: text.String(), At: at, Outgoing: outgoing, TransactionID: w.GetTmpID(), Status: status}, true
 }
 func (g *Google) Run(ctx context.Context, incoming func(Incoming), pause func(), receipt func(string, string, string, string)) {
 	timer := time.NewTicker(30 * time.Second)
 	defer timer.Stop()
+	recoveringOverflow := false
 	for {
+		if g.overflow.Load() {
+			if !recoveringOverflow {
+				g.beginOverflowRecovery(pause)
+				recoveringOverflow = true
+			}
+			if g.finishOverflowRecovery() {
+				recoveringOverflow = false
+				g.diagnose("event_queue_drained", nil)
+			}
+		}
 		select {
 		case <-ctx.Done():
 			return
+		case <-g.overflowWake:
+			// The next iteration pauses and drains; the callback stays nonblocking.
 		case <-timer.C:
-			if !g.ready.Load() {
+			if !g.ready.Load() || g.healthFailure.Load() {
 				pause()
 			}
 			if g.Save() != nil {
@@ -402,7 +518,7 @@ func (g *Google) Run(ctx context.Context, incoming func(Incoming), pause func(),
 				if state != "" && e.GetTmpID() != "" {
 					receipt(e.GetConversationID(), e.GetTmpID(), state, status.String())
 				}
-				if m, ok := normalize(e, g.started); ok {
+				if m, ok := normalize(e, g.started); ok && !g.overflow.Load() {
 					incoming(m)
 				}
 			case *events.AccountChange:
