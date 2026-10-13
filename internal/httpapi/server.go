@@ -122,7 +122,7 @@ func (s *Server) protected(fn http.HandlerFunc) http.HandlerFunc {
 			}
 		}
 		// Client credentials can control the bot, but cannot grant/revoke other credentials.
-		if isClient && (strings.HasPrefix(r.URL.Path, "/api/v1/clients") || r.URL.Path == "/api/v1/provider-key") {
+		if isClient && (strings.HasPrefix(r.URL.Path, "/api/v1/clients") || r.URL.Path == "/api/v1/provider-key" || r.URL.Path == "/api/v1/compatible-provider" || r.URL.Path == "/api/v1/models/refresh-compatible") {
 			s.bad(w, 403, "owner_required")
 			return
 		}

@@ -218,15 +218,17 @@ func (e *Engine) Accept(ctx context.Context, m transport.Incoming) (bool, error)
 		if cmd.Type == "fixed" {
 			p.Reply = strings.ReplaceAll(instructions, "{input}", input)
 		} else {
-			_, offline := e.Provider.(SimulatedProvider)
-			if model == "" || !e.ProviderConfigured() && !offline {
+			if model == "" {
 				return false, nil
 			}
-			m, err := e.model(model)
+			selectedModel, err := e.model(model)
 			if err != nil {
 				return false, err
 			}
-			if err = validateModel(g, m); err != nil {
+			if !e.ProviderConfiguredFor(selectedModel) {
+				return false, nil
+			}
+			if err = validateModel(g, selectedModel); err != nil {
 				return false, err
 			}
 			p.Model = model
@@ -365,10 +367,7 @@ func (e *Engine) Dispatch(ctx context.Context) error {
 			e.mu.Unlock()
 			return err
 		}
-		key, err := e.Store.GetSecretSetting("provider_key", "provider-key")
-		if _, offline := e.Provider.(SimulatedProvider); offline && err == nil {
-			key = []byte("fixture")
-		}
+		provider, key, err := e.providerForModel(m)
 		if err != nil || len(key) == 0 {
 			err = e.Store.Complete(j.ID, "failed", "provider_key_missing")
 			e.mu.Unlock()
@@ -390,7 +389,7 @@ func (e *Engine) Dispatch(ctx context.Context) error {
 		genctx, cancel := context.WithTimeout(ctx, 95*time.Second)
 		e.pending[j.ID] = cancel
 		e.mu.Unlock()
-		result, generr := e.Provider.Generate(genctx, string(key), p, history, m)
+		result, generr := provider.Generate(genctx, key, p, history, m)
 		cancel()
 		e.mu.Lock()
 		delete(e.pending, j.ID)

@@ -11,6 +11,7 @@ import {
   type Configuration,
   type Generation,
   type Model,
+  type CompatibleProviderStatus,
   type Conversation,
   type Command,
 } from "./api";
@@ -61,6 +62,9 @@ export function ConfigurationEditor({
     [notice, setNotice] = useState("");
   const [key, setKey] = useState(""),
     [configured, setConfigured] = useState(false),
+    [compatibleBaseURL, setCompatibleBaseURL] = useState("https://api.openai.com/v1"),
+    [compatibleKey, setCompatibleKey] = useState(""),
+    [compatibleConfigured, setCompatibleConfigured] = useState(false),
     [selectedModel, setSelectedModel] = useState("");
   const [playCommand, setPlayCommand] = useState(""),
     [playInput, setPlayInput] = useState(""),
@@ -80,13 +84,16 @@ export function ConfigurationEditor({
       api<Configuration>("/config"),
       api<Model[]>("/models"),
       api<{ configured: boolean }>("/provider-key"),
+      api<CompatibleProviderStatus>("/compatible-provider"),
     ])
-      .then(([c, m, k]) => {
+      .then(([c, m, k, compatible]) => {
         if (active) {
           saved.current = normalize(c);
           setConfig(saved.current);
           setModels(m ?? []);
           setConfigured(k.configured);
+          setCompatibleBaseURL(compatible.base_url);
+          setCompatibleConfigured(compatible.configured);
           setSelectedModel(c.settings.default_model);
         }
       })
@@ -169,6 +176,7 @@ export function ConfigurationEditor({
       </section>
     );
   const settings = config.settings;
+  const defaultModel = models.find((model) => model.id === settings.default_model);
   return (
     <>
       {error && (
@@ -665,12 +673,39 @@ export function ConfigurationEditor({
                     }, false)
                   }
                 >
-                  Refresh model catalog
+                  Refresh OpenRouter catalog
                 </button>
                 <p className="muted">
-                  Refreshing contacts OpenRouter for current model capabilities.
-                  Saved preferences remain per model.
+                  OpenRouter catalogs are public. Compatible catalogs use the
+                  saved endpoint and key. Saved preferences remain per model.
                 </p>
+                <button
+                  type="button"
+                  className="secondary"
+                  disabled={busy || !compatibleConfigured}
+                  onClick={() =>
+                    void act(async () => {
+                      setModels(
+                        await api<Model[]>(
+                          "/models/refresh-compatible",
+                          "POST",
+                        ),
+                      );
+                      setNotice("Compatible model catalog refreshed.");
+                    }, false)
+                  }
+                >
+                  Refresh compatible catalog
+                </button>
+                {settings.daily_budget > 0 &&
+                  defaultModel?.provider === "compatible" &&
+                  defaultModel.pricing_known === false && (
+                    <p className="muted">
+                      This provider does not report model pricing. The daily
+                      AI budget blocks models with unknown prices; set it to 0
+                      to use these models without the app-side budget check.
+                    </p>
+                  )}
                 <ModelSelect
                   label="Generation model"
                   value={selectedModel}
@@ -714,7 +749,7 @@ export function ConfigurationEditor({
                   <div className="favorite-list">
                     {models
                       .filter((m) =>
-                        `${m.name} ${m.id}`
+                        `${m.name} ${m.id} ${m.provider ?? ""}`
                           .toLowerCase()
                           .includes(modelSearch.toLowerCase()),
                       )
@@ -722,7 +757,7 @@ export function ConfigurationEditor({
                       .map((m) => (
                         <Check
                           key={m.id}
-                          label={m.name}
+                          label={modelOptionName(m)}
                           checked={settings.favorites.includes(m.id)}
                           onChange={(checked) =>
                             edit((c) => ({
@@ -959,8 +994,9 @@ export function ConfigurationEditor({
                 : "No provider key is configured."}
             </p>
             <p className="muted">
-              The key is encrypted on the server and is never returned. AI
-              command input and opted-in memory are sent to OpenRouter.
+              The key is encrypted on the server and is never returned. When an
+              OpenRouter model is selected, AI input and opted-in memory are sent
+              to OpenRouter.
             </p>
             <form
               onSubmit={(e) => {
@@ -983,6 +1019,90 @@ export function ConfigurationEditor({
                 />
               </Field>
               <button disabled={busy || !key}>Save provider key</button>
+            </form>
+          </section>
+          <section className="card">
+            <h2>OpenAI-compatible provider</h2>
+            <p className="muted">
+              Connect an OpenAI-compatible API, including direct OpenAI or a
+              local gateway. The endpoint and key are encrypted on this server;
+              the key is never returned. AI input and opted-in memory go to the
+              endpoint you enter.
+            </p>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                void act(async () => {
+                  const status = await api<CompatibleProviderStatus>(
+                    "/compatible-provider",
+                    "PUT",
+                    { base_url: compatibleBaseURL, key: compatibleKey },
+                  );
+                  setCompatibleBaseURL(status.base_url);
+                  setCompatibleConfigured(status.configured);
+                  setCompatibleKey("");
+                  setNotice("Compatible provider settings saved.");
+                }, false);
+              }}
+            >
+              <Field label="Compatible API base URL">
+                <input
+                  type="url"
+                  required
+                  autoComplete="url"
+                  placeholder="http://127.0.0.1:8317/v1"
+                  value={compatibleBaseURL}
+                  onChange={(e) => setCompatibleBaseURL(e.target.value)}
+                />
+              </Field>
+              <Field label="Compatible API access key">
+                <input
+                  type="password"
+                  autoComplete="off"
+                  placeholder={
+                    compatibleConfigured
+                      ? "Leave blank to keep the saved key"
+                      : "Enter an API key"
+                  }
+                  value={compatibleKey}
+                  onChange={(e) => setCompatibleKey(e.target.value)}
+                />
+              </Field>
+              <p aria-live="polite" className="muted">
+                {compatibleConfigured
+                  ? "An access key is configured."
+                  : "No access key is configured."}
+              </p>
+              <div className="actions">
+                <button disabled={busy || !compatibleBaseURL.trim()}>
+                  Save compatible provider
+                </button>
+                {compatibleConfigured && (
+                  <button
+                    type="button"
+                    className="secondary"
+                    disabled={busy}
+                    onClick={() =>
+                      void act(async () => {
+                        const status = await api<CompatibleProviderStatus>(
+                          "/compatible-provider",
+                          "PUT",
+                          {
+                            base_url: compatibleBaseURL,
+                            key: "",
+                            clear_key: true,
+                          },
+                        );
+                        setCompatibleConfigured(status.configured);
+                        setCompatibleKey("");
+                        setNotice("Compatible provider key removed.");
+                      }, false)
+                    }
+                  >
+                    Remove access key
+                  </button>
+                )}
+              </div>
             </form>
           </section>
           <section className="card">
@@ -1113,7 +1233,9 @@ function ModelSelect({
   const [search, setSearch] = useState("");
   const matches = models
     .filter((m) =>
-      `${m.name} ${m.id}`.toLowerCase().includes(search.toLowerCase()),
+      `${m.name} ${m.id} ${m.provider ?? ""}`
+        .toLowerCase()
+        .includes(search.toLowerCase()),
     )
     .slice(0, 60);
   const selected = models.find((m) => m.id === value);
@@ -1134,13 +1256,13 @@ function ModelSelect({
           </option>
           {value && !matches.some((m) => m.id === value) && (
             <option value={value}>
-              {selected?.name ?? value}
+              {selected ? modelOptionName(selected) : value}
               {selected ? "" : " (saved)"}
             </option>
           )}
           {matches.map((m) => (
             <option key={m.id} value={m.id}>
-              {m.name}
+              {modelOptionName(m)}
             </option>
           ))}
         </select>
@@ -1150,6 +1272,11 @@ function ModelSelect({
       )}
     </div>
   );
+}
+function modelOptionName(model: Model) {
+  return model.provider === "compatible"
+    ? `${model.name} · Compatible API`
+    : model.name;
 }
 function GenerationEditor({
   label,

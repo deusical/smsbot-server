@@ -17,6 +17,9 @@ func TestBackupRestoreEncryptedExcludedCredentialsAndNoReplay(t *testing.T) {
 	if _, e := source.DB.Exec("INSERT INTO settings VALUES('provider_key','synthetic-key')"); e != nil {
 		t.Fatal(e)
 	}
+	if e := source.SetSecretSetting("provider_compatible", "provider-compatible", []byte(`{"base_url":"https://gateway.example.test/v1","key":"synthetic-compatible-key"}`)); e != nil {
+		t.Fatal(e)
+	}
 	if e := source.SaveMessage("fixture-msg", "fixture-chat", "incoming", "synthetic private body"); e != nil {
 		t.Fatal(e)
 	}
@@ -42,7 +45,7 @@ func TestBackupRestoreEncryptedExcludedCredentialsAndNoReplay(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	if bytes.Contains(plain, []byte("synthetic-source-token")) || bytes.Contains(plain, []byte("synthetic-key")) || bytes.Contains(plain, []byte("credentials")) {
+	if bytes.Contains(plain, []byte("synthetic-source-token")) || bytes.Contains(plain, []byte("synthetic-key")) || bytes.Contains(plain, []byte("synthetic-compatible-key")) || bytes.Contains(plain, []byte("gateway.example.test")) || bytes.Contains(plain, []byte("credentials")) {
 		t.Fatal("backup includes secrets")
 	}
 	target := inboxStore(t)

@@ -46,11 +46,18 @@ export type Generation = {
 export type Model = {
   id: string;
   name: string;
+  provider?: string;
+  remote_id?: string;
   context_length: number;
   parameters: string[];
   has_reasoning: boolean;
   reasoning_mandatory: boolean;
   reasoning_efforts: string[] | null;
+  pricing_known?: boolean;
+};
+export type CompatibleProviderStatus = {
+  base_url: string;
+  configured: boolean;
 };
 export type Command = {
   name: string;

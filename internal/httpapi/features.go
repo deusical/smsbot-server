@@ -14,6 +14,9 @@ func (s *Server) featureRoutes() {
 	s.mux.HandleFunc("POST /api/v1/models/refresh", s.protected(s.refreshModels))
 	s.mux.HandleFunc("GET /api/v1/provider-key", s.protected(s.providerKey))
 	s.mux.HandleFunc("PUT /api/v1/provider-key", s.protected(s.saveProviderKey))
+	s.mux.HandleFunc("GET /api/v1/compatible-provider", s.protected(s.compatibleProvider))
+	s.mux.HandleFunc("PUT /api/v1/compatible-provider", s.protected(s.saveCompatibleProvider))
+	s.mux.HandleFunc("POST /api/v1/models/refresh-compatible", s.protected(s.refreshCompatibleModels))
 	s.mux.HandleFunc("POST /api/v1/jobs/{id}/approve", s.protected(s.approve))
 	s.mux.HandleFunc("POST /api/v1/jobs/{id}/cancel", s.protected(s.cancel))
 	s.mux.HandleFunc("POST /api/v1/playground", s.protected(s.playground))
@@ -91,6 +94,41 @@ func (s *Server) saveProviderKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.json(w, 200, map[string]bool{"configured": s.Engine.ProviderConfigured()})
+}
+func (s *Server) compatibleProvider(w http.ResponseWriter, r *http.Request) {
+	status, err := s.Engine.CompatibleProviderStatus()
+	if err != nil {
+		s.bad(w, 500, "provider_configuration_unavailable")
+		return
+	}
+	s.json(w, 200, status)
+}
+func (s *Server) saveCompatibleProvider(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		BaseURL  string `json:"base_url"`
+		Key      string `json:"key"`
+		ClearKey bool   `json:"clear_key"`
+	}
+	if !s.decode(w, r, &in) {
+		return
+	}
+	if err := s.Engine.SetCompatibleProvider(in.BaseURL, in.Key, in.ClearKey); err != nil {
+		s.bad(w, 400, "invalid_provider_configuration")
+		return
+	}
+	s.compatibleProvider(w, r)
+}
+func (s *Server) refreshCompatibleModels(w http.ResponseWriter, r *http.Request) {
+	if s.Fixture {
+		s.bad(w, 409, "fixture_catalog_is_offline")
+		return
+	}
+	models, err := s.Engine.RefreshCompatibleModels(r.Context())
+	if err != nil {
+		s.bad(w, 502, "compatible_catalog_refresh_failed")
+		return
+	}
+	s.json(w, 200, models)
 }
 func (s *Server) approve(w http.ResponseWriter, r *http.Request) {
 	if err := s.Engine.Approve(r.PathValue("id")); err != nil {

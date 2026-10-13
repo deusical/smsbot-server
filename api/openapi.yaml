@@ -313,6 +313,26 @@ paths:
           description: Access denied
         '409':
           description: State unavailable or expired
+  /models/refresh-compatible:
+    post:
+      description: Explicit authenticated refresh of the configured OpenAI-compatible catalog; unavailable in fixture mode
+      responses:
+        '200':
+          description: Combined cached model catalog with the compatible provider refreshed
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Model'
+        '401':
+          description: Authentication required
+        '403':
+          description: Access denied
+        '409':
+          description: Fixture catalog is offline
+        '502':
+          description: Provider catalog request failed
   /provider-key:
     get:
       description: Owner-only configured flag; key never returned
@@ -371,6 +391,57 @@ paths:
                   maxLength: 4096
               required:
               - key
+      security:
+      - browserSession: []
+  /compatible-provider:
+    get:
+      description: Owner-only compatible API endpoint and configured flag; key never returned
+      responses:
+        '200':
+          description: Safe provider status; key never returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompatibleProviderStatus'
+        '401':
+          description: Authentication required
+        '403':
+          description: Owner required
+      security:
+      - browserSession: []
+    put:
+      description: Owner-only encrypted compatible API endpoint and optional key update
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                base_url:
+                  type: string
+                  maxLength: 2048
+                key:
+                  type: string
+                  maxLength: 4096
+                clear_key:
+                  type: boolean
+              required:
+              - base_url
+      responses:
+        '200':
+          description: Safe provider status; submitted key is never returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompatibleProviderStatus'
+        '400':
+          description: Invalid provider endpoint or key
+        '401':
+          description: Authentication required
+        '403':
+          description: Owner required
       security:
       - browserSession: []
   /jobs/{id}/approve:
@@ -864,6 +935,8 @@ components:
       properties:
         id: *id002
         name: *id002
+        provider: *id002
+        remote_id: *id002
         context_length: *id003
         parameters:
           type: array
@@ -878,6 +951,15 @@ components:
         input_price: *id004
         output_price: *id004
         pricing_known: *id001
+    CompatibleProviderStatus:
+      type: object
+      additionalProperties: false
+      properties:
+        base_url: *id002
+        configured: *id001
+      required:
+      - base_url
+      - configured
     Message:
       type: object
       additionalProperties: false

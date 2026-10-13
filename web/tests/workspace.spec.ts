@@ -58,6 +58,11 @@ async function setup(page: Page) {
   await page.route("**/api/v1/provider-key", (route) =>
     route.fulfill({ json: { configured: false } }),
   );
+  await page.route("**/api/v1/compatible-provider", (route) =>
+    route.fulfill({
+      json: { base_url: "https://api.openai.com/v1", configured: false },
+    }),
+  );
   const descriptor = JSON.parse(
     readFileSync(".test-state/connection.json", "utf8"),
   );

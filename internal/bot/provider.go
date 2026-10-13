@@ -18,6 +18,8 @@ import (
 type Model struct {
 	ID                 string   `json:"id"`
 	Name               string   `json:"name"`
+	Provider           string   `json:"provider,omitempty"`
+	RemoteID           string   `json:"remote_id,omitempty"`
 	ContextLength      int      `json:"context_length"`
 	Parameters         []string `json:"parameters"`
 	HasReasoning       bool     `json:"has_reasoning"`
@@ -92,6 +94,12 @@ func validateModel(g Generation, m Model) error {
 	}
 	return nil
 }
+func remoteModelID(plan store.Plan, m Model) string {
+	if m.RemoteID != "" {
+		return m.RemoteID
+	}
+	return plan.Model
+}
 func (p *OpenRouter) request(ctx context.Context, path, key string, body any) ([]byte, error) {
 	var content io.Reader
 	method := "GET"
@@ -142,7 +150,7 @@ func (p *OpenRouter) Generate(ctx context.Context, key string, plan store.Plan, 
 		}
 	}
 	messages = append(messages, store.Turn{Role: "user", Content: plan.Input})
-	body := map[string]any{"model": plan.Model, "messages": messages, "max_tokens": g.Tokens, "provider": map[string]any{"require_parameters": true}}
+	body := map[string]any{"model": remoteModelID(plan, m), "messages": messages, "max_tokens": g.Tokens, "provider": map[string]any{"require_parameters": true}}
 	if g.Reasoning != "default" {
 		r := map[string]any{"exclude": true}
 		if g.Reasoning == "off" {
@@ -242,7 +250,7 @@ func (p *OpenRouter) Models(ctx context.Context) ([]Model, error) {
 		if !contains(v.Architecture.Input, "text") || !contains(v.Architecture.Output, "text") {
 			continue
 		}
-		m := Model{ID: v.ID, Name: v.Name, ContextLength: v.ContextLength, Parameters: v.Parameters, ReasoningEfforts: []string{}}
+		m := Model{ID: v.ID, Name: v.Name, Provider: "openrouter", RemoteID: v.ID, ContextLength: v.ContextLength, Parameters: v.Parameters, ReasoningEfforts: []string{}}
 		if m.Parameters == nil {
 			m.Parameters = []string{}
 		}
@@ -269,6 +277,14 @@ func (p *OpenRouter) Models(ctx context.Context) ([]Model, error) {
 func (e *Engine) Models() ([]Model, error) {
 	out := []Model{}
 	err := e.Store.GetPublicSetting("model_catalog", &out)
+	for i := range out {
+		if out[i].Provider == "" {
+			out[i].Provider = "openrouter"
+		}
+		if out[i].RemoteID == "" {
+			out[i].RemoteID = out[i].ID
+		}
+	}
 	return out, err
 }
 func (e *Engine) RefreshModels(ctx context.Context) ([]Model, error) {
@@ -276,9 +292,31 @@ func (e *Engine) RefreshModels(ctx context.Context) ([]Model, error) {
 	if err != nil {
 		return nil, err
 	}
-	err = e.Store.SetPublicSetting("model_catalog", models)
-	return models, err
+	for i := range models {
+		models[i].Provider = "openrouter"
+		models[i].RemoteID = models[i].ID
+	}
+	return e.replaceProviderModels("openrouter", models)
 }
+
+func (e *Engine) replaceProviderModels(provider string, models []Model) ([]Model, error) {
+	current, err := e.Models()
+	if err != nil {
+		return nil, err
+	}
+	combined := make([]Model, 0, len(current)+len(models))
+	for _, model := range current {
+		if model.Provider != provider {
+			combined = append(combined, model)
+		}
+	}
+	combined = append(combined, models...)
+	if err = e.Store.SetPublicSetting("model_catalog", combined); err != nil {
+		return nil, err
+	}
+	return combined, nil
+}
+
 func (e *Engine) model(id string) (Model, error) {
 	models, err := e.Models()
 	if err != nil {

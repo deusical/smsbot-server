@@ -11,11 +11,12 @@ import (
 )
 
 type controlledProvider struct {
-	started chan store.Plan
-	release chan struct{}
-	calls   atomic.Int32
-	result  Result
-	err     error
+	started  chan store.Plan
+	release  chan struct{}
+	calls    atomic.Int32
+	result   Result
+	err      error
+	deadline time.Time
 }
 
 func (p *controlledProvider) Models(context.Context) ([]Model, error) {
@@ -23,6 +24,9 @@ func (p *controlledProvider) Models(context.Context) ([]Model, error) {
 }
 func (p *controlledProvider) Generate(ctx context.Context, key string, plan store.Plan, history []store.Turn, m Model) (Result, error) {
 	p.calls.Add(1)
+	if deadline, ok := ctx.Deadline(); ok {
+		p.deadline = deadline
+	}
 	if p.started != nil {
 		p.started <- plan
 	}
@@ -284,6 +288,23 @@ func TestConsentRemovalInvalidatesQueuedContext(t *testing.T) {
 		t.Fatal("revoked context persisted")
 	}
 }
+func TestDispatchBoundsProviderCallContext(t *testing.T) {
+	e, _ := setup(t)
+	arm(t, e)
+	zero := 0.0
+	provider := &controlledProvider{result: Result{Text: "Synthetic answer", Cost: &zero}}
+	e.Provider = provider
+	configureAI(t, e, false, false)
+	acceptAsk(t, e)
+	started := time.Now()
+	if err := e.Dispatch(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if provider.deadline.IsZero() || provider.deadline.Before(started.Add(90*time.Second)) || provider.deadline.After(started.Add(96*time.Second)) {
+		t.Fatalf("provider call deadline was not bounded near 95 seconds: %v", provider.deadline)
+	}
+}
+
 func TestProviderFailureNeverSubmits(t *testing.T) {
 	e, f := setup(t)
 	arm(t, e)

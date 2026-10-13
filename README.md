@@ -6,7 +6,7 @@ A self-hosted personal command bot for a paired Google Messages phone, with a Re
 
 - Authenticated owner dashboard and revocable Android client credentials.
 - Individual conversation enrollment using protocol participant IDs; groups excluded.
-- Built-in checks/reset commands and custom fixed/AI commands through OpenRouter; encrypted immutable plans, duplicate protection, pause, approvals, cancellation and stale-command rejection.
+- Built-in checks/reset commands and custom fixed/AI commands through OpenRouter or an owner-configured OpenAI-compatible endpoint; encrypted immutable plans, duplicate protection, pause, approvals, cancellation and stale-command rejection.
 - Cached model catalog, profiles, per-model reasoning/temperature controls, scoped opt-in memory, quiet hours, request limits and reported-spend thresholds.
 - Offline playground, disabled recipe imports (including Android command packs), retained text history/search/pagination, explicit phone-text import and manual compose.
 - Retention, encrypted offline backup/restore, and optional direct TLS or exact-origin private HTTPS proxy support.
@@ -96,9 +96,9 @@ AGPL-3.0-or-later. The paired adapter uses [mautrix/gmessages libgm](https://git
 
 ## Configure the server bot
 
-In web Commands, create fixed replies with `{input}` or AI instructions; select a model/profile, optional memory, restrictions and approval. In Settings, refresh the public OpenRouter catalog explicitly, select per-model generation preferences and enter the provider key in the owner-only form. Keys are encrypted and never returned to either client. Fixture AI uses a deterministic synthetic provider and requires no real key.
+In web Commands, create fixed replies with `{input}` or AI instructions; select a model/profile, optional memory, restrictions and approval. In Settings, refresh the public OpenRouter catalog or configure an OpenAI-compatible API base URL and access key, then refresh that endpoint's model catalog. The compatible endpoint can be OpenAI or a local gateway that implements `/models` and `/chat/completions`. Keys and endpoint settings are encrypted and never returned with a key to either client. Fixture AI uses a deterministic synthetic provider and requires no real key.
 
-AI input and opted-in context are sent to OpenRouter. Generation parameters are validated against cached capabilities and enforced through `require_parameters`; model-default reasoning/temperature are omitted. New default-model selections seed Low when advertised; explicit/legacy preferences remain intact. Queued inputs, instructions, context and generation controls are snapshots. Revoking memory or resetting it invalidates queued context and prevents an in-flight answer from repopulating deleted memory.
+AI input and opted-in context are sent to the provider selected by the model: OpenRouter or the configured compatible endpoint. Generation parameters are validated against cached model capabilities; OpenRouter requests also enforce `require_parameters`. Model-default reasoning/temperature are omitted. New default-model selections seed Low when advertised; explicit/legacy preferences remain intact. Compatible catalogs without pricing metadata are blocked while the daily AI budget is enabled, because the service cannot reserve an estimated cost; set the budget to 0 only if you want to rely on the provider's own spending controls. Queued inputs, instructions, context and generation controls are snapshots. Revoking memory or resetting it invalidates queued context and prevents an in-flight answer from repopulating deleted memory.
 
 Approvals and queued plans expire after two minutes in this service. Requests are counted globally in rolling-hour/UTC-day limits, including manual messages. Quiet hours withhold requests rather than deferring them. The daily monetary control is a reported-spend threshold with a conservative pre-call estimate, not a provider billing guarantee; missing pricing/unknown spend blocks further AI when the threshold is enabled. Zero disables that threshold. No automatic provider retries are added, and uncertain message submissions are never retried.
 

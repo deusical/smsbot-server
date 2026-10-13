@@ -57,6 +57,17 @@ async function setup(page: Page) {
   await page.route("**/api/v1/provider-key", (route) =>
     route.fulfill({ json: { configured: route.request().method() === "PUT" } }),
   );
+  await page.route("**/api/v1/compatible-provider", async (route) => {
+    if (route.request().method() === "PUT") {
+      const body = route.request().postDataJSON();
+      return route.fulfill({
+        json: { base_url: body.base_url, configured: !!body.key },
+      });
+    }
+    return route.fulfill({
+      json: { base_url: "https://api.openai.com/v1", configured: false },
+    });
+  });
   const descriptor = JSON.parse(
     readFileSync(".test-state/connection.json", "utf8"),
   );
@@ -171,6 +182,68 @@ test("settings preserve model defaults, provider key stays transient, recipe imp
     });
   await expect(page.getByRole("status")).toContainText("Commands are disabled");
   expect(imported).toEqual({ configuration: initial });
+});
+
+test("compatible endpoint key is transient and catalog refresh is explicit", async ({
+  page,
+}) => {
+  await setup(page);
+  let submitted: unknown;
+  let refreshes = 0;
+  await page.route("**/api/v1/compatible-provider", async (route) => {
+    if (route.request().method() !== "PUT") return route.fallback();
+    submitted = route.request().postDataJSON();
+    const body = submitted as { base_url: string; key: string };
+    return route.fulfill({
+      json: { base_url: body.base_url, configured: !!body.key },
+    });
+  });
+  await page.route("**/api/v1/models/refresh-compatible", (route) => {
+    refreshes++;
+    return route.fulfill({
+      json: [
+        ...models,
+        {
+          id: "compatible:gemini-3.8-flash-high",
+          name: "gemini-3.8-flash-high",
+          provider: "compatible",
+          remote_id: "gemini-3.8-flash-high",
+          context_length: 8192,
+          parameters: [],
+          has_reasoning: false,
+          reasoning_mandatory: false,
+          reasoning_efforts: [],
+        },
+      ],
+    });
+  });
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page
+    .getByLabel("Compatible API base URL")
+    .fill("http://127.0.0.1:8317/v1");
+  await page
+    .getByLabel("Compatible API access key")
+    .fill("SYNTHETIC_ACCESS_KEY");
+  await page.getByRole("button", { name: "Save compatible provider" }).click();
+  await expect(
+    page.getByLabel("Compatible API access key"),
+  ).toHaveValue("");
+  expect(submitted).toEqual({
+    base_url: "http://127.0.0.1:8317/v1",
+    key: "SYNTHETIC_ACCESS_KEY",
+  });
+  await page.getByRole("button", { name: "Refresh compatible catalog" }).click();
+  await expect(page.getByText("Compatible model catalog refreshed.")).toBeVisible();
+  expect(refreshes).toBe(1);
+  await expect(page.getByLabel("Search default model")).toBeVisible();
+  const options = await page.getByLabel("Default model").locator("option").allTextContents();
+  expect(options).toContain("gemini-3.8-flash-high · Compatible API");
+  expect(
+    await page.evaluate(() => ({
+      local: localStorage.length,
+      session: sessionStorage.length,
+    })),
+  ).toEqual({ local: 0, session: 0 });
 });
 
 test("history search and pagination preserve messages, compose queues explicitly", async ({

@@ -74,6 +74,43 @@ func TestProviderKeyOwnerOnlyAndNoReadback(t *testing.T) {
 		t.Fatal("fixture contacted catalog")
 	}
 }
+func TestCompatibleProviderConfigurationIsOwnerOnlyAndNeverReturnsKey(t *testing.T) {
+	s := apiSetup(t)
+	if req(s, "GET", "/api/v1/compatible-provider", "", "fixture-client", "").Code != 403 {
+		t.Fatal("client read compatible provider settings")
+	}
+	if req(s, "PUT", "/api/v1/compatible-provider", `{"base_url":"https://gateway.example.test/v1","key":"SYNTHETIC_KEY"}`, "fixture-client", "").Code != 403 {
+		t.Fatal("client changed compatible provider settings")
+	}
+	if req(s, "POST", "/api/v1/models/refresh-compatible", `{}`, "fixture-client", "").Code != 403 {
+		t.Fatal("client initiated a provider request using the owner key")
+	}
+	login := req(s, "POST", "/api/v1/login", `{"token":"fixture-owner"}`, "", "http://localhost:8787")
+	cookie := login.Result().Cookies()[0]
+	request := func(method, path, body string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(method, "http://localhost:8787"+path, bytes.NewBufferString(body))
+		r.AddCookie(cookie)
+		r.Header.Set("Origin", "http://localhost:8787")
+		if body != "" {
+			r.Header.Set("Content-Type", "application/json")
+		}
+		w := httptest.NewRecorder()
+		s.ServeHTTP(w, r)
+		return w
+	}
+	w := request("PUT", "/api/v1/compatible-provider", `{"base_url":"http://127.0.0.1:8317/v1","key":"SYNTHETIC_KEY"}`)
+	if w.Code != 200 || bytes.Contains(w.Body.Bytes(), []byte("SYNTHETIC_KEY")) || !bytes.Contains(w.Body.Bytes(), []byte(`"configured":true`)) {
+		t.Fatalf("compatible provider save leaked or failed: %d %s", w.Code, w.Body.String())
+	}
+	w = request("GET", "/api/v1/compatible-provider", "")
+	if w.Code != 200 || bytes.Contains(w.Body.Bytes(), []byte("SYNTHETIC_KEY")) {
+		t.Fatal("compatible provider status returned the saved key")
+	}
+	w = request("PUT", "/api/v1/compatible-provider", `{"base_url":"http://gateway.example.test/v1","key":"SYNTHETIC_KEY"}`)
+	if w.Code != 400 || bytes.Contains(w.Body.Bytes(), []byte("SYNTHETIC_KEY")) {
+		t.Fatal("insecure external endpoint accepted or echoed")
+	}
+}
 func TestHistoryImportNeverCreatesJobs(t *testing.T) {
 	s := apiSetup(t)
 	if req(s, "POST", "/api/v1/conversations/demo-chat/history/import", `{"cursor":""}`, "fixture-client", "").Code != 409 {
