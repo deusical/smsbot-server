@@ -28,6 +28,9 @@ paths:
                 token:
                   type: string
                   writeOnly: true
+                remember:
+                  type: boolean
+                  description: Keep the session until sign-out or revoke-all instead of 12 hours; the cookie renews while in use.
       responses:
         '200':
           description: HttpOnly owner session established
@@ -38,6 +41,14 @@ paths:
       responses:
         '200':
           description: Session revoked
+  /sessions/revoke:
+    post:
+      description: Owner only. Signs out every browser session, including the caller's.
+      responses:
+        '200':
+          description: All browser sessions revoked
+        '403':
+          description: Client credentials cannot revoke sessions
   /state:
     get:
       responses:

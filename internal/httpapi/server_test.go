@@ -105,6 +105,61 @@ func TestFailedLoginsDoNotLockOutAndWhitespaceIsTrimmed(t *testing.T) {
 	}
 }
 
+func TestRememberedLoginNeverExpiresAndRevokesEverywhere(t *testing.T) {
+	s := apiSetup(t)
+	short := req(s, "POST", "/api/v1/login", `{"token":"fixture-owner"}`, "", s.Origin).Result().Cookies()[0]
+	long := req(s, "POST", "/api/v1/login", `{"token":"fixture-owner","remember":true}`, "", s.Origin).Result().Cookies()[0]
+	if short.MaxAge != 12*3600 || long.MaxAge != 400*24*3600 {
+		t.Fatal(short.MaxAge, long.MaxAge)
+	}
+	if expires, ok := s.Engine.Store.SessionExpiry(long.Value); !ok || expires != 0 {
+		t.Fatal("remembered session expires", expires)
+	}
+	get := func(c *http.Cookie) *httptest.ResponseRecorder {
+		r := httptest.NewRequest("GET", s.Origin+"/api/v1/state", nil)
+		r.AddCookie(c)
+		w := httptest.NewRecorder()
+		s.ServeHTTP(w, r)
+		return w
+	}
+	// Use renews only the remembered cookie.
+	if w := get(long); w.Code != 200 || len(w.Result().Cookies()) != 1 || w.Result().Cookies()[0].MaxAge != 400*24*3600 {
+		t.Fatal(w.Code, w.Result().Cookies())
+	}
+	if w := get(short); w.Code != 200 || len(w.Result().Cookies()) != 0 {
+		t.Fatal(w.Code, w.Result().Cookies())
+	}
+	if w := req(s, "POST", "/api/v1/sessions/revoke", "", "fixture-client", ""); w.Code != 403 {
+		t.Fatal("client revoked owner sessions", w.Code)
+	}
+	// Signing out from a remembered session must not also renew its cookie.
+	r := httptest.NewRequest("POST", s.Origin+"/api/v1/sessions/revoke", nil)
+	r.AddCookie(long)
+	r.Header.Set("Origin", s.Origin)
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, r)
+	if cs := w.Result().Cookies(); w.Code != 200 || len(cs) != 1 || cs[0].MaxAge != -1 {
+		t.Fatal(w.Code, cs)
+	}
+	if get(long).Code != 401 || get(short).Code != 401 {
+		t.Fatal("sessions survived revoke")
+	}
+}
+
+func TestInstallableAppShellHeaders(t *testing.T) {
+	s := apiSetup(t)
+	w := req(s, "GET", "/manifest.webmanifest", "", "", "")
+	if w.Code != 200 || w.Header().Get("Content-Type") != "application/manifest+json" || w.Header().Get("Cache-Control") != "no-cache" {
+		t.Fatal(w.Code, w.Header())
+	}
+	if w := req(s, "GET", "/sw.js", "", "", ""); w.Code != 200 || w.Header().Get("Cache-Control") != "no-cache" {
+		t.Fatal(w.Code, w.Header())
+	}
+	if w := req(s, "GET", "/api/v1/state", "", "fixture-client", ""); w.Header().Get("Cache-Control") != "no-store" {
+		t.Fatal(w.Header())
+	}
+}
+
 func TestRevokedBearerDoesNotFallBackToOwnerCookie(t *testing.T) {
 	s := apiSetup(t)
 	w := req(s, "POST", "/api/v1/login", `{"token":"fixture-owner"}`, "", s.Origin)

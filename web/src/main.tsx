@@ -14,7 +14,7 @@ import { Confirmation } from "./Confirmation";
 import { ConversationsPage } from "./Conversations";
 import { Icon } from "./Icon";
 import { SettingsPage } from "./Settings";
-import { Avatar } from "./ui";
+import { Avatar, Switch } from "./ui";
 import { useWorkspace } from "./workspace";
 import "./style.css";
 
@@ -38,13 +38,17 @@ function App() {
     [state, setState] = useState<State | null>(null);
   const [signedIn, setSignedIn] = useState(false),
     [token, setToken] = useState(""),
+    // An installed home-screen app should stay signed in like any phone app.
+    [remember, setRemember] = useState(
+      () => !!window.matchMedia?.("(display-mode: standalone)")?.matches,
+    ),
     [busy, setBusy] = useState(false),
     [error, setError] = useState("");
   const [conversations, setConversations] = useState<Conversation[]>([]),
     [jobs, setJobs] = useState<Job[]>([]);
   const [selected, setSelected] = useState("");
   const [theme, setTheme] = useState<"dark" | "light">(() =>
-    window.matchMedia?.("(prefers-color-scheme: light)").matches
+    window.matchMedia?.("(prefers-color-scheme: light)")?.matches
       ? "light"
       : "dark",
   );
@@ -67,6 +71,10 @@ function App() {
   }, []);
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
+    // Tints the phone's status bar to match.
+    document
+      .querySelector('meta[name="theme-color"]')
+      ?.setAttribute("content", theme === "dark" ? "#17141f" : "#f5f3fa");
   }, [theme]);
   useEffect(() => {
     if (!dirty) return;
@@ -176,8 +184,18 @@ function App() {
   }
   useEffect(() => {
     void refresh();
-    const timer = setInterval(() => void refresh(), 3000);
-    return () => clearInterval(timer);
+    // A backgrounded phone app shouldn't poll; catch up as soon as it returns.
+    const timer = setInterval(() => {
+      if (document.visibilityState !== "hidden") void refresh();
+    }, 3000);
+    const visible = () => {
+      if (document.visibilityState === "visible") void refresh();
+    };
+    document.addEventListener("visibilitychange", visible);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", visible);
+    };
   }, []);
   async function act(fn: () => Promise<unknown>, refreshAfter = true) {
     setBusy(true);
@@ -247,24 +265,39 @@ function App() {
             onSubmit={(e) => {
               e.preventDefault();
               void act(async () => {
-                await api("/login", "POST", { token });
+                await api("/login", "POST", { token, remember });
                 sessionRevision.current++;
                 setToken("");
               });
             }}
           >
+            {/* Lets password managers file the credential under a name. */}
+            <input
+              type="text"
+              name="username"
+              autoComplete="username"
+              value="SmsBot owner"
+              readOnly
+              hidden
+            />
             <label htmlFor="owner" className="sr-only">
               Owner credential
             </label>
             <input
               id="owner"
+              name="password"
               type="password"
-              autoComplete="off"
+              autoComplete="current-password"
               autoFocus
               placeholder="Owner credential"
               value={token}
               onChange={(e) => setToken(e.target.value)}
               required
+            />
+            <Switch
+              label="Keep me signed in"
+              checked={remember}
+              onChange={setRemember}
             />
             <button className="primary wide" disabled={busy || !token}>
               {busy ? "Signing in…" : "Sign in"}
@@ -277,7 +310,7 @@ function App() {
           )}
           <small className="muted login-foot">
             <Icon name="shield" size={13} />
-            The credential isn’t stored in this browser.
+            Only a revocable session is kept, never the credential.
           </small>
         </main>
       </div>
@@ -760,3 +793,10 @@ function Pulse({ jobs }: { jobs: Job[] }) {
 }
 
 createRoot(document.getElementById("root")!).render(<App />);
+
+// Makes the dashboard installable and lets it open offline. Browsers only
+// allow this on HTTPS or localhost; elsewhere it is skipped.
+if ("serviceWorker" in navigator && window.isSecureContext && import.meta.env.PROD)
+  window.addEventListener("load", () => {
+    void navigator.serviceWorker.register("/sw.js").catch(() => {});
+  });

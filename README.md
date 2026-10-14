@@ -1,6 +1,6 @@
 # SmsBot Server
 
-A self-hosted personal command bot for a paired Google Messages phone, with a React/TypeScript dashboard and the native SmsBot Android client. **Development milestone, not a production release.**
+A self-hosted personal command bot for a paired Google Messages phone, with a React/TypeScript dashboard that also installs as an app on your phone. **Development milestone, not a production release.**
 
 ## Implemented
 
@@ -14,9 +14,10 @@ A self-hosted personal command bot for a paired Google Messages phone, with a Re
 - Persisted outbound transaction IDs; interrupted submissions become uncertain and are not automatically retried. Correlated Google status events can advance submitted/delivered/read state.
 - Explicit offline fixture transport, with synthetic conversations and no Google or provider connections.
 - Responsive web dashboard that follows the system light/dark theme: live/paused status with a 24-hour request chart, inline approvals, a messenger-style conversation view with Enter-to-send compose, a command studio (list + editor + offline preview), searchable model picker with favorites, sectioned settings, and drafts that survive navigation behind one save bar.
+- Installable phone app: the same dashboard works on phones (bottom navigation, full-screen conversations, safe-area aware) and installs to the home screen over HTTPS, for example through [Tailscale Serve](docs/HOSTING.md#tailscale-on-an-always-on-host). Optional stay-signed-in sessions (revocable everywhere); API data is never cached offline.
 - Opt-in paired transport and local cookie/emoji pairing helper, pinned to the tested libgm revision.
 
-The Android app's Settings > Self-hosted server connects with a revocable client credential. Server mode disables local SMS/notification automation, cancels eligible queued work and leaves local mode paused when restored. The Android app remains a native Kotlin/Compose interface.
+The web dashboard is the supported phone client. The separate native Android app's server mode still works with a revocable client credential, but it is no longer developed and does not track new dashboard features.
 
 ## Not implemented or verified yet
 
@@ -68,7 +69,11 @@ This offline command reads the clipboard through stdin, takes the service state 
 
 Clear your clipboard locally, close the private window without signing out, and run `.\start.ps1 -Transport Google`. Leave automation paused. Successful cookie replacement does not prove authentication works or explain a previous 401; paused startup checks phone readiness. Do not use `-Pair` to overwrite an existing pairing. If startup still fails, preserve the session and its backup for further diagnosis.
 
-## Android development connection
+## Phone access
+
+Run the service on an always-on host and open it from your phone through a private HTTPS proxy; see [Tailscale on an always-on host](docs/HOSTING.md#tailscale-on-an-always-on-host). Install it from the browser menu (Chrome: **Install app**; Safari: Share > **Add to Home Screen**).
+
+## Legacy Android client connection
 
 On a **disposable emulator**, install the Android debug APK and use:
 
@@ -76,7 +81,7 @@ On a **disposable emulator**, install the Android debug APK and use:
 adb -s YOUR_EMULATOR_SERIAL reverse tcp:8787 tcp:8787
 ```
 
-Create a client credential in web **Settings > Devices**, then enter `http://127.0.0.1:8787` and that credential in Android Settings > Self-hosted server. Debug builds permit loopback HTTP only. Release clients require HTTPS. The server currently binds only to loopback; real remote mobile access requires a separately designed TLS/private-access deployment slice. No permanent administrator key is embedded in Android.
+Create a client credential in web **Settings > Devices**, then enter `http://127.0.0.1:8787` and that credential in Android Settings > Self-hosted server. Debug builds permit loopback HTTP only. Release clients require HTTPS. No permanent administrator key is embedded in Android.
 
 ## Validation
 

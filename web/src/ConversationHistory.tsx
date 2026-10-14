@@ -588,6 +588,7 @@ export function ConversationHistory({
             rows={1}
             maxLength={24000}
             aria-label="Message"
+            enterKeyHint="enter"
             placeholder={`Text ${conversation.label}`}
             value={text}
             onChange={(e) => {
@@ -595,10 +596,12 @@ export function ConversationHistory({
               setSendError("");
             }}
             onKeyDown={(e) => {
+              // On touch keyboards Enter adds a line; the send button sends.
               if (
                 e.key === "Enter" &&
                 !e.shiftKey &&
-                !e.nativeEvent.isComposing
+                !e.nativeEvent.isComposing &&
+                !window.matchMedia?.("(pointer: coarse)")?.matches
               ) {
                 e.preventDefault();
                 send();
@@ -614,7 +617,9 @@ export function ConversationHistory({
           </button>
         </div>
         <div className="composer-meta">
-          <small>Enter to send, Shift+Enter for a new line</small>
+          <small className="enter-hint">
+            Enter to send, Shift+Enter for a new line
+          </small>
           {text.length > 600 && (
             <small>{Array.from(text).length.toLocaleString()} / 12,000</small>
           )}

@@ -641,6 +641,25 @@ function DevicesSection({
         </dl>
       </Group>
       <Group
+        title="Browser sessions"
+        description="Signed-in browsers and installed phone apps stay signed in until they sign out. If a phone is lost, sign out everywhere, including here."
+      >
+        <button
+          type="button"
+          className="danger"
+          disabled={busy}
+          onClick={() =>
+            void act(async () => {
+              await api("/sessions/revoke", "POST");
+              window.location.reload();
+            }, false)
+          }
+        >
+          <Icon name="logout" size={16} />
+          Sign out everywhere
+        </button>
+      </Group>
+      <Group
         title="Android app"
         description="Connect the SmsBot Android app to this server. Devices can pause and control the bot, but can’t manage keys or other devices."
       >

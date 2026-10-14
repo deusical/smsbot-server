@@ -304,6 +304,16 @@ func (s *Store) Credential(token, kind string) bool {
 	e := s.DB.QueryRow("SELECT expires FROM credentials WHERE hash=? AND kind=?", Hash(token), kind).Scan(&expires)
 	return e == nil && (expires == 0 || expires > time.Now().Unix())
 }
+// SessionExpiry reports a live browser session's expiry; 0 means it never expires.
+func (s *Store) SessionExpiry(token string) (int64, bool) {
+	var expires int64
+	e := s.DB.QueryRow("SELECT expires FROM credentials WHERE hash=? AND kind='session'", Hash(token)).Scan(&expires)
+	return expires, e == nil && (expires == 0 || expires > time.Now().Unix())
+}
+func (s *Store) RevokeSessions() error {
+	_, e := s.DB.Exec("DELETE FROM credentials WHERE kind='session'")
+	return e
+}
 func (s *Store) Revoke(hash string) error {
 	_, e := s.DB.Exec("DELETE FROM credentials WHERE hash=? AND kind='client'", hash)
 	return e

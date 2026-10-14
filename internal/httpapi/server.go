@@ -19,6 +19,11 @@ import (
 //go:embed all:assets
 var assets embed.FS
 
+func init() {
+	// Not every OS MIME table knows the web app manifest type, and nosniff is on.
+	_ = mime.AddExtensionType(".webmanifest", "application/manifest+json")
+}
+
 type Server struct {
 	Engine     *bot.Engine
 	Origin     string
@@ -32,6 +37,7 @@ func New(e *bot.Engine, origin string, fixture bool) *Server {
 	s.mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { s.json(w, 200, map[string]string{"status": "running"}) })
 	s.mux.HandleFunc("POST /api/v1/login", s.login)
 	s.mux.HandleFunc("POST /api/v1/logout", s.protected(s.logout))
+	s.mux.HandleFunc("POST /api/v1/sessions/revoke", s.protected(s.revokeSessions))
 	s.mux.HandleFunc("GET /api/v1/state", s.protected(s.state))
 	s.mux.HandleFunc("POST /api/v1/pause", s.protected(s.pause))
 	s.mux.HandleFunc("GET /api/v1/conversations", s.protected(s.conversations))
@@ -58,8 +64,14 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	w.Header().Set("X-Frame-Options", "DENY")
 	w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'")
-	if strings.HasPrefix(r.URL.Path, "/api/") {
+	switch {
+	case strings.HasPrefix(r.URL.Path, "/api/"):
 		w.Header().Set("Cache-Control", "no-store")
+	case strings.HasPrefix(r.URL.Path, "/assets/"):
+		// Vite fingerprints bundle names, so they never change in place.
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	default:
+		w.Header().Set("Cache-Control", "no-cache")
 	}
 	if r.Method != "GET" && r.Method != "HEAD" && r.Header.Get("Origin") != "" && r.Header.Get("Origin") != s.Origin {
 		s.json(w, 403, map[string]string{"error": "invalid_origin"})
@@ -114,9 +126,20 @@ func (s *Server) protected(fn http.HandlerFunc) http.HandlerFunc {
 		}
 		if !isClient {
 			c, e := r.Cookie("smsbot_session")
-			if e != nil || !s.Engine.Store.Credential(c.Value, "session") {
+			if e != nil {
 				s.bad(w, 401, "authentication_required")
 				return
+			}
+			expires, ok := s.Engine.Store.SessionExpiry(c.Value)
+			if !ok {
+				s.bad(w, 401, "authentication_required")
+				return
+			}
+			// Remembered sessions never expire server-side; renew the cookie on
+			// reads so the browser's own cap (about 400 days) slides while it is
+			// in use. Writes such as sign-out must not race a renewal.
+			if expires == 0 && r.Method == "GET" {
+				s.sessionCookie(w, c.Value, rememberedCookieAge)
 			}
 			if r.Method != "GET" && r.Header.Get("Origin") != s.Origin {
 				s.bad(w, 403, "origin_required")
@@ -124,7 +147,7 @@ func (s *Server) protected(fn http.HandlerFunc) http.HandlerFunc {
 			}
 		}
 		// Client credentials can control the bot, but cannot grant/revoke other credentials.
-		if isClient && (strings.HasPrefix(r.URL.Path, "/api/v1/clients") || strings.HasPrefix(r.URL.Path, "/api/v1/inbox/") || r.URL.Path == "/api/v1/provider-key" || r.URL.Path == "/api/v1/compatible-provider" || r.URL.Path == "/api/v1/models/refresh-compatible") {
+		if isClient && (strings.HasPrefix(r.URL.Path, "/api/v1/clients") || strings.HasPrefix(r.URL.Path, "/api/v1/sessions/") || strings.HasPrefix(r.URL.Path, "/api/v1/inbox/") || r.URL.Path == "/api/v1/provider-key" || r.URL.Path == "/api/v1/compatible-provider" || r.URL.Path == "/api/v1/models/refresh-compatible") {
 			s.bad(w, 403, "owner_required")
 			return
 		}
@@ -133,7 +156,8 @@ func (s *Server) protected(fn http.HandlerFunc) http.HandlerFunc {
 }
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Token string `json:"token"`
+		Token    string `json:"token"`
+		Remember bool   `json:"remember"`
 	}
 	if !s.decode(w, r, &in) {
 		return
@@ -143,13 +167,38 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		s.bad(w, 401, "invalid_credentials")
 		return
 	}
+	// Remembered sessions last until signed out or revoked everywhere.
 	token := store.ID() + store.ID()
-	if e := s.Engine.Store.AddCredential(token, "Browser", "session", time.Now().Add(12*time.Hour).Unix()); e != nil {
+	var expires int64
+	age := int(sessionLifetime.Seconds())
+	if in.Remember {
+		age = rememberedCookieAge
+	} else {
+		expires = time.Now().Add(sessionLifetime).Unix()
+	}
+	if e := s.Engine.Store.AddCredential(token, "Browser", "session", expires); e != nil {
 		s.bad(w, 500, "storage_error")
 		return
 	}
-	http.SetCookie(w, &http.Cookie{Name: "smsbot_session", Value: token, Path: "/api/v1", HttpOnly: true, Secure: strings.HasPrefix(s.Origin, "https://"), SameSite: http.SameSiteStrictMode, MaxAge: 43200})
+	s.sessionCookie(w, token, age)
 	s.json(w, 200, map[string]bool{"authenticated": true})
+}
+
+const (
+	sessionLifetime     = 12 * time.Hour
+	rememberedCookieAge = 400 * 24 * 3600
+)
+
+func (s *Server) sessionCookie(w http.ResponseWriter, token string, age int) {
+	http.SetCookie(w, &http.Cookie{Name: "smsbot_session", Value: token, Path: "/api/v1", HttpOnly: true, Secure: strings.HasPrefix(s.Origin, "https://"), SameSite: http.SameSiteStrictMode, MaxAge: age})
+}
+func (s *Server) revokeSessions(w http.ResponseWriter, r *http.Request) {
+	if e := s.Engine.Store.RevokeSessions(); e != nil {
+		s.bad(w, 500, "storage_error")
+		return
+	}
+	s.sessionCookie(w, "", -1)
+	s.json(w, 200, map[string]bool{"authenticated": false})
 }
 func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 	if c, e := r.Cookie("smsbot_session"); e == nil {
@@ -159,7 +208,7 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	http.SetCookie(w, &http.Cookie{Name: "smsbot_session", Path: "/api/v1", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteStrictMode})
+	s.sessionCookie(w, "", -1)
 	s.json(w, 200, map[string]bool{"authenticated": false})
 }
 func (s *Server) state(w http.ResponseWriter, r *http.Request) {

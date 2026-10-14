@@ -1,17 +1,31 @@
 # Private hosting and phone access
 
-The default listener is `127.0.0.1:8787` over HTTP for local development. Android release clients require HTTPS. A remote phone needs a trusted HTTPS certificate and network access to the host; it cannot connect to the host's loopback address directly.
+The default listener is `127.0.0.1:8787` over HTTP for local development. The installable phone app and Android release clients require HTTPS. A remote phone needs a trusted HTTPS certificate and network access to the host; it cannot connect to the host's loopback address directly.
 
 For private access, run the service on loopback and put an authenticated private HTTPS proxy in front of it. Set `--origin=https://YOUR_PRIVATE_HOST` to the exact browser/Android URL origin, including a nondefault port if used. The proxy must preserve that exact Host header when forwarding to `127.0.0.1:8787`. Browser mutations must send the same Origin. The service ignores Forwarded/X-Forwarded-* headers and never uses them to decide host, origin or authentication. Keep the backend loopback-only and limit the proxy's users to the owner’s intended devices. Application login and revocable Android credentials remain required.
 
-One optional private proxy is [Tailscale Serve](https://tailscale.com/docs/features/tailscale-serve), which shares a local service within a tailnet and supports HTTPS. Follow its official setup and access-control instructions locally. This project does not configure a tailnet, publish a public tunnel, or deploy a proxy. Verify the proxy preserves Host; a mismatched hostname deliberately receives `invalid_host`.
+## Tailscale on an always-on host
 
-```sh
-smsbot --data=/srv/smsbot/state --key=/srv/smsbot-vault/master.key \
-  --listen=127.0.0.1:8787 --origin=https://YOUR_PRIVATE_HOST
-```
+[Tailscale Serve](https://tailscale.com/docs/features/tailscale-serve) is the recommended private proxy: it gives the host a trusted HTTPS name inside your tailnet, so phones on the tailnet can reach the dashboard and install it as an app. Nothing is published to the internet.
 
-For direct TLS, supply both `--tls-cert` and `--tls-key`. A nonloopback listener requires direct TLS and an explicit HTTPS origin. Certificates must cover the origin hostname and chain to a CA trusted by the phone/browser. Do not disable Android certificate validation. Protect the private key and allow only intended private-network sources in the host firewall.
+1. In the Tailscale admin console, enable MagicDNS and HTTPS certificates. Note the host's name, for example `YOUR_HOST.YOUR_TAILNET.ts.net`.
+2. Start the service on loopback with that exact origin:
+
+   ```sh
+   smsbot --data=/srv/smsbot/state --key=/srv/smsbot-vault/master.key      --listen=127.0.0.1:8787 --origin=https://YOUR_HOST.YOUR_TAILNET.ts.net
+   ```
+
+3. Share it inside the tailnet: `tailscale serve --bg 8787`. Do not use `tailscale funnel`, which makes it public.
+4. On the phone (signed in to Tailscale), open `https://YOUR_HOST.YOUR_TAILNET.ts.net` and sign in with the owner credential. Turn on **Keep me signed in** for a personal phone. If the phone is lost, use **Sign out everywhere** in Settings > Devices (and remove it from your tailnet).
+5. Install it: in Chrome on Android, open the menu and choose **Install app** (or **Add to Home screen**). In Safari on iPhone, tap Share, then **Add to Home Screen**.
+
+Serve preserves the Host header, which the service checks exactly; if the dashboard answers `invalid host`, the `--origin` does not match the name in the browser. Use tailnet access controls to limit who can reach the host. The owner login remains required.
+
+The installed app caches only the dashboard's static files so it opens instantly and offline. API responses, which carry message text, are never cached. Signing out revokes the session on the server.
+
+## Direct TLS
+
+Supply both `--tls-cert` and `--tls-key`. A nonloopback listener requires direct TLS and an explicit HTTPS origin. Certificates must cover the origin hostname and chain to a CA trusted by the phone/browser. Do not disable Android certificate validation. Protect the private key and allow only intended private-network sources in the host firewall.
 
 ```sh
 smsbot --data=/srv/smsbot/state --key=/srv/smsbot-vault/master.key \
@@ -27,4 +41,4 @@ Build locally with `docker build -t smsbot-local .`. For a disposable fixture re
 
 Every startup pauses automation. Stop gracefully with Ctrl+C, SIGTERM or `docker stop`; wait for the service to exit before backups, cookie updates or restarts. Configure restart supervision deliberately: a restart restores connectivity but does not reenable replies. Review activity and uncertainty before reenabling. No uncertain outbound submission is automatically retried.
 
-Final personal-phone acceptance requires the owner to configure the private network/certificate, create a client credential in Settings, enter the exact HTTPS origin and credential on Android, and verify readiness and a designated conversation. Those device, certificate, and live transport checks are separate from synthetic container validation and remain pending until actually performed.
+Final personal-phone acceptance requires the owner to configure the private network/certificate, open the exact HTTPS origin on the phone, install and sign in to the dashboard, and verify readiness and a designated conversation. Those device, certificate, and live transport checks are separate from synthetic container validation and remain pending until actually performed.

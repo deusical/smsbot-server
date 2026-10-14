@@ -54,7 +54,7 @@ test("authenticated command journey and credential revocation", async ({
     headers: { Authorization: `Bearer ${token}` },
   });
   expect(after.status()).toBe(401);
-  await page.getByRole("button", { name: "Sign out" }).click();
+  await page.getByRole("button", { name: "Sign out", exact: true }).click();
   await expect(page.getByLabel("Owner credential")).toBeVisible();
   expect(await page.evaluate(() => localStorage.length)).toBe(0);
 });

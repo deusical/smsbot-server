@@ -417,6 +417,11 @@ for (const viewport of [
         path: `test-results/ui-${viewport.name}-${screen.toLowerCase()}.png`,
         animations: "disabled",
       });
+      // A phone thread is full screen; leave it to reach the navigation.
+      if (screen === "Conversations" && viewport.name === "mobile")
+        await page
+          .getByRole("button", { name: "Back to conversations" })
+          .click();
     }
   });
 }
