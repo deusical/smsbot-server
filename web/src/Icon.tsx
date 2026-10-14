@@ -32,6 +32,7 @@ const paths: Record<string, string> = {
   cpu: "M7 7h10v10H7V7Zm3-4v4m4-4v4m-4 10v4m4-4v4M3 10h4m-4 4h4m10-4h4m-4 4h4",
   gauge: "M4 18a9 9 0 1 1 16 0M12 13l4-4",
   inbox: "M3 13h5l1.5 3h5L16 13h5M5 5h14l2 8v6H3v-6l2-8Z",
+  attach: "m8 12 6-6a3 3 0 0 1 4 4l-8 8a5 5 0 0 1-7-7l9-9m-6 12 8-8",
   download: "M12 3v12m-5-5 5 5 5-5M4 20h16",
   refresh: "M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7",
   more: "M5 12h.01M12 12h.01M19 12h.01",

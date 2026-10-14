@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import {
   api,
+  defaultAttachmentLimits,
   ApiError,
   type Client,
   type CompatibleProviderStatus,
@@ -288,7 +289,11 @@ function ProvidersSection({ workspace, busy, act, notify }: SectionProps) {
             <input
               type="password"
               autoComplete="off"
-              placeholder={openRouterConfigured ? "Paste a new key to replace it" : "sk-or-…"}
+              placeholder={
+                openRouterConfigured
+                  ? "Paste a new key to replace it"
+                  : "sk-or-…"
+              }
               value={key}
               onChange={(e) => setKey(e.target.value)}
             />
@@ -339,7 +344,9 @@ function ProvidersSection({ workspace, busy, act, notify }: SectionProps) {
                 type="password"
                 autoComplete="off"
                 placeholder={
-                  compatible.configured ? "Leave blank to keep the saved key" : "Enter an API key"
+                  compatible.configured
+                    ? "Leave blank to keep the saved key"
+                    : "Enter an API key"
                 }
                 value={compatibleKey}
                 onChange={(e) => setCompatibleKey(e.target.value)}
@@ -433,8 +440,16 @@ function LimitsSection({ workspace }: SectionProps) {
         description="Counted across every conversation, including messages you send by hand."
       >
         <div className="form-grid three">
-          <NumberField workspace={workspace} field="hourly_limit" label="Replies per hour" />
-          <NumberField workspace={workspace} field="daily_limit" label="Replies per day" />
+          <NumberField
+            workspace={workspace}
+            field="hourly_limit"
+            label="Replies per hour"
+          />
+          <NumberField
+            workspace={workspace}
+            field="daily_limit"
+            label="Replies per day"
+          />
           <NumberField
             workspace={workspace}
             field="max_chars"
@@ -464,7 +479,9 @@ function LimitsSection({ workspace }: SectionProps) {
           />
         }
       >
-        <div className={"form-grid three" + (settings.quiet_enabled ? "" : " dim")}>
+        <div
+          className={"form-grid three" + (settings.quiet_enabled ? "" : " dim")}
+        >
           <Field label="From">
             <select
               value={settings.quiet_start}
@@ -490,7 +507,9 @@ function LimitsSection({ workspace }: SectionProps) {
               placeholder="America/Los_Angeles"
               list="timezones"
               value={settings.timezone}
-              onChange={(e) => setSetting(workspace, "timezone", e.target.value)}
+              onChange={(e) =>
+                setSetting(workspace, "timezone", e.target.value)
+              }
             />
           </Field>
           <datalist id="timezones">
@@ -515,7 +534,7 @@ function InboxSection({
       {draft && (
         <Group
           title="Full inbox"
-          description="Keep every text from your phone, not just commands, so you can read and reply here. Groups and attachments are never included."
+          description="Keep messages and files from your phone, not just commands, so you can read and reply here. Groups are never included."
         >
           <Switch
             label="Show all conversation messages"
@@ -537,10 +556,16 @@ function InboxSection({
               />
             </div>
             {draft.scope === "selected" && (
-              <div className="chips" role="group" aria-label="Captured conversations">
+              <div
+                className="chips"
+                role="group"
+                aria-label="Captured conversations"
+              >
                 {eligible.map((c) => {
                   const on = draft.conversations.some(
-                    (b) => b.conversation === c.id && b.participant === c.participant_id,
+                    (b) =>
+                      b.conversation === c.id &&
+                      b.participant === c.participant_id,
                   );
                   const others = draft.conversations.filter(
                     (b) => b.conversation !== c.id,
@@ -557,7 +582,10 @@ function InboxSection({
                             ? others
                             : [
                                 ...others,
-                                { conversation: c.id, participant: c.participant_id },
+                                {
+                                  conversation: c.id,
+                                  participant: c.participant_id,
+                                },
                               ],
                         })
                       }
@@ -584,6 +612,60 @@ function InboxSection({
               workspace.editInbox({ automatic_replies })
             }
           />
+        </Group>
+      )}
+      {draft && (
+        <Group
+          title="Attachment limits"
+          description="Set any limit to 0 for Unlimited. Google and carrier restrictions still apply; large files use server memory and storage."
+        >
+          <div className="form-grid">
+            {(
+              [
+                ["max_files", "Files per message"],
+                ["max_file_mb", "Per-file limit (MB)"],
+                ["max_total_mb", "Combined file limit (MB)"],
+              ] as const
+            ).map(([key, label]) => {
+              const limits = draft.attachment_limits ?? defaultAttachmentLimits;
+              return (
+                <div className="field" key={key}>
+                  <label>
+                    <span className="label">{label}</span>
+                    <input
+                      type="number"
+                      min={0}
+                      step={1}
+                      value={limits[key]}
+                      onChange={(event) =>
+                        workspace.editInbox({
+                          attachment_limits: {
+                            ...limits,
+                            [key]: Number(event.target.value),
+                          },
+                        })
+                      }
+                    />
+                  </label>
+                  <small>
+                    {limits[key] === 0 ? "Unlimited" : "0 means Unlimited"}
+                  </small>
+                  <button
+                    type="button"
+                    className="link"
+                    aria-label={`Unlimited ${label}`}
+                    onClick={() =>
+                      workspace.editInbox({
+                        attachment_limits: { ...limits, [key]: 0 },
+                      })
+                    }
+                  >
+                    Unlimited
+                  </button>
+                </div>
+              );
+            })}
+          </div>
         </Group>
       )}
       <Group title="Retention & memory">
@@ -710,7 +792,11 @@ function DevicesSection({
                   void navigator.clipboard
                     .writeText(created.token ?? "")
                     .then(() => notify("Credential copied."))
-                    .catch(() => notify("Clipboard unavailable. Select the field and copy it."))
+                    .catch(() =>
+                      notify(
+                        "Clipboard unavailable. Select the field and copy it.",
+                      ),
+                    )
                 }
               >
                 <Icon name="copy" size={15} />
@@ -752,9 +838,7 @@ function DevicesSection({
               </button>
             </li>
           ))}
-          {!clients.length && (
-            <li className="muted">No devices connected.</li>
-          )}
+          {!clients.length && <li className="muted">No devices connected.</li>}
         </ul>
       </Group>
     </>
@@ -771,7 +855,9 @@ function BackupSection({ workspace, busy, act, notify }: SectionProps) {
         await api<Configuration>("/recipes/import", "POST", { configuration }),
       );
       workspace.replaceSaved(imported);
-      notify("Recipe imported. Commands are disabled; review them before enabling.");
+      notify(
+        "Recipe imported. Commands are disabled; review them before enabling.",
+      );
     }, false);
   }
   return (
@@ -807,7 +893,9 @@ function BackupSection({ workspace, busy, act, notify }: SectionProps) {
         <label className={"tile" + (busy ? " disabled" : "")}>
           <Icon name="refresh" />
           <strong>Import recipe</strong>
-          <small>Replaces commands and settings. Android command packs are added.</small>
+          <small>
+            Replaces commands and settings. Android command packs are added.
+          </small>
           <input
             type="file"
             className="sr-only"
@@ -840,4 +928,3 @@ function BackupSection({ workspace, busy, act, notify }: SectionProps) {
     </Group>
   );
 }
-

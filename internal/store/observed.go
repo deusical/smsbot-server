@@ -3,21 +3,25 @@ package store
 import (
 	"database/sql"
 	"errors"
+	"smsbot-server/internal/media"
 	"time"
 )
 
 // SaveObserved unifies phone IDs with our persisted outbound transactions. It
 // never routes commands and does not make private messages visible to clients.
 func (s *Store) SaveObserved(conv, upstream, txn, direction, text, origin, status string, at time.Time) error {
-	return s.saveObserved(conv, upstream, txn, direction, text, origin, status, at, true)
+	return s.saveObserved(conv, upstream, txn, direction, text, origin, status, at, true, nil)
 }
 
 // Legacy explicit imports may create public rows, but cannot expose an existing
 // private capture. Both import paths share exact upstream/transaction aliases.
 func (s *Store) SaveLegacyImported(conv, upstream, txn, direction, text, status string, at time.Time) error {
-	return s.saveObserved(conv, upstream, txn, direction, text, "history", status, at, false)
+	return s.saveObserved(conv, upstream, txn, direction, text, "history", status, at, false, nil)
 }
-func (s *Store) saveObserved(conv, upstream, txn, direction, text, origin, status string, at time.Time, privateNew bool) error {
+func (s *Store) SaveObservedFiles(conv, upstream, txn, direction, text, origin, status string, at time.Time, files []media.File) error {
+	return s.saveObserved(conv, upstream, txn, direction, text, origin, status, at, true, files)
+}
+func (s *Store) saveObserved(conv, upstream, txn, direction, text, origin, status string, at time.Time, privateNew bool, files []media.File) error {
 	alias := Hash(conv + "\x00" + upstream)
 	id := alias
 	tx, err := s.DB.Begin()
@@ -61,6 +65,11 @@ func (s *Store) saveObserved(conv, upstream, txn, direction, text, origin, statu
 	if _, err = tx.Exec(`INSERT INTO message_meta VALUES(?,?,?,?) ON CONFLICT(message) DO UPDATE SET status=CASE WHEN excluded.status='read' OR (excluded.status='delivered' AND message_meta.status!='read') OR message_meta.status='' THEN excluded.status ELSE message_meta.status END`, id, origin, status, n > 0 && privateNew); err != nil {
 		return err
 	}
+	if len(files) > 0 {
+		if err = s.saveAttachments(tx, id, files); err != nil {
+			return err
+		}
+	}
 	// Repair old imports only with an explicit send-transaction match. Equal text
 	// and nearby timestamps are never enough: separate identical sends stay apart.
 	if matchedSend {
@@ -73,6 +82,19 @@ func (s *Store) saveObserved(conv, upstream, txn, direction, text, origin, statu
 			}
 			if _, err = tx.Exec("UPDATE message_alias SET message=? WHERE message=?", id, duplicate); err != nil {
 				return err
+			}
+			var duplicatePayload string
+			attachmentErr := tx.QueryRow("SELECT payload FROM message_attachments WHERE message=?", duplicate).Scan(&duplicatePayload)
+			if attachmentErr == nil {
+				duplicateFiles, openErr := s.openAttachments(duplicate, duplicatePayload)
+				if openErr != nil {
+					return openErr
+				}
+				if err = s.saveAttachments(tx, id, duplicateFiles); err != nil {
+					return err
+				}
+			} else if !errors.Is(attachmentErr, sql.ErrNoRows) {
+				return attachmentErr
 			}
 			if _, err = tx.Exec("DELETE FROM messages WHERE id=? AND conversation=? AND direction='outgoing'", duplicate, conv); err != nil {
 				return err

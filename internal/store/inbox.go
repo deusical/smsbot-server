@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"smsbot-server/internal/media"
 	"strings"
 	"time"
 )
@@ -43,7 +44,7 @@ func (s *Store) messagePage(conv, before, search string, limit int, owner bool) 
 			return out, errors.New("invalid message cursor")
 		}
 	}
-	rows, e := s.DB.Query(`SELECT m.id,m.direction,m.at,m.payload,coalesce(meta.origin,'bot'),coalesce(meta.status,'') FROM messages m LEFT JOIN message_meta meta ON meta.message=m.id WHERE m.conversation=? AND (? OR coalesce(meta.owner_only,0)=0) AND (?='' OR m.at<? OR (m.at=? AND m.id<?)) ORDER BY m.at DESC,m.id DESC LIMIT ?`, conv, owner, before, cursor.At, cursor.At, cursor.ID, limit+1)
+	rows, e := s.DB.Query(`SELECT m.id,m.direction,m.at,m.payload,coalesce(meta.origin,'bot'),coalesce(meta.status,''),coalesce(a.payload,'') FROM messages m LEFT JOIN message_meta meta ON meta.message=m.id LEFT JOIN message_attachments a ON a.message=m.id WHERE m.conversation=? AND (? OR coalesce(meta.owner_only,0)=0) AND (?='' OR m.at<? OR (m.at=? AND m.id<?)) ORDER BY m.at DESC,m.id DESC LIMIT ?`, conv, owner, before, cursor.At, cursor.At, cursor.ID, limit+1)
 	if e != nil {
 		return out, e
 	}
@@ -52,8 +53,8 @@ func (s *Store) messagePage(conv, before, search string, limit int, owner bool) 
 	var last inboxCursor
 	for rows.Next() {
 		var m Message
-		var enc string
-		if e = rows.Scan(&m.ID, &m.Direction, &m.At, &enc, &m.Origin, &m.Status); e != nil {
+		var enc, attachments string
+		if e = rows.Scan(&m.ID, &m.Direction, &m.At, &enc, &m.Origin, &m.Status, &attachments); e != nil {
 			return out, e
 		}
 		if count == limit {
@@ -68,7 +69,18 @@ func (s *Store) messagePage(conv, before, search string, limit int, owner bool) 
 			return out, e
 		}
 		m.Text = string(plain)
-		if search == "" || strings.Contains(strings.ToLower(m.Text), strings.ToLower(search)) {
+		if owner && attachments != "" {
+			files, err := s.openAttachments(m.ID, attachments)
+			if err != nil {
+				return out, err
+			}
+			m.Attachments = media.Infos(files)
+		}
+		searchText := m.Text
+		for _, attachment := range m.Attachments {
+			searchText += "\n" + attachment.Name
+		}
+		if search == "" || strings.Contains(strings.ToLower(searchText), strings.ToLower(search)) {
 			out.Messages = append(out.Messages, m)
 		}
 	}

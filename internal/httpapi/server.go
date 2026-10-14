@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"io"
 	"io/fs"
+	"math"
 	"mime"
 	"net/http"
 	"net/url"
 	"smsbot-server/internal/bot"
+	"smsbot-server/internal/media"
 	"smsbot-server/internal/store"
 	"smsbot-server/internal/transport"
 	"strings"
@@ -25,10 +27,10 @@ func init() {
 }
 
 type Server struct {
-	Engine     *bot.Engine
-	Origin     string
-	Fixture    bool
-	mux        *http.ServeMux
+	Engine  *bot.Engine
+	Origin  string
+	Fixture bool
+	mux     *http.ServeMux
 }
 
 func New(e *bot.Engine, origin string, fixture bool) *Server {
@@ -63,7 +65,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	w.Header().Set("X-Frame-Options", "DENY")
-	w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'")
+	w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data: blob:; frame-ancestors 'none'; base-uri 'none'")
 	switch {
 	case strings.HasPrefix(r.URL.Path, "/api/"):
 		w.Header().Set("Cache-Control", "no-store")
@@ -80,6 +82,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	limit := int64(32 * 1024)
 	if (strings.HasPrefix(r.URL.Path, "/api/v1/inbox/conversations/") || strings.HasPrefix(r.URL.Path, "/api/v1/conversations/")) && strings.HasSuffix(r.URL.Path, "/compose") {
 		limit = 128 * 1024
+		if strings.HasPrefix(r.URL.Path, "/api/v1/inbox/") {
+			limit = math.MaxInt64
+		}
+	}
+	if s.Fixture && r.URL.Path == "/api/v1/fixture/incoming" {
+		limit = math.MaxInt64
 	}
 	if r.URL.Path == "/api/v1/inbox/settings" {
 		limit = 256 * 1024
@@ -217,7 +225,7 @@ func (s *Server) state(w http.ResponseWriter, r *http.Request) {
 		s.bad(w, 500, "storage_error")
 		return
 	}
-	value := map[string]any{"api_version": 1, "paused": p, "transport_ready": s.Engine.Transport.Ready(), "transport": map[bool]string{true: "fixture", false: "google_messages"}[s.Fixture], "fixture": s.Fixture, "capabilities": []string{"fixed_commands", "enrollment", "activity", "encrypted_inbox", "configuration", "models", "history", "history_import", "playground", "approvals", "manual_compose", "recipes", "ai_commands", "full_inbox"}}
+	value := map[string]any{"api_version": 1, "paused": p, "transport_ready": s.Engine.Transport.Ready(), "transport": map[bool]string{true: "fixture", false: "google_messages"}[s.Fixture], "fixture": s.Fixture, "capabilities": []string{"fixed_commands", "enrollment", "activity", "encrypted_inbox", "configuration", "models", "history", "history_import", "playground", "approvals", "manual_compose", "recipes", "ai_commands", "full_inbox", "attachments"}}
 	if r.Header.Get("Authorization") == "" {
 		value["inbox_capture_gap"] = s.Engine.InboxCaptureGap()
 	}
@@ -365,10 +373,25 @@ func (s *Server) incoming(w http.ResponseWriter, r *http.Request) {
 		s.bad(w, 404, "not_found")
 		return
 	}
-	var m transport.Incoming
-	if !s.decode(w, r, &m) {
+	var input struct {
+		transport.Incoming
+		Attachments []media.Upload `json:"attachments"`
+	}
+	if !s.decode(w, r, &input) {
 		return
 	}
+	m := input.Incoming
+	settings, settingsErr := s.Engine.InboxSettings()
+	if settingsErr != nil {
+		s.bad(w, 500, "settings_unavailable")
+		return
+	}
+	files, fileErr := media.PrepareWithLimits(input.Attachments, settings.FileLimits())
+	if fileErr != nil {
+		s.bad(w, 400, "invalid_attachments")
+		return
+	}
+	m.Attachments = files
 	if m.ID == "" {
 		m.ID = store.ID()
 	}

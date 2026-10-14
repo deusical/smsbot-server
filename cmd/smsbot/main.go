@@ -172,9 +172,9 @@ func runWithInput(args []string, input io.Reader) error {
 		if err != nil {
 			return errors.New("cannot read backup")
 		}
-		b, err := io.ReadAll(io.LimitReader(f, 32*1024*1024+1))
+		b, err := io.ReadAll(io.LimitReader(f, store.MaxBackupBytes+1))
 		closeErr := f.Close()
-		if err != nil || closeErr != nil || len(b) > 32*1024*1024 {
+		if err != nil || closeErr != nil || len(b) > store.MaxBackupBytes {
 			return errors.New("cannot read bounded backup")
 		}
 		if err = s.RestoreBackup(b); err != nil {

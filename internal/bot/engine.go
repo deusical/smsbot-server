@@ -136,7 +136,7 @@ func (e *Engine) Accept(ctx context.Context, m transport.Incoming) (bool, error)
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	age := e.now().Sub(m.At)
-	if m.ID == "" || m.Outgoing || m.Historical || age > 2*time.Minute || age < -5*time.Second || len(m.Text) > 12000 {
+	if len(m.Attachments) > 0 || m.ID == "" || m.Outgoing || m.Historical || age > 2*time.Minute || age < -5*time.Second || len(m.Text) > 12000 {
 		return false, nil
 	}
 	paused, err := e.Store.Paused()
@@ -300,6 +300,9 @@ func (e *Engine) check(ctx context.Context, j store.Job, p store.Plan) (Configur
 		return cfg, "automatic_replies_disabled", nil
 	}
 	if p.InboxOwnerOnly {
+		if err := inbox.FileLimits().Check(p.Attachments); err != nil {
+			return cfg, "attachment_limits_changed", nil
+		}
 		c, err := e.lookupConversation(ctx, j.ConversationID)
 		if err != nil {
 			return cfg, "", err
@@ -486,12 +489,65 @@ func (e *Engine) Dispatch(ctx context.Context) error {
 			return err
 		}
 	}
+	// Uploading does not send a message. Release the control lock so pause and
+	// consent revocation remain responsive, then repeat every final-send check.
+	if len(p.Attachments) > 0 {
+		preparer, ok := e.Transport.(transport.FilePreparer)
+		if !ok {
+			err = e.Store.Complete(j.ID, "failed", "attachments_unavailable")
+			e.mu.Unlock()
+			return err
+		}
+		transitioned, transitionErr := e.Store.Transition(j.ID, "queued", "generating")
+		if transitionErr != nil || !transitioned {
+			e.mu.Unlock()
+			return transitionErr
+		}
+		uploadCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
+		e.pending[j.ID] = cancel
+		e.mu.Unlock()
+		files, uploadErr := preparer.PrepareFiles(uploadCtx, p.Attachments)
+		cancel()
+		e.mu.Lock()
+		delete(e.pending, j.ID)
+		current, _, loadErr := e.Store.JobPlan(j.ID)
+		// Cancellation clears the plan, so a known terminal state may have a
+		// plan-decode error. A failed SQL lookup has no state and must propagate.
+		if current.State != "" && current.State != "generating" {
+			e.mu.Unlock()
+			return nil
+		}
+		if loadErr != nil {
+			e.mu.Unlock()
+			return loadErr
+		}
+		if uploadErr != nil {
+			err = e.Store.Complete(j.ID, "failed", "attachment_upload_failed")
+			e.mu.Unlock()
+			return err
+		}
+		_, code, checkErr := e.check(ctx, j, p)
+		if checkErr != nil || code != "" {
+			err = e.Store.Complete(j.ID, "cancelled", "attachment_final_check_failed")
+			e.mu.Unlock()
+			return err
+		}
+		p.Attachments = files
+		if err = e.Store.SavePlan(j.ID, p); err != nil {
+			e.mu.Unlock()
+			return err
+		}
+		if _, err = e.Store.Transition(j.ID, "generating", "queued"); err != nil {
+			e.mu.Unlock()
+			return err
+		}
+	}
 	current, _, err := e.Store.JobPlan(j.ID)
 	if err != nil || current.State != "queued" {
 		e.mu.Unlock()
 		return err
 	}
-	if p.Reply == "" {
+	if p.Reply == "" && len(p.Attachments) == 0 {
 		err = e.Store.Complete(j.ID, "failed", "empty_reply")
 		e.mu.Unlock()
 		return err
@@ -511,7 +567,17 @@ func (e *Engine) Dispatch(ctx context.Context) error {
 	}
 	// The send is serialized with pause/enrollment; once invoked its outcome may be uncertain.
 	sendctx, cancelSend := context.WithTimeout(ctx, 30*time.Second)
-	receipt, senderr := e.Transport.Send(sendctx, j.ConversationID, txn, p.Reply)
+	var receipt transport.Receipt
+	var senderr error
+	if len(p.Attachments) > 0 {
+		if sender, ok := e.Transport.(transport.FileSender); ok {
+			receipt, senderr = sender.SendFiles(sendctx, j.ConversationID, txn, p.Reply, p.Attachments)
+		} else {
+			senderr = transport.ErrNotSubmitted
+		}
+	} else {
+		receipt, senderr = e.Transport.Send(sendctx, j.ConversationID, txn, p.Reply)
+	}
 	cancelSend()
 	if senderr != nil {
 		state, code := "unknown_submission", "transport_outcome_unknown"
@@ -527,7 +593,12 @@ func (e *Engine) Dispatch(ctx context.Context) error {
 		e.mu.Unlock()
 		return err
 	}
-	if err = e.Store.SaveMessage(txn, j.ConversationID, "outgoing", p.Reply); err != nil {
+	if len(p.Attachments) > 0 {
+		err = e.Store.SaveSentFiles(txn, j.ConversationID, p.Reply, p.Attachments)
+	} else {
+		err = e.Store.SaveMessage(txn, j.ConversationID, "outgoing", p.Reply)
+	}
+	if err != nil {
 		e.mu.Unlock()
 		return err
 	}

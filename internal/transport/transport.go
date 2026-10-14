@@ -3,6 +3,7 @@ package transport
 import (
 	"context"
 	"errors"
+	"smsbot-server/internal/media"
 	"sync"
 	"time"
 )
@@ -17,15 +18,16 @@ type Conversation struct {
 	Enrolled      bool   `json:"enrolled"`
 }
 type Incoming struct {
-	ID             string    `json:"id"`
-	ConversationID string    `json:"conversation_id"`
-	ParticipantID  string    `json:"participant_id"`
-	Text           string    `json:"text"`
-	At             time.Time `json:"at"`
-	Historical     bool      `json:"historical"`
-	Outgoing       bool      `json:"outgoing"`
-	TransactionID  string    `json:"transaction_id,omitempty"`
-	Status         string    `json:"status,omitempty"`
+	Attachments    []media.File `json:"-"`
+	ID             string       `json:"id"`
+	ConversationID string       `json:"conversation_id"`
+	ParticipantID  string       `json:"participant_id"`
+	Text           string       `json:"text"`
+	At             time.Time    `json:"at"`
+	Historical     bool         `json:"historical"`
+	Outgoing       bool         `json:"outgoing"`
+	TransactionID  string       `json:"transaction_id,omitempty"`
+	Status         string       `json:"status,omitempty"`
 }
 type ConversationLookup interface {
 	LookupConversation(context.Context, string) (Conversation, error)

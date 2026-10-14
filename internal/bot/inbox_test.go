@@ -123,8 +123,8 @@ func TestInboxHistoryNeverExecutesAndSettingIsIndependent(t *testing.T) {
 		t.Fatal("imported command executed")
 	}
 	p, _ := e.Store.OwnerMessagePage("demo-chat", "", "", 50)
-	if len(p.Messages) != 1 {
-		t.Fatal("history missing")
+	if len(p.Messages) != 2 || len(p.Messages[1].Attachments) != 1 {
+		t.Fatal("history missing text or file")
 	}
 	s.LoadOlder = false
 	e.SetInboxSettings(context.Background(), s)

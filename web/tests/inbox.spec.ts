@@ -109,6 +109,238 @@ async function configure(page: Page, enabled: boolean) {
   ).toBeTruthy();
   await page.request.post("/api/v1/pause", { headers, data: { paused: true } });
 }
+
+test("attachment limits save as Unlimited and permit more than four files", async ({
+  page,
+}) => {
+  await login(page);
+  const original = await (
+    await page.request.get("/api/v1/inbox/settings")
+  ).json();
+  await configure(page, true);
+  await page.reload();
+  try {
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await page
+      .getByRole("button", { name: "Messages & privacy", exact: true })
+      .click();
+    for (const label of [
+      "Files per message",
+      "Per-file limit (MB)",
+      "Combined file limit (MB)",
+    ]) {
+      await page
+        .getByRole("button", { name: `Unlimited ${label}`, exact: true })
+        .click();
+      await expect(page.getByLabel(label, { exact: true })).toHaveValue("0");
+    }
+    await page
+      .getByRole("button", { name: "Save changes", exact: true })
+      .click();
+    await expect
+      .poll(
+        async () =>
+          (await (await page.request.get("/api/v1/inbox/settings")).json())
+            .attachment_limits,
+      )
+      .toEqual({ max_files: 0, max_file_mb: 0, max_total_mb: 0 });
+    await page.screenshot({ path: "../.build-temp/attachment-limits.png", fullPage: true });
+    await page.reload();
+    await page
+      .getByRole("button", { name: "Conversations", exact: true })
+      .click();
+    await page
+      .locator(".conversation")
+      .filter({ hasText: "Demo conversation" })
+      .getByRole("button", { name: /Demo conversation/ })
+      .click();
+    await page
+      .getByLabel("Choose files", { exact: true })
+      .setInputFiles(
+        Array.from({ length: 5 }, (_, i) => ({
+          name: `synthetic-unlimited-${i}.txt`,
+          mimeType: "text/plain",
+          buffer: Buffer.from("Synthetic file"),
+        })),
+      );
+    await expect(
+      page.getByRole("button", { name: /Remove synthetic-unlimited-/ }),
+    ).toHaveCount(5);
+  } finally {
+    const current = await (
+      await page.request.get("/api/v1/inbox/settings")
+    ).json();
+    await page.request.put("/api/v1/inbox/settings", {
+      headers,
+      data: { ...current, attachment_limits: original.attachment_limits },
+    });
+    await configure(page, false);
+  }
+});
+
+test("conversation files show incoming images, download documents and recover historical files", async ({
+  page,
+}) => {
+  await login(page);
+  await configure(page, true);
+  const png = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aM1sAAAAASUVORK5CYII=",
+    "base64",
+  );
+  try {
+    const received = await page.request.post("/api/v1/fixture/incoming", {
+      headers,
+      data: {
+        id: `synthetic-file-${Date.now()}`,
+        conversation_id: "demo-chat",
+        participant_id: "demo-peer",
+        text: "Synthetic file caption",
+        attachments: [
+          {
+            name: "synthetic-image.png",
+            mime: "image/png",
+            data: png.toString("base64"),
+          },
+          {
+            name: "synthetic-document.pdf",
+            mime: "application/pdf",
+            data: Buffer.from("%PDF-1.4\nSynthetic document").toString(
+              "base64",
+            ),
+          },
+        ],
+      },
+    });
+    expect(received.ok()).toBeTruthy();
+    await page
+      .getByRole("button", { name: "Conversations", exact: true })
+      .click();
+    await page
+      .locator(".conversation")
+      .filter({ hasText: "Demo conversation" })
+      .getByRole("button", { name: /Demo conversation/ })
+      .click();
+    const bubble = page
+      .locator(".bubble.incoming")
+      .filter({ hasText: "Synthetic file caption" });
+    const image = bubble.getByRole("img", { name: "synthetic-image.png" });
+    await expect(image).toBeVisible();
+    await expect
+      .poll(() => image.evaluate((el: HTMLImageElement) => el.naturalWidth))
+      .toBe(1);
+    const downloadEvent = page.waitForEvent("download");
+    await bubble
+      .getByRole("button", {
+        name: "Download synthetic-document.pdf",
+        exact: true,
+      })
+      .click();
+    const download = await downloadEvent;
+    expect(download.suggestedFilename()).toBe("synthetic-document.pdf");
+    expect(readFileSync((await download.path())!, "utf8")).toBe(
+      "%PDF-1.4\nSynthetic document",
+    );
+    if (
+      await page
+        .getByRole("button", { name: "Load older messages", exact: true })
+        .isVisible()
+    )
+      await page
+        .getByRole("button", { name: "Load older messages", exact: true })
+        .click();
+    await expect(
+      page.getByRole("button", {
+        name: "Download synthetic-history.txt",
+        exact: true,
+      }),
+    ).toBeVisible();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.screenshot({
+      path: "../.build-temp/conversation-files-mobile.png",
+      fullPage: true,
+    });
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= window.innerWidth,
+      ),
+    ).toBeTruthy();
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.screenshot({
+      path: "../.build-temp/conversation-files-desktop.png",
+      fullPage: true,
+    });
+  } finally {
+    await configure(page, false);
+  }
+});
+
+test("file-only sends retain selected files after lost acknowledgement and queue once", async ({
+  page,
+}) => {
+  await login(page);
+  await configure(page, true);
+  const ids: string[] = [];
+  const name = `synthetic-upload-${Date.now()}.txt`;
+  await page.route(
+    "**/api/v1/inbox/conversations/demo-chat/compose",
+    async (route) => {
+      ids.push(route.request().postDataJSON().request_id);
+      const response = await route.fetch();
+      expect(response.ok()).toBeTruthy();
+      if (ids.length === 1) await route.abort("failed");
+      else await route.fulfill({ response });
+    },
+  );
+  try {
+    await page
+      .getByRole("button", { name: "Conversations", exact: true })
+      .click();
+    await page
+      .locator(".conversation")
+      .filter({ hasText: "Demo conversation" })
+      .getByRole("button", { name: /Demo conversation/ })
+      .click();
+    await expect(
+      page.getByRole("button", { name: "Attach files", exact: true }),
+    ).toBeVisible();
+    await page.getByLabel("Choose files", { exact: true }).setInputFiles({
+      name,
+      mimeType: "text/plain",
+      buffer: Buffer.from("Synthetic uploaded file"),
+    });
+    await expect(
+      page.getByRole("button", { name: `Remove ${name}`, exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Send message", exact: true }),
+    ).toBeDisabled();
+    await page.getByRole("switch", { name: "Bot sending" }).click();
+    await page
+      .getByRole("button", { name: "Send message", exact: true })
+      .click();
+    await expect(
+      page
+        .getByRole("alert")
+        .filter({ hasText: "Your text and files are kept" }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: `Remove ${name}`, exact: true }),
+    ).toBeVisible();
+    await page
+      .getByRole("button", { name: "Send message", exact: true })
+      .click();
+    await expect(
+      page.getByRole("button", { name: `Remove ${name}`, exact: true }),
+    ).toHaveCount(0);
+    await expect(
+      page.locator(".bubble.outgoing").filter({ hasText: name }),
+    ).toHaveCount(1);
+    expect(ids).toHaveLength(2);
+    expect(ids[0]).toBe(ids[1]);
+  } finally {
+    await configure(page, false);
+  }
+});
 test("owner captures ordinary text while paused and sends manually without automation", async ({
   page,
 }) => {
@@ -154,14 +386,10 @@ test("owner captures ordinary text while paused and sends manually without autom
       .getByRole("button", { name: "Send message", exact: true })
       .click();
     await expect(
-      page
-        .locator(".bubble.outgoing")
-        .filter({ hasText: reply }),
+      page.locator(".bubble.outgoing").filter({ hasText: reply }),
     ).toBeVisible();
     await expect(
-      page
-        .locator(".bubble.outgoing")
-        .filter({ hasText: reply }),
+      page.locator(".bubble.outgoing").filter({ hasText: reply }),
     ).toContainText("Sent from web");
     await page.evaluate(() => window.scrollTo(0, 0));
     await page.screenshot({
@@ -277,7 +505,9 @@ test("lost compose acknowledgement retries the same intent without a second repl
       .getByRole("button", { name: "Send message", exact: true })
       .click();
     await expect(
-      page.getByRole("alert").filter({ hasText: "Your text is kept" }),
+      page
+        .getByRole("alert")
+        .filter({ hasText: "Your text and files are kept" }),
     ).toBeVisible();
     await expect(
       page.getByRole("button", { name: "Send message", exact: true }),

@@ -1,13 +1,18 @@
 package httpapi
 
 import (
+	"bytes"
+	"mime"
 	"net/http"
 	"smsbot-server/internal/bot"
+	"smsbot-server/internal/media"
 	"smsbot-server/internal/transport"
 	"strconv"
+	"time"
 )
 
 func (s *Server) inboxRoutes() {
+	s.mux.HandleFunc("GET /api/v1/inbox/conversations/{id}/messages/{message}/attachments/{attachment}", s.protected(s.inboxAttachment))
 	s.mux.HandleFunc("GET /api/v1/inbox/settings", s.protected(s.inboxSettings))
 	s.mux.HandleFunc("PUT /api/v1/inbox/settings", s.protected(s.saveInboxSettings))
 	s.mux.HandleFunc("GET /api/v1/inbox/conversations", s.protected(s.inboxConversations))
@@ -82,17 +87,52 @@ func (s *Server) inboxImport(w http.ResponseWriter, r *http.Request) {
 	s.json(w, 200, p)
 }
 func (s *Server) inboxCompose(w http.ResponseWriter, r *http.Request) {
+	settings, settingsErr := s.Engine.InboxSettings()
+	if settingsErr != nil {
+		s.bad(w, 500, "settings_unavailable")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, settings.FileLimits().RequestBytes())
 	var v struct {
-		Text      string `json:"text"`
-		RequestID string `json:"request_id"`
+		Attachments []media.Upload `json:"attachments"`
+		Text        string         `json:"text"`
+		RequestID   string         `json:"request_id"`
 	}
 	if !s.decode(w, r, &v) {
 		return
 	}
-	id, err := s.Engine.ComposeInbox(r.Context(), r.PathValue("id"), v.Text, v.RequestID)
+	id, err := s.Engine.ComposeInboxFiles(r.Context(), r.PathValue("id"), v.Text, v.RequestID, v.Attachments)
 	if err != nil {
-		s.bad(w, 409, "compose_unavailable")
+		code := "compose_unavailable"
+		switch err.Error() {
+		case "attachment_size_limit", "too_many_attachments", "attachments_unavailable", "request_id_reused_with_different_message":
+			code = err.Error()
+		}
+		s.bad(w, 409, code)
 		return
 	}
 	s.json(w, 202, map[string]any{"id": id, "queued": true})
+}
+
+func (s *Server) inboxAttachment(w http.ResponseWriter, r *http.Request) {
+	info, data, err := s.Engine.InboxAttachmentContent(r.Context(), r.PathValue("id"), r.PathValue("message"), r.PathValue("attachment"), r.URL.Query().Get("inline") == "1")
+	if err != nil {
+		if err.Error() == "attachment_size_limit" {
+			s.bad(w, 413, "attachment_size_limit")
+		} else {
+			s.bad(w, 409, "attachment_unavailable_or_access_disabled")
+		}
+		return
+	}
+	disposition := "attachment"
+	if r.URL.Query().Get("inline") == "1" {
+		switch info.MIME {
+		case "image/jpeg", "image/png", "image/gif", "image/webp", "image/bmp", "audio/mpeg", "audio/mp3", "audio/mp4", "audio/ogg", "audio/wav", "audio/aac", "video/mp4", "video/webm", "video/ogg":
+			disposition = "inline"
+		}
+	}
+	w.Header().Set("Content-Type", info.MIME)
+	w.Header().Set("Content-Disposition", mime.FormatMediaType(disposition, map[string]string{"filename": media.SafeName(info.Name)}))
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; sandbox")
+	http.ServeContent(w, r, info.Name, time.Time{}, bytes.NewReader(data))
 }

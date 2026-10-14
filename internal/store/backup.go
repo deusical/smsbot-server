@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-const maxBackupBytes = 32 << 20
+const MaxBackupBytes = 256 << 20
 
 type backupEnrollment struct {
 	Conversation string `json:"conversation"`
@@ -30,15 +30,20 @@ type backupMessage struct {
 	Origin       string `json:"origin,omitempty"`
 	Status       string `json:"status,omitempty"`
 }
+type backupAttachment struct {
+	Message string `json:"message"`
+	Payload string `json:"payload"`
+}
 type backupSnapshot struct {
-	Format     int                `json:"format"`
-	Schema     int                `json:"schema"`
-	Settings   map[string]string  `json:"settings"`
-	Enrollment []backupEnrollment `json:"enrollment"`
-	Jobs       []backupJob        `json:"jobs"`
-	Messages   []backupMessage    `json:"messages"`
-	Usage      []backupUsage      `json:"usage,omitempty"`
-	Aliases    []backupAlias      `json:"aliases,omitempty"`
+	Attachments []backupAttachment `json:"attachments,omitempty"`
+	Format      int                `json:"format"`
+	Schema      int                `json:"schema"`
+	Settings    map[string]string  `json:"settings"`
+	Enrollment  []backupEnrollment `json:"enrollment"`
+	Jobs        []backupJob        `json:"jobs"`
+	Messages    []backupMessage    `json:"messages"`
+	Usage       []backupUsage      `json:"usage,omitempty"`
+	Aliases     []backupAlias      `json:"aliases,omitempty"`
 }
 type backupAlias struct {
 	Alias   string `json:"alias"`
@@ -159,6 +164,23 @@ func (s *Store) ExportBackup() ([]byte, error) {
 	if e != nil {
 		return nil, e
 	}
+	rows, e = tx.Query("SELECT message,payload FROM message_attachments")
+	if e != nil {
+		return nil, e
+	}
+	for rows.Next() {
+		var a backupAttachment
+		if e = rows.Scan(&a.Message, &a.Payload); e != nil {
+			rows.Close()
+			return nil, e
+		}
+		b.Attachments = append(b.Attachments, a)
+	}
+	e = rows.Err()
+	rows.Close()
+	if e != nil {
+		return nil, e
+	}
 	if b.Schema >= 2 {
 		rows, e = tx.Query("SELECT job,model,prompt_tokens,completion_tokens,reasoning_tokens,cost FROM usage")
 		if e != nil {
@@ -182,7 +204,7 @@ func (s *Store) ExportBackup() ([]byte, error) {
 	if e != nil {
 		return nil, e
 	}
-	if len(plain) > maxBackupBytes/2 {
+	if len(plain) > MaxBackupBytes/2 {
 		return nil, errors.New("backup exceeds size limit")
 	}
 	sealed, e := s.Vault.Seal("backup", plain)
@@ -192,7 +214,7 @@ func (s *Store) ExportBackup() ([]byte, error) {
 // RestoreBackup is atomic and refuses a destination with existing bot records.
 // Existing destination credentials stay local. Restored work never resumes.
 func (s *Store) RestoreBackup(data []byte) error {
-	if len(data) > maxBackupBytes {
+	if len(data) > MaxBackupBytes {
 		return errors.New("backup exceeds size limit")
 	}
 	plain, e := s.Vault.Open("backup", string(data))
@@ -296,6 +318,14 @@ func (s *Store) RestoreBackup(data []byte) error {
 			return e
 		}
 		if _, e = tx.Exec("INSERT INTO message_meta VALUES(?,?,?,?)", v.ID, v.Origin, v.Status, v.OwnerOnly); e != nil {
+			return e
+		}
+	}
+	for _, a := range b.Attachments {
+		if _, e = s.openAttachments(a.Message, a.Payload); e != nil {
+			return errors.New("invalid backup attachment")
+		}
+		if _, e = tx.Exec("INSERT INTO message_attachments VALUES(?,?)", a.Message, a.Payload); e != nil {
 			return e
 		}
 	}

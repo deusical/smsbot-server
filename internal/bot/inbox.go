@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"smsbot-server/internal/media"
 	"smsbot-server/internal/store"
 	"smsbot-server/internal/transport"
 	"strings"
@@ -16,6 +17,7 @@ type InboxBinding struct {
 	Participant  string `json:"participant"`
 }
 type InboxSettings struct {
+	AttachmentLimits *media.Limits  `json:"attachment_limits,omitempty"`
 	Enabled          bool           `json:"enabled"`
 	Scope            string         `json:"scope"`
 	Conversations    []InboxBinding `json:"conversations"`
@@ -24,8 +26,15 @@ type InboxSettings struct {
 	Revision         int64          `json:"revision"`
 }
 
+func (s InboxSettings) FileLimits() media.Limits {
+	if s.AttachmentLimits == nil {
+		return media.DefaultLimits()
+	}
+	return *s.AttachmentLimits
+}
 func (e *Engine) InboxSettings() (InboxSettings, error) {
-	s := InboxSettings{Scope: "all", AutomaticReplies: true, Conversations: []InboxBinding{}}
+	defaults := media.DefaultLimits()
+	s := InboxSettings{AttachmentLimits: &defaults, Scope: "all", AutomaticReplies: true, Conversations: []InboxBinding{}}
 	b, err := e.Store.GetSecretSetting("inbox_settings", "inbox-settings")
 	if err != nil {
 		return s, err
@@ -67,6 +76,11 @@ func (e *Engine) lookupConversation(ctx context.Context, id string) (transport.C
 	return transport.Conversation{}, errors.New("conversation_unavailable")
 }
 func (e *Engine) SetInboxSettings(ctx context.Context, s InboxSettings) error {
+	limits := s.FileLimits()
+	if err := limits.Validate(); err != nil {
+		return err
+	}
+	s.AttachmentLimits = &limits
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	e.mu.Lock()
@@ -139,7 +153,7 @@ func (e *Engine) Observe(ctx context.Context, m transport.Incoming) error {
 	return e.observe(ctx, m, 0)
 }
 func (e *Engine) observe(ctx context.Context, m transport.Incoming, epoch uint64) error {
-	if m.Historical || m.ID == "" || m.ConversationID == "" || m.Text == "" || utf8.RuneCountInString(m.Text) > 12000 || e.now().Sub(m.At) > 2*time.Minute || m.At.After(e.now().Add(5*time.Second)) {
+	if m.Historical || m.ID == "" || m.ConversationID == "" || (m.Text == "" && len(m.Attachments) == 0) || utf8.RuneCountInString(m.Text) > 12000 || e.now().Sub(m.At) > 2*time.Minute || m.At.After(e.now().Add(5*time.Second)) {
 		return nil
 	}
 	e.mu.Lock()
@@ -197,7 +211,7 @@ func (e *Engine) observe(ctx context.Context, m transport.Incoming, epoch uint64
 	if m.Outgoing {
 		dir = "outgoing"
 	}
-	return e.Store.SaveObserved(c.ID, m.ID, m.TransactionID, dir, m.Text, "phone", m.Status, m.At)
+	return e.Store.SaveObservedFiles(c.ID, m.ID, m.TransactionID, dir, m.Text, "phone", m.Status, m.At, m.Attachments)
 }
 func (e *Engine) InboxPage(ctx context.Context, conv, cursor, search string, limit int) (store.InboxPage, error) {
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
@@ -279,20 +293,20 @@ func (e *Engine) ImportInboxHistory(ctx context.Context, conv, cursor string) (m
 	}
 	count := 0
 	for _, m := range page.Messages {
-		if m.At.Before(e.now().AddDate(0, 0, -cfg.Settings.RetentionDays)) {
+		if cfg.Settings.RetentionDays > 0 && m.At.Before(e.now().AddDate(0, 0, -cfg.Settings.RetentionDays)) {
 			continue
 		}
-		if err = e.Store.SaveObserved(conv, m.ID, m.TransactionID, m.Direction, m.Text, "history", m.Status, m.At); err != nil {
+		if err = e.Store.SaveObservedFiles(conv, m.ID, m.TransactionID, m.Direction, m.Text, "history", m.Status, m.At, m.Attachments); err != nil {
 			return nil, err
 		}
 		count++
 	}
-	return map[string]any{"imported": count, "next_cursor": page.NextCursor, "available_pages_exhausted": page.NextCursor == "", "text_only": true}, nil
+	return map[string]any{"imported": count, "next_cursor": page.NextCursor, "available_pages_exhausted": page.NextCursor == "", "text_only": false}, nil
 }
 
 // A repeat acknowledges the original intent without creating another job,
 // even if limits or global pause changed after the lost acknowledgement.
-func (e *Engine) existingCompose(id, conv, text string) (bool, error) {
+func (e *Engine) existingCompose(id, conv, text string, files []media.File) (bool, error) {
 	var n int
 	if err := e.Store.DB.QueryRow("SELECT count(*) FROM jobs WHERE id=? AND conversation=? AND command='manual'", id, conv).Scan(&n); err != nil {
 		return false, err
@@ -307,21 +321,37 @@ func (e *Engine) existingCompose(id, conv, text string) (bool, error) {
 	if len(digest) == 0 {
 		return false, errors.New("request_already_recorded_check_activity")
 	}
-	if string(digest) != store.Hash(text) {
+	if string(digest) != media.Intent(text, files) {
 		return false, errors.New("request_id_reused_with_different_message")
 	}
 	return true, nil
 }
 func (e *Engine) ComposeInbox(ctx context.Context, conv, text, requestID string) (string, error) {
+	return e.ComposeInboxFiles(ctx, conv, text, requestID, nil)
+}
+func (e *Engine) ComposeInboxFiles(ctx context.Context, conv, text, requestID string, uploads []media.Upload) (string, error) {
+	settings, err := e.InboxSettings()
+	if err != nil {
+		return "", err
+	}
+	files, err := media.PrepareWithLimits(uploads, settings.FileLimits())
+	if err != nil {
+		return "", err
+	}
+	if len(files) > 0 {
+		if _, ok := e.Transport.(transport.FileSender); !ok {
+			return "", errors.New("attachments_unavailable")
+		}
+	}
 	text = strings.TrimSpace(text)
-	if text == "" || utf8.RuneCountInString(text) > 12000 || len(requestID) < 16 || len(requestID) > 100 {
+	if (text == "" && len(files) == 0) || utf8.RuneCountInString(text) > 12000 || len(requestID) < 16 || len(requestID) > 100 {
 		return "", errors.New("invalid_message_or_request_id")
 	}
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	id := store.Hash("compose\x00" + conv + "\x00" + requestID)
 	e.mu.Lock()
-	exists, err := e.existingCompose(id, conv, text)
+	exists, err := e.existingCompose(id, conv, text, files)
 	s, settingsErr := e.InboxSettings()
 	consent := e.captureConsent.Load()
 	e.mu.Unlock()
@@ -343,7 +373,7 @@ func (e *Engine) ComposeInbox(ctx context.Context, conv, text, requestID string)
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	exists, err = e.existingCompose(id, conv, text)
+	exists, err = e.existingCompose(id, conv, text, files)
 	if err != nil {
 		return "", err
 	}
@@ -360,6 +390,9 @@ func (e *Engine) ComposeInbox(ctx context.Context, conv, text, requestID string)
 	liveConsent := e.captureConsent.Load()
 	if liveConsent == nil || liveConsent.epoch != consent.epoch || !current.Allows(c) {
 		return "", errors.New("inbox_access_disabled")
+	}
+	if err := current.FileLimits().Check(files); err != nil {
+		return "", err
 	}
 	cfg, err := e.Configuration()
 	if err != nil {
@@ -379,6 +412,6 @@ func (e *Engine) ComposeInbox(ctx context.Context, conv, text, requestID string)
 	if !permitted {
 		return "", errors.New("request_limit_reached")
 	}
-	_, err = e.Store.Enqueue(id, conv, "manual", store.Plan{Participant: c.ParticipantID, Reply: text, MaxChars: cfg.Settings.MaxChars, Manual: true, InboxOwnerOnly: true})
+	_, err = e.Store.Enqueue(id, conv, "manual", store.Plan{Participant: c.ParticipantID, Reply: text, MaxChars: cfg.Settings.MaxChars, Manual: true, InboxOwnerOnly: true, Attachments: files})
 	return id, err
 }

@@ -7,6 +7,7 @@ import {
 } from "react";
 import {
   api,
+  defaultAttachmentLimits,
   ApiError,
   type Conversation,
   type History,
@@ -16,6 +17,11 @@ import {
 } from "./api";
 import { Icon } from "./Icon";
 import { Avatar } from "./ui";
+import {
+  MessageAttachment,
+  SelectedAttachment,
+  encodeFile,
+} from "./Attachments";
 type Props = {
   conversation: Conversation;
   state: State | null;
@@ -69,6 +75,33 @@ export function ConversationHistory({
     sendKey = useRef(""),
     sendIntentText = useRef(""),
     composer = useRef<HTMLTextAreaElement>(null);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const [files, setFiles] = useState<File[]>([]);
+  const attachmentRevision = useRef(0);
+  const fileLimits = inbox?.attachment_limits ?? defaultAttachmentLimits;
+  function selectFiles(selected: File[]) {
+    const next = [...files, ...selected];
+    if (
+      (fileLimits.max_files > 0 && next.length > fileLimits.max_files) ||
+      next.some(
+        (f) =>
+          f.size === 0 ||
+          (fileLimits.max_file_mb > 0 &&
+            f.size > fileLimits.max_file_mb * 1024 * 1024),
+      ) ||
+      (fileLimits.max_total_mb > 0 &&
+        next.reduce((sum, f) => sum + f.size, 0) >
+          fileLimits.max_total_mb * 1024 * 1024)
+    ) {
+      setSendError(
+        "Choose nonempty files within your attachment limits in Settings ? Messages & privacy.",
+      );
+      return;
+    }
+    attachmentRevision.current++;
+    setFiles(next);
+    setSendError("");
+  }
   const [hasNew, setHasNew] = useState(false),
     [olderNotice, setOlderNotice] = useState("");
   const [messages, setMessages] = useState<Message[]>([]),
@@ -294,42 +327,51 @@ export function ConversationHistory({
             ? "Turn on bot replies to message this conversation."
             : "";
   const canSend = !blocked && !busy && !sending;
-  function send() {
+  async function send() {
     const outgoing = text.trim();
-    if (!canSend || !outgoing) return;
+    if (!canSend || (!outgoing && files.length === 0)) return;
+    const intent = JSON.stringify([outgoing, attachmentRevision.current]);
     // Reuse the idempotency key when retrying the same text after a lost response.
-    if (!sendKey.current || sendIntentText.current !== outgoing) {
+    if (!sendKey.current || sendIntentText.current !== intent) {
       sendKey.current = crypto.randomUUID();
-      sendIntentText.current = outgoing;
+      sendIntentText.current = intent;
     }
     const requestId = sendKey.current;
     setSending(true);
     setSendError("");
-    api(
-      `${base}/compose`,
-      "POST",
-      inbox?.enabled
-        ? { text: outgoing, request_id: requestId }
-        : { text: outgoing },
-    )
-      .then(() => {
-        setText((current) => (current.trim() === outgoing ? "" : current));
-        sendKey.current = "";
-        sendIntentText.current = "";
-        void load("", true, request.current, true);
-      })
-      .catch((e) =>
-        setSendError(
-          e instanceof ApiError
-            ? `Not sent: ${e.message.replaceAll("_", " ")}. Your text is kept.`
-            : "The server didn’t confirm this message. Your text is kept; send again to retry safely.",
-        ),
-      )
-      .finally(() => {
-        setSending(false);
-        composer.current?.focus();
-      });
+    try {
+      const attachments = await Promise.all(
+        files.map(async (f) => ({
+          name: f.name,
+          mime: f.type,
+          data: await encodeFile(f),
+        })),
+      );
+      await api(
+        `${base}/compose`,
+        "POST",
+        inbox?.enabled
+          ? { text: outgoing, request_id: requestId, attachments }
+          : { text: outgoing },
+      );
+      setText((current) => (current.trim() === outgoing ? "" : current));
+      setFiles([]);
+      attachmentRevision.current++;
+      sendKey.current = "";
+      sendIntentText.current = "";
+      void load("", true, request.current, true);
+    } catch (e) {
+      setSendError(
+        e instanceof ApiError
+          ? `Message not confirmed: ${e.message.replaceAll("_", " ")}. Your text and files are kept.`
+          : "The server did not confirm this message. Your text and files are kept; send again to retry safely.",
+      );
+    } finally {
+      setSending(false);
+      composer.current?.focus();
+    }
   }
+
   const showOlder = inbox?.enabled
     ? !!cursor || (!!inbox.load_older && !importFinished)
     : !!cursor;
@@ -368,28 +410,29 @@ export function ConversationHistory({
           >
             <Icon name="search" size={18} />
           </button>
-          {!inbox?.enabled && state?.capabilities.includes("history_import") && (
-            <button
-              type="button"
-              className="icon ghost"
-              title={
-                importFinished
-                  ? "All available phone history imported"
-                  : "Import older messages from your phone"
-              }
-              aria-label={
-                importFinished
-                  ? "All available phone history imported"
-                  : "Import phone history"
-              }
-              disabled={
-                busy || loading || importFinished || !state.transport_ready
-              }
-              onClick={() => void importPage()}
-            >
-              <Icon name="history" size={18} />
-            </button>
-          )}
+          {!inbox?.enabled &&
+            state?.capabilities.includes("history_import") && (
+              <button
+                type="button"
+                className="icon ghost"
+                title={
+                  importFinished
+                    ? "All available phone history imported"
+                    : "Import older messages from your phone"
+                }
+                aria-label={
+                  importFinished
+                    ? "All available phone history imported"
+                    : "Import phone history"
+                }
+                disabled={
+                  busy || loading || importFinished || !state.transport_ready
+                }
+                onClick={() => void importPage()}
+              >
+                <Icon name="history" size={18} />
+              </button>
+            )}
           {enrollControl}
         </div>
       </header>
@@ -512,10 +555,21 @@ export function ConversationHistory({
                 className={
                   "bubble " +
                   m.direction +
-                  (m.direction === "outgoing" ? " from-" + (m.origin ?? "bot") : "")
+                  (m.direction === "outgoing"
+                    ? " from-" + (m.origin ?? "bot")
+                    : "")
                 }
               >
-                <p>{m.text}</p>
+                {m.attachments?.map((attachment) => (
+                  <MessageAttachment
+                    key={attachment.id}
+                    attachment={attachment}
+                    fileLimitMB={fileLimits.max_file_mb}
+                    base={base}
+                    message={m.id}
+                  />
+                ))}
+                {m.text && <p>{m.text}</p>}
                 <small>
                   {m.direction === "outgoing" && (
                     <span className="sender">
@@ -582,7 +636,48 @@ export function ConversationHistory({
             {sendError}
           </p>
         )}
+        {files.length > 0 && (
+          <div className="selected-attachments" aria-label="Selected files">
+            {files.map((file, index) => (
+              <SelectedAttachment
+                key={`${index}-${file.name}`}
+                file={file}
+                disabled={sending}
+                remove={() => {
+                  attachmentRevision.current++;
+                  setFiles(files.filter((_, i) => i !== index));
+                }}
+              />
+            ))}
+          </div>
+        )}
         <div className="composer-box">
+          {inbox?.enabled && state?.capabilities.includes("attachments") && (
+            <>
+              <input
+                ref={fileInput}
+                className="sr-only"
+                type="file"
+                multiple
+                aria-label="Choose files"
+                disabled={sending}
+                onChange={(event) => {
+                  selectFiles(Array.from(event.target.files ?? []));
+                  event.target.value = "";
+                }}
+              />
+              <button
+                type="button"
+                className="icon ghost"
+                aria-label="Attach files"
+                title="Attach files ? limits are configurable in Messages & privacy"
+                disabled={sending}
+                onClick={() => fileInput.current?.click()}
+              >
+                <Icon name="attach" size={20} />
+              </button>
+            </>
+          )}
           <textarea
             ref={composer}
             rows={1}
@@ -611,9 +706,13 @@ export function ConversationHistory({
           <button
             className="send"
             aria-label="Send message"
-            disabled={!canSend || !text.trim()}
+            disabled={!canSend || (!text.trim() && files.length === 0)}
           >
-            {sending ? <span className="spinner" /> : <Icon name="send" size={18} />}
+            {sending ? (
+              <span className="spinner" />
+            ) : (
+              <Icon name="send" size={18} />
+            )}
           </button>
         </div>
         <div className="composer-meta">

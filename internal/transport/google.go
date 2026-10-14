@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"regexp"
+	"smsbot-server/internal/media"
 	"smsbot-server/internal/vault"
 	"strings"
 	"sync"
@@ -376,11 +377,32 @@ func conversationDetails(ctx context.Context, ids []string, fetch func(context.C
 	return results, nil
 }
 func (g *Google) Send(ctx context.Context, id, txn, text string) (Receipt, error) {
+	return g.sendParts(ctx, id, txn, text, nil)
+}
+func (g *Google) SendFiles(ctx context.Context, id, txn, text string, files []media.File) (Receipt, error) {
+	return g.sendParts(ctx, id, txn, text, files)
+}
+func (g *Google) sendParts(ctx context.Context, id, txn, text string, files []media.File) (Receipt, error) {
 	if !g.Ready() {
 		return Receipt{}, ErrNotSubmitted
 	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
+	parts := []*gmproto.MessageInfo{}
+	if text != "" {
+		parts = append(parts, &gmproto.MessageInfo{Data: &gmproto.MessageInfo_MessageContent{MessageContent: &gmproto.MessageContent{Content: text}}})
+	}
+	for _, file := range files {
+		if ctx.Err() != nil || file.RemoteID == "" || len(file.Key) != 32 {
+			return Receipt{}, ErrNotSubmitted
+		}
+		uploaded := outboundMedia(file)
+		parts = append(parts, &gmproto.MessageInfo{Data: &gmproto.MessageInfo_MediaContent{MediaContent: uploaded}})
+	}
+	if ctx.Err() != nil {
+		return Receipt{}, ErrNotSubmitted
+	}
+
 	c, e := g.client.GetConversation(ctx, id)
 	if e != nil {
 		return Receipt{}, ErrNotSubmitted
@@ -402,7 +424,7 @@ func (g *Google) Send(ctx context.Context, id, txn, text string) (Receipt, error
 	if !g.Ready() {
 		return Receipt{}, ErrNotSubmitted
 	}
-	payload := &gmproto.MessagePayload{ConversationID: id, ParticipantID: c.GetDefaultOutgoingID(), TmpID: txn, TmpID2: txn, MessageInfo: []*gmproto.MessageInfo{{Data: &gmproto.MessageInfo_MessageContent{MessageContent: &gmproto.MessageContent{Content: text}}}}}
+	payload := &gmproto.MessagePayload{ConversationID: id, ParticipantID: c.GetDefaultOutgoingID(), TmpID: txn, TmpID2: txn, MessageInfo: parts}
 	res, e := g.client.SendMessage(ctx, &gmproto.SendMessageRequest{ConversationID: id, SIMPayload: sim, TmpID: txn, MessagePayload: payload})
 	if e != nil {
 		return Receipt{}, ErrUnknown
@@ -436,14 +458,11 @@ func normalize(w *libgm.WrappedMessage, started time.Time) (Incoming, bool) {
 	if at.Before(started) {
 		return Incoming{}, false
 	}
-	var text strings.Builder
-	for _, p := range w.GetMessageInfo() {
-		if p.GetMessageContent() == nil {
-			return Incoming{}, false
-		}
-		text.WriteString(p.GetMessageContent().GetContent())
+	text, files, ok := messageParts(w.Message)
+	if !ok {
+		return Incoming{}, false
 	}
-	return Incoming{ID: w.GetMessageID(), ConversationID: w.GetConversationID(), ParticipantID: w.GetParticipantID(), Text: text.String(), At: at, Outgoing: outgoing, TransactionID: w.GetTmpID(), Status: status}, true
+	return Incoming{ID: w.GetMessageID(), ConversationID: w.GetConversationID(), ParticipantID: w.GetParticipantID(), Text: text, Attachments: files, At: at, Outgoing: outgoing, TransactionID: w.GetTmpID(), Status: status}, true
 }
 func (g *Google) Run(ctx context.Context, incoming func(Incoming), pause func(), receipt func(string, string, string, string)) {
 	timer := time.NewTicker(30 * time.Second)

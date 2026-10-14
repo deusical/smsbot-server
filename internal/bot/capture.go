@@ -44,7 +44,7 @@ func (e *Engine) publishCaptureConsent(s InboxSettings) {
 func (e *Engine) InboxCaptureGap() bool { return e.captureGap.Load() }
 func (e *Engine) QueueObservation(m transport.Incoming) {
 	consent := e.captureConsent.Load()
-	if consent == nil || !consent.settings.Enabled || m.Historical || m.ID == "" || m.ConversationID == "" || m.Text == "" || utf8.RuneCountInString(m.Text) > 12000 {
+	if consent == nil || !consent.settings.Enabled || m.Historical || m.ID == "" || m.ConversationID == "" || (m.Text == "" && len(m.Attachments) == 0) || utf8.RuneCountInString(m.Text) > 12000 {
 		return
 	}
 	if consent.settings.Scope == "selected" {

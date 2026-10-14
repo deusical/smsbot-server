@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	_ "modernc.org/sqlite"
+	"smsbot-server/internal/media"
 	"smsbot-server/internal/vault"
 	"time"
 )
@@ -33,6 +34,7 @@ type Job struct {
 	RequestedReasoning string   `json:"requested_reasoning,omitempty"`
 }
 type Plan struct {
+	Attachments    []media.File    `json:"attachments,omitempty"`
 	Reply          string          `json:"reply"`
 	Participant    string          `json:"participant"`
 	Input          string          `json:"input,omitempty"`
@@ -84,11 +86,22 @@ func (s *Store) migrate() error {
 	if e := s.DB.QueryRow("PRAGMA user_version").Scan(&version); e != nil {
 		return e
 	}
-	if version > 3 {
+	if version > 4 {
 		return errors.New("database is newer than this service")
 	}
-	if version == 3 {
+	if version == 4 {
 		return nil
+	}
+	if version == 3 {
+		tx, err := s.DB.Begin()
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		if _, err = tx.Exec(`CREATE TABLE IF NOT EXISTS message_attachments(message TEXT PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,payload TEXT NOT NULL); PRAGMA user_version=4;`); err != nil {
+			return err
+		}
+		return tx.Commit()
 	}
 	if version == 2 {
 		tx, e := s.DB.Begin()
@@ -102,7 +115,10 @@ PRAGMA user_version=3;`)
 		if e != nil {
 			return e
 		}
-		return tx.Commit()
+		if e = tx.Commit(); e != nil {
+			return e
+		}
+		return s.migrate()
 	}
 	tx, e := s.DB.Begin()
 	if e != nil {
@@ -235,7 +251,7 @@ func (s *Store) Enqueue(id, conv, command string, p Plan) (bool, error) {
 		return false, e
 	}
 	if n == 1 && p.InboxOwnerOnly {
-		digest, err := s.Vault.Seal("compose-intent:"+id, []byte(Hash(p.Reply)))
+		digest, err := s.Vault.Seal("compose-intent:"+id, []byte(media.Intent(p.Reply, p.Attachments)))
 		if err != nil {
 			return false, err
 		}
@@ -304,6 +320,7 @@ func (s *Store) Credential(token, kind string) bool {
 	e := s.DB.QueryRow("SELECT expires FROM credentials WHERE hash=? AND kind=?", Hash(token), kind).Scan(&expires)
 	return e == nil && (expires == 0 || expires > time.Now().Unix())
 }
+
 // SessionExpiry reports a live browser session's expiry; 0 means it never expires.
 func (s *Store) SessionExpiry(token string) (int64, bool) {
 	var expires int64
@@ -331,12 +348,13 @@ func (s *Store) SaveMessageAt(id, conv, direction, text string, at time.Time) er
 }
 
 type Message struct {
-	ID        string `json:"id"`
-	Direction string `json:"direction"`
-	At        string `json:"at"`
-	Text      string `json:"text"`
-	Origin    string `json:"origin,omitempty"`
-	Status    string `json:"status,omitempty"`
+	Attachments []media.Info `json:"attachments,omitempty"`
+	ID          string       `json:"id"`
+	Direction   string       `json:"direction"`
+	At          string       `json:"at"`
+	Text        string       `json:"text"`
+	Origin      string       `json:"origin,omitempty"`
+	Status      string       `json:"status,omitempty"`
 }
 
 func (s *Store) Messages(conv string) ([]Message, error) {

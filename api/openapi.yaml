@@ -1,8 +1,8 @@
 openapi: 3.1.0
 info:
   title: SmsBot control API
-  version: 1.0.0
-  description: Server commands, configuration, retained text history and control API.
+  version: 1.1.0
+  description: Server commands, configuration, retained messages, owner-only attachments and control API.
     Fixture transport/provider are offline. Browser mutations require exact Origin;
     native clients use revocable bearer credentials. New optional capabilities are
     advertised by state.
@@ -888,7 +888,9 @@ paths:
         type: string
     post:
       description: Queue confirmed owner manual reply with idempotency key; pause and
-        final access checks apply
+        final access checks apply. Optional attachments are base64 bytes. Owner-configured
+        attachment_limits control count, per-file MiB and combined MiB; each zero disables that limit. Empty text is allowed when files are supplied.
+        The request key binds the text, file names, MIME types and exact bytes.
       security:
       - browserSession: []
       responses:
@@ -914,10 +916,63 @@ paths:
                 text:
                   type: string
                   maxLength: 12000
+                attachments:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/AttachmentUpload'
                 request_id:
                   type: string
                   minLength: 16
                   maxLength: 100
+  /inbox/conversations/{id}/messages/{message}/attachments/{attachment}:
+    parameters:
+    - name: id
+      in: path
+      required: true
+      schema:
+        type: string
+    - name: message
+      in: path
+      required: true
+      schema:
+        type: string
+    - name: attachment
+      in: path
+      required: true
+      schema:
+        type: string
+    get:
+      description: Owner-only file content with current inbox consent and exact conversation identity checks. Remote media is fetched on demand. Never cached by the app. Range requests are supported. Active documents are always downloads.
+      security:
+      - browserSession: []
+      parameters:
+      - name: inline
+        in: query
+        schema:
+          type: string
+          enum: ['1']
+        description: Inline presentation for an allowlist of image, audio and video types only.
+      responses:
+        '200':
+          description: File bytes with safe Content-Disposition and no-store headers
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '206':
+          description: Requested byte range
+        '401':
+          description: Authentication required
+        '403':
+          description: Owner required
+        '409':
+          description: File unavailable or inbox access revoked
+        '413':
+          description: File exceeds the configured per-file download limit
+        '416':
+          description: Unsatisfiable byte range
+
 components:
   securitySchemes:
     browserSession:
@@ -1160,6 +1215,34 @@ components:
       required:
       - base_url
       - configured
+    Attachment:
+      type: object
+      additionalProperties: false
+      required: [id, name, mime, size]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        mime:
+          type: string
+        size:
+          type: integer
+          minimum: 0
+    AttachmentUpload:
+      type: object
+      additionalProperties: false
+      required: [name, data]
+      properties:
+        name:
+          type: string
+        mime:
+          type: string
+        data:
+          type: string
+          format: byte
+          contentEncoding: base64
+          description: Nonempty file bytes; configured per-file and combined limits apply unless set to zero.
     Message:
       type: object
       additionalProperties: false
@@ -1174,6 +1257,11 @@ components:
           type: string
           format: date-time
         text: *id002
+        attachments:
+          type: array
+          description: Present on owner full-inbox history only. File keys, remote locators and bytes are never included.
+          items:
+            $ref: '#/components/schemas/Attachment'
         origin:
           type: string
         status:
@@ -1191,6 +1279,21 @@ components:
       - messages
       - next_cursor
 
+    AttachmentLimits:
+      type: object
+      additionalProperties: false
+      required: [max_files, max_file_mb, max_total_mb]
+      description: Owner attachment limits. Zero means Unlimited independently. Missing limits use defaults 4 files, 10 MiB each, 20 MiB combined. These are application limits, not upstream/carrier guarantees.
+      properties:
+        max_files:
+          type: integer
+          minimum: 0
+        max_file_mb:
+          type: integer
+          minimum: 0
+        max_total_mb:
+          type: integer
+          minimum: 0
     OwnerInboxSettings:
       type: object
       additionalProperties: false
@@ -1202,6 +1305,8 @@ components:
       - automatic_replies
       - revision
       properties:
+        attachment_limits:
+          $ref: '#/components/schemas/AttachmentLimits'
         enabled:
           type: boolean
           default: false

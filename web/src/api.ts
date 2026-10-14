@@ -31,7 +31,14 @@ export type Job = {
   cost?: number;
   requested_reasoning?: string;
 };
+export type Attachment = {
+  id: string;
+  name: string;
+  mime: string;
+  size: number;
+};
 export type Message = {
+  attachments?: Attachment[];
   id: string;
   direction: string;
   at: string;
@@ -39,7 +46,18 @@ export type Message = {
   origin?: string;
   status?: string;
 };
+export type AttachmentLimits = {
+  max_files: number;
+  max_file_mb: number;
+  max_total_mb: number;
+};
+export const defaultAttachmentLimits: AttachmentLimits = {
+  max_files: 4,
+  max_file_mb: 10,
+  max_total_mb: 20,
+};
 export type InboxSettings = {
+  attachment_limits?: AttachmentLimits;
   enabled: boolean;
   scope: "all" | "selected";
   conversations: { conversation: string; participant: string }[];

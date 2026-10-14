@@ -6,12 +6,12 @@ import (
 	"errors"
 	"go.mau.fi/mautrix-gmessages/pkg/libgm/gmproto"
 	"google.golang.org/protobuf/proto"
-	"strings"
+	"smsbot-server/internal/media"
 	"time"
-	"unicode/utf8"
 )
 
 type HistoricalMessage struct {
+	Attachments   []media.File
 	ID            string
 	Direction     string
 	Text          string
@@ -91,7 +91,10 @@ func (f *Fixture) FetchHistory(ctx context.Context, conv, expectedPeer, cursor s
 	if cursor != "" {
 		return HistoryPage{}, errors.New("invalid_history_cursor")
 	}
-	return HistoryPage{Messages: []HistoricalMessage{{ID: "fixture-history", Direction: "incoming", Text: "!ask Historical synthetic input must never execute", At: time.Now().Add(-time.Hour)}}}, nil
+	return HistoryPage{Messages: []HistoricalMessage{
+		{ID: "fixture-history", Direction: "incoming", Text: "!ask Historical synthetic input must never execute", At: time.Now().Add(-time.Hour)},
+		{ID: "fixture-file-history", Direction: "incoming", At: time.Now().Add(-2 * time.Hour), Attachments: []media.File{{Info: media.Info{ID: "fixture-history-file", Name: "synthetic-history.txt", MIME: "text/plain", Size: 25}, Data: []byte("Synthetic historical file")}}},
+	}}, nil
 }
 func (g *Google) FetchHistory(ctx context.Context, conv, expectedPeer, cursor string) (HistoryPage, error) {
 	if !g.Ready() {
@@ -155,17 +158,8 @@ func historicalText(m *gmproto.Message, conv string) (HistoricalMessage, bool) {
 	default:
 		return HistoricalMessage{}, false
 	}
-	var text strings.Builder
-	for _, part := range m.GetMessageInfo() {
-		if part.GetMessageContent() == nil {
-			return HistoricalMessage{}, false
-		}
-		text.WriteString(part.GetMessageContent().GetContent())
-		if utf8.RuneCountInString(text.String()) > 12000 {
-			return HistoricalMessage{}, false
-		}
-	}
-	if text.Len() == 0 {
+	text, files, ok := messageParts(m)
+	if !ok || (text == "" && len(files) == 0) {
 		return HistoricalMessage{}, false
 	}
 	at := time.UnixMicro(m.GetTimestamp())
@@ -182,5 +176,5 @@ func historicalText(m *gmproto.Message, conv string) (HistoricalMessage, bool) {
 			status = "read"
 		}
 	}
-	return HistoricalMessage{ID: m.GetMessageID(), Direction: direction, Text: text.String(), At: at, TransactionID: m.GetTmpID(), Status: status}, true
+	return HistoricalMessage{ID: m.GetMessageID(), Direction: direction, Text: text, Attachments: files, At: at, TransactionID: m.GetTmpID(), Status: status}, true
 }
