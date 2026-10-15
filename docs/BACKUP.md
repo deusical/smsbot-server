@@ -28,3 +28,33 @@ The output file must be new. For restore, choose a fresh state directory, use th
 ```
 
 Initialization reuses an existing protected key only for a new state database; it does not replace that key. A running state directory is locked against backup, restore and cookie updates. Reconfigure the excluded provider/Google credentials locally afterward.
+
+
+## Local history synchronization
+
+The owner inbox now uses a separate `internal/history` read-job service. Enabling
+collection starts resumable available-history ingestion and periodic recent
+reconciliation, independently of bot replies and global sending pause. The thread's
+History sync panel can request all available history or an RFC3339-backed date
+cutoff, cancel a backfill, and show saved counts, state and last successful sync.
+Stopping collection preserves the owner-readable local archive; it does not grant
+legacy clients access. Groups remain excluded and fetching/sending rechecks exact
+participant identity. Local text pages and search work while the phone is offline.
+
+Archive retention is separate from the bot's job retention: zero keeps archived
+messages indefinitely, otherwise the archive policy expires them. Already expired
+messages must be recovered from available upstream history. Schema v5 adds encrypted
+verified archive identities/checkpoints, encrypted observed content revisions, a
+local change feed and a conversation/time index. Existing service backups include
+these records but restore jobs cancelled, without collection consent. Historical
+commands and restored messages never execute. Previously observed revisions can be
+read through the owner API; upstream intermediate edits are not guaranteed. Recent
+reconciliation overlaps by 30 minutes and pages back to the prior successful sync;
+older ranges can be rescanned explicitly. No arbitrary old-edit detection guarantee
+is made without a covering scan or update event.
+
+The UI preloads local pages near the top and virtualizes long loaded histories.
+A local change cursor refreshes edits and new rows beyond the newest 50-message
+page. Original received-file bytes and scalable archive-specific backups remain
+PR 2 work; remote file references alone are not a complete file backup. Live Google
+sync/edit acceptance is pending; automated coverage uses offline fixtures.

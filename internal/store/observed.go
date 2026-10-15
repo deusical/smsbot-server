@@ -57,6 +57,26 @@ func (s *Store) saveObserved(conv, upstream, txn, direction, text, origin, statu
 	if err != nil {
 		return err
 	}
+	// Only private archive observations may revise a message. Existing command
+	// plans remain immutable, and legacy imports cannot rewrite private content.
+	if privateNew {
+		var old string
+		if err = tx.QueryRow("SELECT payload FROM messages WHERE id=?", id).Scan(&old); err != nil {
+			return err
+		}
+		plain, openErr := s.Vault.Open("message:"+id, old)
+		if openErr != nil {
+			return openErr
+		}
+		if string(plain) != text {
+			if _, err = tx.Exec("INSERT INTO message_revisions SELECT ?,coalesce(max(revision),0)+1,?,? FROM message_revisions WHERE message=?", id, old, time.Now().UTC().Format(time.RFC3339Nano), id); err != nil {
+				return err
+			}
+			if _, err = tx.Exec("UPDATE messages SET payload=? WHERE id=?", enc, id); err != nil {
+				return err
+			}
+		}
+	}
 	n, err := result.RowsAffected()
 	if err != nil {
 		return err
@@ -115,7 +135,7 @@ func (s *Store) UpdateMessageStatus(conv, id, status string) error {
 	_, err := s.DB.Exec(`UPDATE message_meta SET status=CASE WHEN ?='read' OR (?='delivered' AND status!='read') OR status='' THEN ? ELSE status END WHERE message=? AND EXISTS(SELECT 1 FROM messages WHERE id=message AND conversation=?)`, status, status, status, id, conv)
 	return err
 }
-func (s *Store) SetInboxPreferences(b []byte, stopAutomatic bool) error {
+func (s *Store) SetInboxPreferences(b []byte, stopAutomatic bool, retention int) error {
 	encoded, err := s.Vault.Seal("inbox-settings", b)
 	if err != nil {
 		return err
@@ -128,10 +148,37 @@ func (s *Store) SetInboxPreferences(b []byte, stopAutomatic bool) error {
 	if _, err = tx.Exec("INSERT INTO settings VALUES('inbox_settings',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", encoded); err != nil {
 		return err
 	}
+	if _, err = tx.Exec("UPDATE archive_conversations SET retention_days=?", retention); err != nil {
+		return err
+	}
 	if stopAutomatic {
 		if _, err = tx.Exec("UPDATE jobs SET state='cancelled',code='automatic_replies_disabled',plan='' WHERE command!='manual' AND state IN ('queued','generating','awaiting_approval')"); err != nil {
 			return err
 		}
 	}
 	return tx.Commit()
+}
+
+// FirstObservation uses opaque IDs only. Content edits/status repeats must never
+// become a fresh bot command, even when the original text was not a command.
+func (s *Store) FirstObservation(conv, upstream string) (bool, error) {
+	key := Hash(conv + "\x00" + upstream)
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+	var known int
+	if err = tx.QueryRow("SELECT count(*) FROM message_alias WHERE alias=?", key).Scan(&known); err != nil {
+		return false, err
+	}
+	result, err := tx.Exec("INSERT OR IGNORE INTO observed_events VALUES(?)", key)
+	if err != nil {
+		return false, err
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n > 0 && known == 0, tx.Commit()
 }

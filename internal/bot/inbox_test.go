@@ -58,7 +58,7 @@ func TestInboxSelectedIdentityAndDisableBoundaries(t *testing.T) {
 	if err := e.SetInboxSettings(context.Background(), s); err != nil {
 		t.Fatal(err)
 	}
-	for _, edit := range []func(*transport.Incoming){func(m *transport.Incoming) { m.ParticipantID = "wrong" }, func(m *transport.Incoming) { m.ConversationID = "demo-group" }, func(m *transport.Incoming) { m.Historical = true }, func(m *transport.Incoming) { m.At = time.Now().Add(-time.Hour) }} {
+	for _, edit := range []func(*transport.Incoming){func(m *transport.Incoming) { m.ParticipantID = "wrong" }, func(m *transport.Incoming) { m.ConversationID = "demo-group" }, func(m *transport.Incoming) { m.At = time.Now().Add(-time.Hour) }} {
 		m := incoming()
 		edit(&m)
 		if err := e.Observe(context.Background(), m); err != nil {

@@ -6,12 +6,14 @@ import (
 	"net/http"
 	"smsbot-server/internal/bot"
 	"smsbot-server/internal/media"
+	"smsbot-server/internal/store"
 	"smsbot-server/internal/transport"
 	"strconv"
 	"time"
 )
 
 func (s *Server) inboxRoutes() {
+	s.archiveRoutes()
 	s.mux.HandleFunc("GET /api/v1/inbox/conversations/{id}/messages/{message}/attachments/{attachment}", s.protected(s.inboxAttachment))
 	s.mux.HandleFunc("GET /api/v1/inbox/settings", s.protected(s.inboxSettings))
 	s.mux.HandleFunc("PUT /api/v1/inbox/settings", s.protected(s.saveInboxSettings))
@@ -40,16 +42,46 @@ func (s *Server) saveInboxSettings(w http.ResponseWriter, r *http.Request) {
 	s.inboxSettings(w, r)
 }
 func (s *Server) inboxConversations(w http.ResponseWriter, r *http.Request) {
-	source, ok := s.Engine.Transport.(transport.ConversationPageSource)
-	if !ok {
-		s.bad(w, 503, "discovery_unavailable")
-		return
+	var p transport.ConversationPage
+	if s.Engine.Transport.Ready() {
+		source, ok := s.Engine.Transport.(transport.ConversationPageSource)
+		if ok {
+			var err error
+			p, err = source.DiscoverConversations(r.Context(), r.URL.Query().Get("cursor"))
+			if err != nil {
+				p.Partial = true
+			}
+		}
 	}
-	p, err := source.DiscoverConversations(r.Context(), r.URL.Query().Get("cursor"))
+	archived, err := s.Engine.ArchiveConversations()
 	if err != nil {
-		s.bad(w, 503, "discovery_unavailable")
+		s.bad(w, 500, "archive_unavailable")
 		return
 	}
+	known := map[string]int{}
+	for i, c := range p.Conversations {
+		known[c.ID] = i
+	}
+	for _, c := range archived {
+		if i, ok := known[c.ID]; ok {
+			if p.Conversations[i].ParticipantID == c.ParticipantID {
+				p.Conversations[i].Archived = true
+			} else {
+				c.Writable = false
+				p.Conversations[i] = c
+			}
+		} else {
+			p.Conversations = append(p.Conversations, c)
+		}
+	}
+	eligible := []transport.Conversation{}
+	for _, c := range p.Conversations {
+		if !c.Group && (c.Writable || c.Archived) {
+			eligible = append(eligible, c)
+		}
+	}
+	p.Conversations = eligible
+
 	for i := range p.Conversations {
 		p.Conversations[i].Enrolled = s.Engine.Store.Enrolled(p.Conversations[i].ID, p.Conversations[i].ParticipantID)
 	}
@@ -65,7 +97,12 @@ func (s *Server) inboxHistory(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	p, err := s.Engine.InboxPage(r.Context(), r.PathValue("id"), r.URL.Query().Get("cursor"), r.URL.Query().Get("search"), limit)
+	var p store.InboxPage
+	if _, archiveErr := s.Engine.Store.Archive(r.PathValue("id")); archiveErr == nil {
+		p, err = s.localArchivePage(r.PathValue("id"), r.URL.Query().Get("cursor"), r.URL.Query().Get("search"), limit)
+	} else {
+		p, err = s.Engine.InboxPage(r.Context(), r.PathValue("id"), r.URL.Query().Get("cursor"), r.URL.Query().Get("search"), limit)
+	}
 	if err != nil {
 		s.bad(w, 409, "history_unavailable_or_access_disabled")
 		return
@@ -105,7 +142,7 @@ func (s *Server) inboxCompose(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		code := "compose_unavailable"
 		switch err.Error() {
-		case "attachment_size_limit", "too_many_attachments", "attachments_unavailable", "request_id_reused_with_different_message":
+		case "attachment_size_limit", "too_many_attachments", "attachments_unavailable", "request_id_reused_with_different_message", "bot_unavailable", "inbox_access_disabled", "invalid_message_or_request_id", "request_limit_reached", "archive_identity_changed":
 			code = err.Error()
 		}
 		s.bad(w, 409, code)

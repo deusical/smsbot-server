@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"smsbot-server/internal/history"
 	"smsbot-server/internal/store"
 	"smsbot-server/internal/transport"
 	"strings"
@@ -15,6 +16,7 @@ import (
 )
 
 type Engine struct {
+	History        *history.Service
 	Store          *store.Store
 	Transport      transport.Transport
 	Provider       Provider
@@ -38,8 +40,20 @@ func New(s *store.Store, t transport.Transport) *Engine {
 		}
 	}
 	e := &Engine{Store: s, Transport: t, Provider: provider, now: time.Now, pending: map[string]context.CancelFunc{}, captureQueue: make(chan captureItem, 512)}
+	e.History = history.New(s, archiveHost{e})
 	if settings, err := e.InboxSettings(); err == nil {
 		e.publishCaptureConsent(settings)
+		// Preserve existing opted-in history before startup's legacy expiry pass.
+		// Pending records grant no viewing or collection rights before verification.
+		if settings.Enabled {
+			if settings.Scope == "all" {
+				_, _ = s.DB.Exec("INSERT OR IGNORE INTO archive_pending SELECT DISTINCT conversation FROM messages WHERE conversation NOT IN (SELECT conversation FROM archive_conversations)")
+			} else {
+				for _, b := range settings.Conversations {
+					_, _ = s.DB.Exec("INSERT OR IGNORE INTO archive_pending SELECT ? WHERE NOT EXISTS(SELECT 1 FROM archive_conversations WHERE conversation=?)", b.Conversation, b.Conversation)
+				}
+			}
+		}
 	}
 	return e
 }

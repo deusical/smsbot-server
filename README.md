@@ -22,7 +22,7 @@ The web dashboard is the supported phone client. The separate native Android app
 
 ## Not implemented or verified yet
 
-The paired transport sends a complete reply up to the configured character cap; Android-only SMS segment/SIM controls do not apply. History import is explicit, respects retention and never routes imported commands. Full-inbox history includes available attachments; legacy client history remains text-only. Exhausting available pages does not establish complete Google history. Both import paths match messages to recorded sends using explicit upstream/transaction IDs. Re-import repairs older duplicate rows when that exact link is available; equal text and nearby timestamps never trigger deduplication.
+The paired transport sends a complete reply up to the configured character cap; Android-only SMS segment/SIM controls do not apply. Legacy history import remains explicit. The owner archive synchronizes available history automatically, follows its separate retention policy and never routes imported commands. Full-inbox history includes available attachments; legacy client history remains text-only. Exhausting available pages does not establish complete Google history. Both import paths match messages to recorded sends using explicit upstream/transaction IDs. Re-import repairs older duplicate rows when that exact link is available; equal text and nearby timestamps never trigger deduplication.
 
 Provider generation and delivery acceptance on the real phone, personal HTTPS/private-network setup, locked/open/background-phone cases, sustained authentication and browser handoff remain owner-controlled acceptance checks. Automated provider checks use local mocks or the HTTP-free fixture provider. Public hosting and portable cross-platform key recovery are outside this development milestone.
 
@@ -129,3 +129,33 @@ See [feature parity](docs/PARITY.md), [recovery](docs/BACKUP.md), [API contract]
 ![Synthetic web workspace](docs/images/server-workspace.png)
 
 ![Synthetic web command editor](docs/images/server-commands.png)
+
+
+## Local history synchronization
+
+The owner inbox now uses a separate `internal/history` read-job service. Enabling
+collection starts resumable available-history ingestion and periodic recent
+reconciliation, independently of bot replies and global sending pause. The thread's
+History sync panel can request all available history or an RFC3339-backed date
+cutoff, cancel a backfill, and show saved counts, state and last successful sync.
+Stopping collection preserves the owner-readable local archive; it does not grant
+legacy clients access. Groups remain excluded and fetching/sending rechecks exact
+participant identity. Local text pages and search work while the phone is offline.
+
+Archive retention is separate from the bot's job retention: zero keeps archived
+messages indefinitely, otherwise the archive policy expires them. Already expired
+messages must be recovered from available upstream history. Schema v5 adds encrypted
+verified archive identities/checkpoints, encrypted observed content revisions, a
+local change feed and a conversation/time index. Existing service backups include
+these records but restore jobs cancelled, without collection consent. Historical
+commands and restored messages never execute. Previously observed revisions can be
+read through the owner API; upstream intermediate edits are not guaranteed. Recent
+reconciliation overlaps by 30 minutes and pages back to the prior successful sync;
+older ranges can be rescanned explicitly. No arbitrary old-edit detection guarantee
+is made without a covering scan or update event.
+
+The UI preloads local pages near the top and virtualizes long loaded histories.
+A local change cursor refreshes edits and new rows beyond the newest 50-message
+page. Original received-file bytes and scalable archive-specific backups remain
+PR 2 work; remote file references alone are not a complete file backup. Live Google
+sync/edit acceptance is pending; automated coverage uses offline fixtures.

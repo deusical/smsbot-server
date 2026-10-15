@@ -34,7 +34,20 @@ type backupAttachment struct {
 	Message string `json:"message"`
 	Payload string `json:"payload"`
 }
+type backupArchive struct {
+	Conversation string
+	Payload      string
+	Retention    int
+}
+type backupRevision struct {
+	Message  string
+	Revision int
+	Payload  string
+	Observed string
+}
 type backupSnapshot struct {
+	Archives    []backupArchive    `json:"archives,omitempty"`
+	Revisions   []backupRevision   `json:"revisions,omitempty"`
 	Attachments []backupAttachment `json:"attachments,omitempty"`
 	Format      int                `json:"format"`
 	Schema      int                `json:"schema"`
@@ -200,6 +213,42 @@ func (s *Store) ExportBackup() ([]byte, error) {
 			return nil, e
 		}
 	}
+	if b.Schema >= 5 {
+		rows, e = tx.Query("SELECT conversation,payload,retention_days FROM archive_conversations")
+		if e != nil {
+			return nil, e
+		}
+		for rows.Next() {
+			var a backupArchive
+			if e = rows.Scan(&a.Conversation, &a.Payload, &a.Retention); e != nil {
+				rows.Close()
+				return nil, e
+			}
+			b.Archives = append(b.Archives, a)
+		}
+		e = rows.Err()
+		rows.Close()
+		if e != nil {
+			return nil, e
+		}
+		rows, e = tx.Query("SELECT message,revision,payload,observed FROM message_revisions")
+		if e != nil {
+			return nil, e
+		}
+		for rows.Next() {
+			var r backupRevision
+			if e = rows.Scan(&r.Message, &r.Revision, &r.Payload, &r.Observed); e != nil {
+				rows.Close()
+				return nil, e
+			}
+			b.Revisions = append(b.Revisions, r)
+		}
+		e = rows.Err()
+		rows.Close()
+		if e != nil {
+			return nil, e
+		}
+	}
 	plain, e := json.Marshal(b)
 	if e != nil {
 		return nil, e
@@ -250,6 +299,14 @@ func (s *Store) RestoreBackup(data []byte) error {
 	}
 	if schema >= 2 {
 		if e = tx.QueryRow("SELECT (SELECT count(*) FROM usage)+(SELECT count(*) FROM memory)").Scan(&count); e != nil {
+			return e
+		}
+		if count != 0 {
+			return errors.New("restore requires fresh bot state")
+		}
+	}
+	if schema >= 5 {
+		if e = tx.QueryRow("SELECT (SELECT count(*) FROM archive_conversations)+(SELECT count(*) FROM message_revisions)+(SELECT count(*) FROM archive_pending)+(SELECT count(*) FROM observed_events)+(SELECT count(*) FROM message_changes)").Scan(&count); e != nil {
 			return e
 		}
 		if count != 0 {
@@ -326,6 +383,37 @@ func (s *Store) RestoreBackup(data []byte) error {
 			return errors.New("invalid backup attachment")
 		}
 		if _, e = tx.Exec("INSERT INTO message_attachments VALUES(?,?)", a.Message, a.Payload); e != nil {
+			return e
+		}
+	}
+	for _, a := range b.Archives {
+		plain, err := s.Vault.Open("archive:"+Hash(a.Conversation), a.Payload)
+		var record Archive
+		if err != nil || json.Unmarshal(plain, &record) != nil || record.Conversation.ID != a.Conversation || record.Conversation.Group || record.Conversation.ParticipantID == "" || a.Retention < 0 || a.Retention > 3650 {
+			return errors.New("invalid backup archive")
+		}
+		record.State = "cancelled"
+		record.Generation++
+		record.Cursor = ""
+		record.RecentCursor = ""
+		record.RecentStarted = ""
+		plain, err = json.Marshal(record)
+		if err != nil {
+			return err
+		}
+		enc, err := s.Vault.Seal("archive:"+Hash(a.Conversation), plain)
+		if err != nil {
+			return err
+		}
+		if _, e = tx.Exec("INSERT INTO archive_conversations VALUES(?,?,?)", a.Conversation, enc, a.Retention); e != nil {
+			return e
+		}
+	}
+	for _, r := range b.Revisions {
+		if _, e = s.Vault.Open("message:"+r.Message, r.Payload); e != nil {
+			return errors.New("invalid backup revision")
+		}
+		if _, e = tx.Exec("INSERT INTO message_revisions VALUES(?,?,?,?)", r.Message, r.Revision, r.Payload, r.Observed); e != nil {
 			return e
 		}
 	}

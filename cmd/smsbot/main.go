@@ -264,6 +264,9 @@ func runWithInput(args []string, input io.Reader) error {
 	adapterDone := make(chan struct{})
 	captureDone := make(chan struct{})
 	go func() { defer close(captureDone); engine.RunCapture(ctx) }()
+	historyDone := make(chan struct{})
+	go func() { defer close(historyDone); engine.History.Run(ctx) }()
+	defer func() { cancel(); <-historyDone }()
 	if google != nil {
 		go func() {
 			defer close(adapterDone)

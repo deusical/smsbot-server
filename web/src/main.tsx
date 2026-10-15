@@ -60,6 +60,7 @@ function App() {
     [confirmSignOut, setConfirmSignOut] = useState(false);
   const paginatedConversations = useRef(false);
   const refreshing = useRef(false),
+    refreshingDetails = useRef(false),
     stateRevision = useRef(0),
     sessionRevision = useRef(0);
   const workspace = useWorkspace(signedIn, inbox, setInbox);
@@ -117,7 +118,6 @@ function App() {
   async function refresh() {
     if (refreshing.current) return;
     refreshing.current = true;
-    let stage = "state";
     const session = sessionRevision.current;
     try {
       const revision = stateRevision.current;
@@ -125,6 +125,22 @@ function App() {
       if (session !== sessionRevision.current) return;
       if (revision === stateRevision.current) setState(s);
       setSignedIn(true);
+      // Startup discovery can be slow. It must not hold login busy or stop
+      // readiness/pause polling while the phone is connecting.
+      void refreshDetails(s, session);
+    } catch (e) {
+      if (session !== sessionRevision.current) return;
+      if (e instanceof ApiError && e.status === 401) clearSession();
+      else setError("Could not refresh from the server. Retrying…");
+    } finally {
+      refreshing.current = false;
+    }
+  }
+  async function refreshDetails(s: State, session: number) {
+    if (refreshingDetails.current) return;
+    refreshingDetails.current = true;
+    let stage = "settings";
+    try {
       let inboxConfig: InboxConfig | null = null;
       if (s.capabilities.includes("full_inbox")) {
         inboxConfig = await api<InboxConfig>("/inbox/settings");
@@ -139,9 +155,9 @@ function App() {
       const activity = await api<Job[]>("/activity");
       if (session !== sessionRevision.current) return;
       setJobs(activity);
-      if (s.transport_ready) {
+      if (s.transport_ready || s.capabilities.includes("archive_history")) {
         stage = "conversations";
-        if (inboxConfig?.enabled) {
+        if (inboxConfig?.enabled || s.capabilities.includes("archive_history")) {
           const discovered = await api<ConversationPage>(
             "/inbox/conversations",
           );
@@ -179,7 +195,7 @@ function App() {
         setError("Could not refresh from the server. Retrying…");
       else setError("Connection lost. Retrying…");
     } finally {
-      refreshing.current = false;
+      refreshingDetails.current = false;
     }
   }
   useEffect(() => {

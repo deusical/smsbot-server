@@ -46,7 +46,7 @@ export function ConversationsPage({
       `${c.label} ${c.protocol}`.toLowerCase().includes(search.toLowerCase()),
   );
   const current = conversations.find((c) => c.id === selected);
-  const open = (c: Conversation) => c.enrolled || inboxAllows(inbox, c);
+  const open = (c: Conversation) => c.archived || c.enrolled || inboxAllows(inbox, c);
   const toggle = (c: Conversation) =>
     act(() =>
       c.enrolled
@@ -175,7 +175,7 @@ export function ConversationsPage({
       <section className="thread-pane" aria-label="Messages">
         {current && open(current) ? (
           <ConversationHistory
-            key={current.id + String(inboxAllows(inbox, current))}
+            key={current.id}
             conversation={current}
             inbox={inboxAllows(inbox, current) ? inbox : undefined}
             state={state}

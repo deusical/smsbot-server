@@ -86,11 +86,38 @@ func (s *Store) migrate() error {
 	if e := s.DB.QueryRow("PRAGMA user_version").Scan(&version); e != nil {
 		return e
 	}
-	if version > 4 {
+	if version > 5 {
 		return errors.New("database is newer than this service")
 	}
-	if version == 4 {
+	if version == 5 {
 		return nil
+	}
+	if version == 4 {
+		tx, err := s.DB.Begin()
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		_, err = tx.Exec(`
+CREATE TABLE IF NOT EXISTS observed_events(id TEXT PRIMARY KEY);
+CREATE TABLE IF NOT EXISTS archive_pending(conversation TEXT PRIMARY KEY);
+INSERT OR IGNORE INTO archive_pending SELECT DISTINCT m.conversation FROM messages m JOIN message_meta meta ON meta.message=m.id WHERE meta.owner_only=1;
+CREATE TABLE IF NOT EXISTS archive_conversations(conversation TEXT PRIMARY KEY,payload TEXT NOT NULL,retention_days INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS message_revisions(message TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,revision INTEGER NOT NULL,payload TEXT NOT NULL,observed TEXT NOT NULL,PRIMARY KEY(message,revision));
+CREATE TABLE IF NOT EXISTS message_changes(seq INTEGER PRIMARY KEY AUTOINCREMENT,conversation TEXT NOT NULL,message TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS messages_conversation_time ON messages(conversation,at DESC,id DESC);
+CREATE INDEX IF NOT EXISTS changes_conversation_seq ON message_changes(conversation,seq);
+CREATE TRIGGER IF NOT EXISTS message_insert_change AFTER INSERT ON messages BEGIN INSERT INTO message_changes(conversation,message) VALUES(new.conversation,new.id); END;
+CREATE TRIGGER IF NOT EXISTS message_delete_change AFTER DELETE ON messages BEGIN INSERT INTO message_changes(conversation,message) VALUES(old.conversation,old.id); END;
+CREATE TRIGGER IF NOT EXISTS message_update_change AFTER UPDATE ON messages WHEN old.payload!=new.payload BEGIN INSERT INTO message_changes(conversation,message) VALUES(new.conversation,new.id); END;
+CREATE TRIGGER IF NOT EXISTS message_status_change AFTER UPDATE ON message_meta WHEN old.status!=new.status BEGIN INSERT INTO message_changes(conversation,message) SELECT conversation,id FROM messages WHERE id=new.message; END;
+CREATE TRIGGER IF NOT EXISTS message_files_change AFTER INSERT ON message_attachments BEGIN INSERT INTO message_changes(conversation,message) SELECT conversation,id FROM messages WHERE id=new.message; END;
+CREATE TRIGGER IF NOT EXISTS message_files_update AFTER UPDATE ON message_attachments WHEN old.payload!=new.payload BEGIN INSERT INTO message_changes(conversation,message) SELECT conversation,id FROM messages WHERE id=new.message; END;
+PRAGMA user_version=5;`)
+		if err != nil {
+			return err
+		}
+		return tx.Commit()
 	}
 	if version == 3 {
 		tx, err := s.DB.Begin()
@@ -101,7 +128,10 @@ func (s *Store) migrate() error {
 		if _, err = tx.Exec(`CREATE TABLE IF NOT EXISTS message_attachments(message TEXT PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,payload TEXT NOT NULL); PRAGMA user_version=4;`); err != nil {
 			return err
 		}
-		return tx.Commit()
+		if err = tx.Commit(); err != nil {
+			return err
+		}
+		return s.migrate()
 	}
 	if version == 2 {
 		tx, e := s.DB.Begin()
@@ -348,6 +378,7 @@ func (s *Store) SaveMessageAt(id, conv, direction, text string, at time.Time) er
 }
 
 type Message struct {
+	Revision    int          `json:"revision,omitempty"`
 	Attachments []media.Info `json:"attachments,omitempty"`
 	ID          string       `json:"id"`
 	Direction   string       `json:"direction"`

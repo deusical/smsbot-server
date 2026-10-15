@@ -1,3 +1,5 @@
+import { useVirtualizer } from "@tanstack/react-virtual";
+import { HistorySync } from "./HistorySync";
 import {
   useEffect,
   useLayoutEffect,
@@ -8,6 +10,7 @@ import {
 import {
   api,
   defaultAttachmentLimits,
+  inboxAllows,
   ApiError,
   type Conversation,
   type History,
@@ -64,7 +67,7 @@ export function ConversationHistory({
   onBack,
   onResume,
 }: Props) {
-  const base = `${inbox?.enabled ? "/inbox" : ""}/conversations/${encodeURIComponent(conversation.id)}`;
+  const base = `${(inbox?.enabled || conversation.archived) ? "/inbox" : ""}/conversations/${encodeURIComponent(conversation.id)}`;
   const scroll = useRef<HTMLDivElement>(null),
     scrollSnapshot = useRef<{
       top: number;
@@ -73,6 +76,7 @@ export function ConversationHistory({
       prepend: boolean;
     } | null>(null),
     sendKey = useRef(""),
+    sendRoute = useRef<"inbox" | "legacy" | null>(null),
     sendIntentText = useRef(""),
     composer = useRef<HTMLTextAreaElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -115,6 +119,9 @@ export function ConversationHistory({
     [sending, setSending] = useState(false),
     [loading, setLoading] = useState(false),
     [notice, setNotice] = useState("");
+  const changeCursor = useRef<number | null>(null);
+  const changesBusy = useRef(false);
+  const changesDone = useRef<Promise<void> | null>(null);
   const messagesRef = useRef<Message[]>([]);
   messagesRef.current = messages;
   const request = useRef(1),
@@ -147,7 +154,7 @@ export function ConversationHistory({
         "POST",
         { cursor: importCursor },
       );
-      if (generation !== request.current) return;
+      if (generation !== request.current) return false;
       setImportCursor(
         result.next_cursor === importCursor ? "" : result.next_cursor,
       );
@@ -165,6 +172,8 @@ export function ConversationHistory({
             .replaceAll("=", "")
         : "";
       await load(before, true);
+      await refreshChanges();
+      return result.imported > 0;
     } catch (e) {
       if (generation === request.current)
         setError(
@@ -172,6 +181,7 @@ export function ConversationHistory({
             ? e.message.replaceAll("_", " ")
             : "Could not import phone history",
         );
+      return false;
     } finally {
       endForeground(generation);
     }
@@ -196,9 +206,9 @@ export function ConversationHistory({
     if (!background) beginForeground(generation);
     let resolveDone: (() => void) | undefined;
     try {
-      while (inFlight.current === generation) {
+      while (inFlight.current === generation || changesBusy.current) {
         if (background) return;
-        await inFlightDone.current?.done;
+        await (changesBusy.current ? changesDone.current : inFlightDone.current?.done);
         if (generation !== request.current) return;
       }
       if (generation !== request.current) return;
@@ -212,6 +222,7 @@ export function ConversationHistory({
       const params = new URLSearchParams({ limit: "50", search: query });
       if (next) params.set("cursor", next);
       const result = await api<History>(`${base}/history?${params}`);
+      if (generation === request.current && !next && changeCursor.current === null && result.change_cursor !== undefined) changeCursor.current = result.change_cursor;
       if (generation === request.current) {
         const el = scroll.current;
         scrollSnapshot.current = el
@@ -262,23 +273,58 @@ export function ConversationHistory({
       if (!background) endForeground(generation);
     }
   }
+  async function refreshChanges() {
+    if (!base.startsWith("/inbox") || !state?.capabilities.includes("archive_history") || changeCursor.current === null || changesBusy.current || inFlight.current !== 0) return;
+    const generation = request.current;
+    changesBusy.current = true;
+    let finish!: () => void;
+    changesDone.current = new Promise<void>((resolve) => { finish = resolve; });
+    try {
+      for (let i = 0; i < 10; i++) {
+        const result: {messages: Message[]; deleted?: string[]; cursor: number; more: boolean} = await api<{messages: Message[]; deleted?: string[]; cursor: number; more: boolean}>(`${base}/changes?after=${changeCursor.current}`);
+        if (generation !== request.current) return;
+        const el = scroll.current;
+        if (el && result.messages.length) {
+          const bottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+          scrollSnapshot.current = { top: el.scrollTop, height: el.scrollHeight, bottom, prepend: false };
+          if (!bottom && result.messages.some((m) => !messagesRef.current.some((old) => old.id === m.id))) setHasNew(true);
+        }
+        if (result.messages.length || result.deleted?.length) setMessages((old) => {
+          const map = new Map(old.map((m) => [m.id, m]));
+          for (const id of result.deleted ?? []) map.delete(id);
+          for (const m of result.messages) {
+            const matches = !query || (m.text + "\n" + (m.attachments ?? []).map((a) => a.name).join("\n")).toLowerCase().includes(query.toLowerCase());
+            if (matches) map.set(m.id, m); else map.delete(m.id);
+          }
+          return [...map.values()].sort((a,b) => Date.parse(a.at)-Date.parse(b.at) || a.id.localeCompare(b.id));
+        });
+        changeCursor.current = result.cursor;
+        setError("");
+        if (!result.more) break;
+      }
+    } catch {
+      if (generation === request.current) setError("Could not refresh messages. Retrying automatically.");
+    } finally { changesBusy.current = false; finish(); }
+  }
   useLayoutEffect(() => {
     const el = scroll.current,
       s = scrollSnapshot.current;
     if (!el) return;
-    if (!s || s.bottom) el.scrollTop = el.scrollHeight;
+    if (!s) return;
+    if (s.bottom) el.scrollTop = el.scrollHeight;
     else el.scrollTop = s.top + (s.prepend ? el.scrollHeight - s.height : 0);
     scrollSnapshot.current = null;
   }, [messages]);
   const loadingOlder = useRef(false);
+  const previousScrollTop = useRef(0);
   async function loadOlder() {
     if (loadingOlder.current || loading) return;
     loadingOlder.current = true;
     try {
       if (cursor) await load(cursor, true);
       else if (inbox?.load_older && !importFinished) {
-        await importPage();
-        setOlderNotice("Loaded older messages from your phone.");
+        const imported = await importPage();
+        setOlderNotice(imported ? "Loaded older messages from your phone." : "No additional messages were saved. Check history sync progress.");
       }
     } finally {
       loadingOlder.current = false;
@@ -288,6 +334,7 @@ export function ConversationHistory({
     request.current++;
     inFlight.current = 0;
     setMessages([]);
+    changeCursor.current = null;
     setCursor("");
     setError("");
     setNotice("");
@@ -295,15 +342,18 @@ export function ConversationHistory({
     return () => {
       request.current++;
     };
-  }, [conversation.id, query]);
+  }, [conversation.id, query, base]);
   useEffect(() => {
     const generation = request.current;
     const timer = setInterval(
-      () => void load("", true, generation, true),
+      () => {
+        if (state?.capabilities.includes("archive_history") && base.startsWith("/inbox") && changeCursor.current !== null) void refreshChanges();
+        else void load("", true, generation, true);
+      },
       3000,
     );
     return () => clearInterval(timer);
-  }, [conversation.id, query, cursor]);
+  }, [conversation.id, query, base, state?.capabilities.includes("archive_history")]);
   // Search as you type; the request guard discards results from older queries.
   useEffect(() => {
     const timer = setTimeout(() => setQuery(search.trim()), 300);
@@ -315,6 +365,7 @@ export function ConversationHistory({
     el.style.height = "auto";
     el.style.height = Math.min(el.scrollHeight, 200) + "px";
   }, [text]);
+  const archiveReadOnly = !conversation.enrolled && base.startsWith("/inbox") && !inbox?.enabled;
   const blocked = !state
     ? "Connecting…"
     : state.paused
@@ -323,10 +374,12 @@ export function ConversationHistory({
         ? "Your phone isn’t connected, so messages can’t be sent right now."
         : !conversation.writable
           ? "This conversation can’t receive replies."
+          : archiveReadOnly
+            ? "Sync is off. This archive is read-only."
           : !(conversation.enrolled || inbox?.enabled)
             ? "Turn on bot replies to message this conversation."
             : "";
-  const canSend = !blocked && !busy && !sending;
+  const canSend = !archiveReadOnly && !blocked && !busy && !sending;
   async function send() {
     const outgoing = text.trim();
     if (!canSend || (!outgoing && files.length === 0)) return;
@@ -334,6 +387,7 @@ export function ConversationHistory({
     // Reuse the idempotency key when retrying the same text after a lost response.
     if (!sendKey.current || sendIntentText.current !== intent) {
       sendKey.current = crypto.randomUUID();
+      sendRoute.current = null;
       sendIntentText.current = intent;
     }
     const requestId = sendKey.current;
@@ -347,10 +401,19 @@ export function ConversationHistory({
           data: await encodeFile(f),
         })),
       );
+      // Archive reads can be ready before the permission poll catches up. Read
+      // current collection permission before selecting the write API/body.
+      const currentInbox = state?.capabilities.includes("full_inbox") ? await api<InboxSettings>("/inbox/settings") : inbox;
+      const useInbox = sendRoute.current ? sendRoute.current === "inbox" : inboxAllows(currentInbox, conversation);
+      // An uncertain prior submission must keep its original API and key even
+      // if collection permission changes before the owner retries.
+      sendRoute.current = useInbox ? "inbox" : "legacy";
+      const composeBase = `${useInbox ? "/inbox" : ""}/conversations/${encodeURIComponent(conversation.id)}`;
+      if (!useInbox && attachments.length) throw new ApiError(409,"inbox_access_disabled");
       await api(
-        `${base}/compose`,
+        `${composeBase}/compose`,
         "POST",
-        inbox?.enabled
+        useInbox
           ? { text: outgoing, request_id: requestId, attachments }
           : { text: outgoing },
       );
@@ -358,6 +421,7 @@ export function ConversationHistory({
       setFiles([]);
       attachmentRevision.current++;
       sendKey.current = "";
+      sendRoute.current = null;
       sendIntentText.current = "";
       void load("", true, request.current, true);
     } catch (e) {
@@ -372,10 +436,12 @@ export function ConversationHistory({
     }
   }
 
-  const showOlder = inbox?.enabled
-    ? !!cursor || (!!inbox.load_older && !importFinished)
+  const showOlder = (inbox?.enabled || conversation.archived)
+    ? !!cursor || (!!inbox?.load_older && !importFinished)
     : !!cursor;
-  let lastDay = "";
+  const virtualized = messages.length > 300;
+  const virtualizer = useVirtualizer({ count: messages.length, getScrollElement: () => scroll.current, estimateSize: () => 110, overscan: 12, getItemKey: (index) => messages[index].id, enabled: virtualized });
+  const visibleRows = virtualized ? virtualizer.getVirtualItems().map((row) => ({m: messages[row.index], row})) : messages.map((m) => ({m, row: null}));
   return (
     <div className="thread">
       <header className="thread-head">
@@ -410,7 +476,7 @@ export function ConversationHistory({
           >
             <Icon name="search" size={18} />
           </button>
-          {!inbox?.enabled &&
+          {!inbox?.enabled && !conversation.archived &&
             state?.capabilities.includes("history_import") && (
               <button
                 type="button"
@@ -436,6 +502,7 @@ export function ConversationHistory({
           {enrollControl}
         </div>
       </header>
+      {state?.capabilities.includes("archive_history") && (inbox?.enabled || conversation.archived) && <HistorySync id={conversation.id} ready={!!state?.transport_ready && !!inbox?.enabled} />}
       {searchOpen && (
         <label className="search thread-search">
           <Icon name="search" size={16} />
@@ -491,7 +558,9 @@ export function ConversationHistory({
           if (!el) return;
           if (el.scrollHeight - el.scrollTop - el.clientHeight < 80)
             setHasNew(false);
-          if (inbox?.enabled && el.scrollTop < 40) void loadOlder();
+          const upwards = el.scrollTop < previousScrollTop.current;
+          previousScrollTop.current = el.scrollTop;
+          if (upwards && (inbox?.enabled || conversation.archived) && el.scrollTop < 250) void loadOlder();
         }}
       >
         {inbox?.enabled && !cursor && importFinished && (
@@ -538,13 +607,14 @@ export function ConversationHistory({
             )}
           </div>
         )}
-        {messages.map((m) => {
+        <div style={virtualized ? {height: virtualizer.getTotalSize(), flexShrink: 0, position: "relative"} : {display: "contents"}}>
+        {visibleRows.map(({m, row}) => {
           const day = dayLabel(m.at);
-          const divider = day !== lastDay;
-          lastDay = day;
+          const index = row?.index ?? messages.indexOf(m);
+          const divider = index === 0 || day !== dayLabel(messages[index - 1].at);
           const at = new Date(m.at);
           return (
-            <div key={m.id} className="message-group">
+            <div key={m.id} data-index={row?.index} ref={row ? virtualizer.measureElement : undefined} style={row ? {position: "absolute", top: 0, left: 0, width: "100%", transform: `translateY(${row.start}px)`} : undefined} className="message-group">
               {divider && (
                 <div className="day" role="separator">
                   <span>{day}</span>
@@ -582,12 +652,14 @@ export function ConversationHistory({
                       minute: "2-digit",
                     })}
                   </time>
+                  {m.revision ? <span title="Previously observed content is retained in the encrypted archive">Edited</span> : null}
                   {m.status && <span className="msg-status">{m.status}</span>}
                 </small>
               </div>
             </div>
           );
         })}
+        </div>
       </div>
       {hasNew && (
         <button

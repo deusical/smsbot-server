@@ -9,6 +9,7 @@ import (
 )
 
 type Conversation struct {
+	Archived      bool   `json:"archived,omitempty"`
 	ID            string `json:"id"`
 	ParticipantID string `json:"participant_id"`
 	Label         string `json:"label"`

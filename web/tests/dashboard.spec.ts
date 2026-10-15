@@ -216,7 +216,7 @@ test("slow conversation refresh does not overlap and failure is specific", async
   let active = 0;
   let maximum = 0;
   let started = 0;
-  await page.route("**/api/v1/conversations", async (route) => {
+  await page.route(/\/api\/v1\/(?:inbox\/)?conversations(?:\?|$)/, async (route) => {
     active++;
     started++;
     maximum = Math.max(maximum, active);
@@ -266,7 +266,7 @@ for (const heldEndpoint of ["conversations", "state"]) {
       started = resolve;
     });
     await page.route(
-      `**/api/v1/${heldEndpoint}`,
+      heldEndpoint === "conversations" ? /\/api\/v1\/(?:inbox\/)?conversations(?:\?|$)/ : "**/api/v1/state",
       async (route) => {
         const response = await route.fetch();
         started();
@@ -330,4 +330,44 @@ test("rejected pause change leaves the displayed state unchanged", async ({
   expect((await (await page.request.get("/api/v1/state")).json()).paused).toBe(
     true,
   );
+});
+
+
+test("startup readiness recovers while initial activity loading is pending", async ({
+  page,
+}) => {
+  let ready = false;
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  await page.route("**/api/v1/state", async (route) => {
+    const response = await route.fetch();
+    const state = await response.json();
+    await route.fulfill({
+      response,
+      json: { ...state, paused: true, transport_ready: ready },
+    });
+  });
+  await page.route("**/api/v1/activity", async (route) => {
+    await held;
+    await route.continue();
+  }, { times: 1 });
+  try {
+    await login(page);
+    const toggle = page.getByRole("switch", { name: "Bot sending" });
+    await expect(toggle).toBeDisabled();
+    await expect(page.getByText("Phone offline", { exact: true })).toBeVisible();
+    ready = true;
+    // Readiness must advance without a reload or waiting for activity/discovery.
+    await expect(toggle).toBeEnabled({ timeout: 8000 });
+    await expect(toggle).not.toBeChecked();
+    await toggle.click();
+    await expect(toggle).toBeChecked();
+    await expect(page.locator(".hero-pill")).toHaveText("LIVE");
+  } finally {
+    release();
+    await page.request.post("/api/v1/pause", {
+      headers: { Origin: new URL(page.url()).origin },
+      data: { paused: true },
+    });
+  }
 });

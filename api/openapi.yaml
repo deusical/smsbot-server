@@ -856,12 +856,12 @@ paths:
       schema:
         type: string
     post:
-      description: Fetch available phone text; historical commands never run
+      description: Fetch an available message/file-reference page; historical commands never run
       security:
       - browserSession: []
       responses:
         '200':
-          description: Fetch available phone text; historical commands never run
+          description: Saved new-row count, duplicate/skipped counts, next cursor and available-page exhaustion; exhaustion does not establish completeness
         '401':
           description: Authentication required
         '403':
@@ -973,6 +973,60 @@ paths:
         '416':
           description: Unsatisfiable byte range
 
+  /inbox/archive:
+    get:
+      summary: Owner-only retained archive identities and durable sync progress
+      responses:
+        '200':
+          description: >-
+            Archive records, including stopped/offline conversations; never collection consent.
+            retry_at/failures/error describe deep backfill; recent_retry_at/recent_failures/recent_error
+            describe independent recent reconciliation backoff. Error values are sanitized codes.
+  /inbox/conversations/{id}/sync:
+    parameters:
+    - name: id
+      in: path
+      required: true
+      schema: {type: string}
+    post:
+      summary: Start/resume a history scan or cancel the current import
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                since: {type: string, description: 'RFC3339 cutoff, or empty for all available history'}
+                cancel: {type: boolean}
+      responses:
+        '200': {description: Durable archive job with generation and progress}
+        '409': {description: Invalid cutoff, unavailable transport or access disabled}
+  /inbox/conversations/{id}/changes:
+    parameters:
+    - name: id
+      in: path
+      required: true
+      schema: {type: string}
+    get:
+      summary: Owner-only local archive changes, including edits to old messages
+      parameters:
+      - name: after
+        in: query
+        required: true
+        schema: {type: integer, minimum: 0}
+      responses:
+        '200': {description: 'messages, deleted IDs, cursor and more; keep paging until more is false'}
+  /inbox/conversations/{id}/revisions/{message}:
+    parameters:
+    - {name: id, in: path, required: true, schema: {type: string}}
+    - {name: message, in: path, required: true, schema: {type: string}}
+    get:
+      summary: Owner-only previously observed content revisions, not guaranteed upstream edit history
+      responses:
+        '200': {description: Previous text snapshots with local observation timestamps}
+
 components:
   securitySchemes:
     browserSession:
@@ -1017,6 +1071,7 @@ components:
     Conversation:
       type: object
       properties:
+        archived: {type: boolean}
         id:
           type: string
         participant_id:
@@ -1247,6 +1302,7 @@ components:
       type: object
       additionalProperties: false
       properties:
+        revision: {type: integer, minimum: 0}
         id: *id002
         direction:
           type: string
@@ -1274,6 +1330,7 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/Message'
+        change_cursor: {type: integer, minimum: 0}
         next_cursor: *id002
       required:
       - messages
@@ -1305,6 +1362,7 @@ components:
       - automatic_replies
       - revision
       properties:
+        archive_retention_days: {type: integer, minimum: 0, maximum: 3650, default: 0}
         attachment_limits:
           $ref: '#/components/schemas/AttachmentLimits'
         enabled:

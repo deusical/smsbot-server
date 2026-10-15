@@ -8,6 +8,7 @@ export type State = {
   capabilities: string[];
 };
 export type Conversation = {
+ archived?: boolean;
   id: string;
   participant_id: string;
   label: string;
@@ -38,6 +39,7 @@ export type Attachment = {
   size: number;
 };
 export type Message = {
+ revision?: number;
   attachments?: Attachment[];
   id: string;
   direction: string;
@@ -57,6 +59,7 @@ export const defaultAttachmentLimits: AttachmentLimits = {
   max_total_mb: 20,
 };
 export type InboxSettings = {
+ archive_retention_days?: number;
   attachment_limits?: AttachmentLimits;
   enabled: boolean;
   scope: "all" | "selected";
@@ -141,7 +144,7 @@ export type Configuration = {
   commands: Command[];
   profiles: Profile[];
 };
-export type History = { messages: Message[]; next_cursor?: string };
+export type History = { messages: Message[]; next_cursor?: string; change_cursor?: number };
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -157,6 +160,7 @@ export async function api<T>(
 ): Promise<T> {
   const response = await fetch("/api/v1" + path, {
     method,
+    signal: method === "GET" ? AbortSignal.timeout(25000) : undefined,
     credentials: "same-origin",
     headers: body === undefined ? {} : { "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),

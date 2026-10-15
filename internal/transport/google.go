@@ -68,6 +68,7 @@ func (g *Google) enqueue(event any) {
 		if e == nil || e.Message == nil {
 			return
 		}
+
 		// Historical incoming messages cannot run commands or reconcile sends.
 		// Retain outgoing status events for transaction reconciliation.
 		if e.IsOld {
@@ -539,6 +540,10 @@ func (g *Google) Run(ctx context.Context, incoming func(Incoming), pause func(),
 				}
 				if m, ok := normalize(e, g.started); ok && !g.overflow.Load() {
 					incoming(m)
+				} else if !g.overflow.Load() {
+					if item, ok := historicalText(e.Message, e.GetConversationID()); ok {
+						incoming(Incoming{ID: item.ID, ConversationID: e.GetConversationID(), ParticipantID: e.GetParticipantID(), Text: item.Text, Attachments: item.Attachments, At: item.At, Historical: true, Outgoing: item.Direction == "outgoing", TransactionID: item.TransactionID, Status: item.Status})
+					}
 				}
 			case *events.AccountChange:
 				// libgm synthesizes an account snapshot during startup. It is not

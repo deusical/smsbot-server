@@ -248,9 +248,9 @@ test("conversation filters preserve enrollment and theme switches do not write b
       session: sessionStorage.length,
     })),
   ).toEqual({ local: 0, session: 0 });
-  await page.route("**/api/v1/conversations", (route) =>
+  await page.route("**/api/v1/inbox/conversations", (route) =>
     route.fulfill({
-      json: [
+      json: {conversations: [
         {
           id: "one",
           participant_id: "one",
@@ -269,7 +269,7 @@ test("conversation filters preserve enrollment and theme switches do not write b
           writable: false,
           enrolled: false,
         },
-      ],
+      ],next_cursor:"",partial:false},
     }),
   );
   await page

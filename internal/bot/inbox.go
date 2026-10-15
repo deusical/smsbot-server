@@ -2,6 +2,7 @@ package bot
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"smsbot-server/internal/media"
@@ -17,13 +18,14 @@ type InboxBinding struct {
 	Participant  string `json:"participant"`
 }
 type InboxSettings struct {
-	AttachmentLimits *media.Limits  `json:"attachment_limits,omitempty"`
-	Enabled          bool           `json:"enabled"`
-	Scope            string         `json:"scope"`
-	Conversations    []InboxBinding `json:"conversations"`
-	LoadOlder        bool           `json:"load_older"`
-	AutomaticReplies bool           `json:"automatic_replies"`
-	Revision         int64          `json:"revision"`
+	ArchiveRetentionDays int            `json:"archive_retention_days"`
+	AttachmentLimits     *media.Limits  `json:"attachment_limits,omitempty"`
+	Enabled              bool           `json:"enabled"`
+	Scope                string         `json:"scope"`
+	Conversations        []InboxBinding `json:"conversations"`
+	LoadOlder            bool           `json:"load_older"`
+	AutomaticReplies     bool           `json:"automatic_replies"`
+	Revision             int64          `json:"revision"`
 }
 
 func (s InboxSettings) FileLimits() media.Limits {
@@ -76,6 +78,9 @@ func (e *Engine) lookupConversation(ctx context.Context, id string) (transport.C
 	return transport.Conversation{}, errors.New("conversation_unavailable")
 }
 func (e *Engine) SetInboxSettings(ctx context.Context, s InboxSettings) error {
+	if s.ArchiveRetentionDays < 0 || s.ArchiveRetentionDays > 3650 {
+		return errors.New("invalid_archive_retention")
+	}
 	limits := s.FileLimits()
 	if err := limits.Validate(); err != nil {
 		return err
@@ -125,7 +130,7 @@ func (e *Engine) SetInboxSettings(ctx context.Context, s InboxSettings) error {
 	if err != nil {
 		return err
 	}
-	if err = e.Store.SetInboxPreferences(b, !s.AutomaticReplies); err != nil {
+	if err = e.Store.SetInboxPreferences(b, !s.AutomaticReplies, s.ArchiveRetentionDays); err != nil {
 		return err
 	}
 	if !s.AutomaticReplies {
@@ -140,6 +145,16 @@ func (e *Engine) SetInboxSettings(ctx context.Context, s InboxSettings) error {
 // Receive separates optional owner inbox storage from bot routing. Pause,
 // quiet hours and AI preferences never prevent an opted-in inbox observation.
 func (e *Engine) Receive(ctx context.Context, m transport.Incoming) (bool, error) {
+	if m.ID != "" && !m.Outgoing {
+		first, err := e.Store.FirstObservation(m.ConversationID, m.ID)
+		if err != nil {
+			return false, err
+		}
+		if !first {
+			m.Historical = true
+		}
+	}
+
 	if err := e.Observe(ctx, m); err != nil {
 		e.captureGap.Store(true)
 	}
@@ -153,7 +168,7 @@ func (e *Engine) Observe(ctx context.Context, m transport.Incoming) error {
 	return e.observe(ctx, m, 0)
 }
 func (e *Engine) observe(ctx context.Context, m transport.Incoming, epoch uint64) error {
-	if m.Historical || m.ID == "" || m.ConversationID == "" || (m.Text == "" && len(m.Attachments) == 0) || utf8.RuneCountInString(m.Text) > 12000 || e.now().Sub(m.At) > 2*time.Minute || m.At.After(e.now().Add(5*time.Second)) {
+	if m.ID == "" || m.ConversationID == "" || (m.Text == "" && len(m.Attachments) == 0) || (!m.Historical && e.now().Sub(m.At) > 2*time.Minute) || m.At.After(e.now().Add(5*time.Second)) {
 		return nil
 	}
 	e.mu.Lock()
@@ -211,6 +226,19 @@ func (e *Engine) observe(ctx context.Context, m transport.Incoming, epoch uint64
 	if m.Outgoing {
 		dir = "outgoing"
 	}
+	a, archiveErr := e.Store.Archive(c.ID)
+	if archiveErr != nil {
+		if !errors.Is(archiveErr, sql.ErrNoRows) {
+			return archiveErr
+		}
+		a = store.Archive{Conversation: c, State: "queued", Generation: 1}
+	}
+	if a.Conversation.ParticipantID != c.ParticipantID {
+		return errors.New("archive_identity_changed")
+	}
+	if err = e.Store.SaveArchive(a, current.ArchiveRetentionDays); err != nil {
+		return err
+	}
 	return e.Store.SaveObservedFiles(c.ID, m.ID, m.TransactionID, dir, m.Text, "phone", m.Status, m.At, m.Attachments)
 }
 func (e *Engine) InboxPage(ctx context.Context, conv, cursor, search string, limit int) (store.InboxPage, error) {
@@ -225,9 +253,14 @@ func (e *Engine) InboxPage(ctx context.Context, conv, cursor, search string, lim
 	if !s.Enabled {
 		return store.InboxPage{}, errors.New("inbox_access_disabled")
 	}
-	c, err := e.lookupConversation(ctx, conv)
-	if err != nil {
-		return store.InboxPage{}, err
+	var c transport.Conversation
+	if a, archiveErr := e.Store.Archive(conv); archiveErr == nil {
+		c = a.Conversation
+	} else {
+		c, err = e.lookupConversation(ctx, conv)
+		if err != nil {
+			return store.InboxPage{}, err
+		}
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -267,6 +300,10 @@ func (e *Engine) ImportInboxHistory(ctx context.Context, conv, cursor string) (m
 	if !ok {
 		return nil, errors.New("history_unavailable")
 	}
+	snapshot, err := e.Store.ChangeWatermark(conv)
+	if err != nil {
+		return nil, err
+	}
 	page, err := source.FetchHistory(ctx, conv, c.ParticipantID, cursor)
 	if err != nil {
 		return nil, err
@@ -287,21 +324,44 @@ func (e *Engine) ImportInboxHistory(ctx context.Context, conv, cursor string) (m
 	if err = ctx.Err(); err != nil {
 		return nil, err
 	}
-	cfg, err := e.Configuration()
-	if err != nil {
+	a, archiveErr := e.Store.Archive(conv)
+	if archiveErr != nil {
+		if !errors.Is(archiveErr, sql.ErrNoRows) {
+			return nil, archiveErr
+		}
+		a = store.Archive{Conversation: verified, State: "queued", Generation: 1}
+	}
+	if err = e.Store.SaveArchive(a, current.ArchiveRetentionDays); err != nil {
 		return nil, err
 	}
-	count := 0
+	count, duplicates, skipped := 0, 0, 0
 	for _, m := range page.Messages {
-		if cfg.Settings.RetentionDays > 0 && m.At.Before(e.now().AddDate(0, 0, -cfg.Settings.RetentionDays)) {
+		changed, checkErr := e.Store.MessageChangedSince(conv, m.ID, m.TransactionID, snapshot)
+		if checkErr != nil {
+			return nil, checkErr
+		}
+		if changed {
+			skipped++
 			continue
+		}
+		if current.ArchiveRetentionDays > 0 && m.At.Before(e.now().AddDate(0, 0, -current.ArchiveRetentionDays)) {
+			skipped++
+			continue
+		}
+		var known int
+		if err = e.Store.DB.QueryRow("SELECT count(*) FROM message_alias WHERE alias=?", store.Hash(conv+"\x00"+m.ID)).Scan(&known); err != nil {
+			return nil, err
 		}
 		if err = e.Store.SaveObservedFiles(conv, m.ID, m.TransactionID, m.Direction, m.Text, "history", m.Status, m.At, m.Attachments); err != nil {
 			return nil, err
 		}
-		count++
+		if known == 0 {
+			count++
+		} else {
+			duplicates++
+		}
 	}
-	return map[string]any{"imported": count, "next_cursor": page.NextCursor, "available_pages_exhausted": page.NextCursor == "", "text_only": false}, nil
+	return map[string]any{"imported": count, "duplicates": duplicates, "skipped": skipped, "next_cursor": page.NextCursor, "available_pages_exhausted": page.NextCursor == "", "text_only": false}, nil
 }
 
 // A repeat acknowledges the original intent without creating another job,
@@ -371,6 +431,10 @@ func (e *Engine) ComposeInboxFiles(ctx context.Context, conv, text, requestID st
 	if err != nil {
 		return "", err
 	}
+	if a, archiveErr := e.Store.Archive(conv); archiveErr == nil && a.Conversation.ParticipantID != c.ParticipantID {
+		return "", errors.New("archive_identity_changed")
+	}
+
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	exists, err = e.existingCompose(id, conv, text, files)

@@ -7,7 +7,6 @@ import (
 	"smsbot-server/internal/transport"
 	"sync"
 	"time"
-	"unicode/utf8"
 )
 
 type captureConsent struct {
@@ -44,7 +43,7 @@ func (e *Engine) publishCaptureConsent(s InboxSettings) {
 func (e *Engine) InboxCaptureGap() bool { return e.captureGap.Load() }
 func (e *Engine) QueueObservation(m transport.Incoming) {
 	consent := e.captureConsent.Load()
-	if consent == nil || !consent.settings.Enabled || m.Historical || m.ID == "" || m.ConversationID == "" || (m.Text == "" && len(m.Attachments) == 0) || utf8.RuneCountInString(m.Text) > 12000 {
+	if consent == nil || !consent.settings.Enabled || m.ID == "" || m.ConversationID == "" || (m.Text == "" && len(m.Attachments) == 0) {
 		return
 	}
 	if consent.settings.Scope == "selected" {
@@ -83,7 +82,7 @@ func (e *Engine) RunCapture(ctx context.Context) {
 					if current == nil || current.epoch != item.epoch {
 						continue
 					}
-					if e.now().Sub(item.message.At) > 2*time.Minute {
+					if !item.message.Historical && e.now().Sub(item.message.At) > 2*time.Minute {
 						e.captureGap.Store(true)
 						continue
 					}
@@ -100,6 +99,16 @@ func (e *Engine) RunCapture(ctx context.Context) {
 // Ingest keeps optional collection off the transport control-event consumer.
 // Only failures in the existing command path propagate to its pause handler.
 func (e *Engine) Ingest(ctx context.Context, m transport.Incoming) (bool, error) {
+	if m.ID != "" && !m.Outgoing {
+		first, err := e.Store.FirstObservation(m.ConversationID, m.ID)
+		if err != nil {
+			return false, err
+		}
+		if !first {
+			m.Historical = true
+		}
+	}
+
 	e.QueueObservation(m)
 	accepted, err := e.Accept(ctx, m)
 	if accepted && err == nil {

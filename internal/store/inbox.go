@@ -12,8 +12,9 @@ import (
 // InboxPage contains locally retained messages, not complete provider history.
 // Search scans one bounded page and advances even when there are no matches.
 type InboxPage struct {
-	Messages   []Message `json:"messages"`
-	NextCursor string    `json:"next_cursor"`
+	Messages     []Message `json:"messages"`
+	NextCursor   string    `json:"next_cursor"`
+	ChangeCursor int64     `json:"change_cursor"`
 }
 type inboxCursor struct {
 	At string `json:"at"`
@@ -28,6 +29,9 @@ func (s *Store) OwnerMessagePage(conv, before, search string, limit int) (InboxP
 }
 func (s *Store) messagePage(conv, before, search string, limit int, owner bool) (InboxPage, error) {
 	out := InboxPage{Messages: []Message{}}
+	if err := s.DB.QueryRow("SELECT coalesce(max(seq),0) FROM message_changes WHERE conversation=?", conv).Scan(&out.ChangeCursor); err != nil {
+		return out, err
+	}
 	if limit < 1 || limit > 100 {
 		return out, errors.New("message limit must be between 1 and 100")
 	}
@@ -44,7 +48,7 @@ func (s *Store) messagePage(conv, before, search string, limit int, owner bool) 
 			return out, errors.New("invalid message cursor")
 		}
 	}
-	rows, e := s.DB.Query(`SELECT m.id,m.direction,m.at,m.payload,coalesce(meta.origin,'bot'),coalesce(meta.status,''),coalesce(a.payload,'') FROM messages m LEFT JOIN message_meta meta ON meta.message=m.id LEFT JOIN message_attachments a ON a.message=m.id WHERE m.conversation=? AND (? OR coalesce(meta.owner_only,0)=0) AND (?='' OR m.at<? OR (m.at=? AND m.id<?)) ORDER BY m.at DESC,m.id DESC LIMIT ?`, conv, owner, before, cursor.At, cursor.At, cursor.ID, limit+1)
+	rows, e := s.DB.Query(`SELECT m.id,m.direction,m.at,m.payload,coalesce(meta.origin,'bot'),coalesce(meta.status,''),coalesce(a.payload,''),coalesce((SELECT max(revision) FROM message_revisions WHERE message=m.id),0) FROM messages m LEFT JOIN message_meta meta ON meta.message=m.id LEFT JOIN message_attachments a ON a.message=m.id WHERE m.conversation=? AND (? OR coalesce(meta.owner_only,0)=0) AND (?='' OR m.at<? OR (m.at=? AND m.id<?)) ORDER BY m.at DESC,m.id DESC LIMIT ?`, conv, owner, before, cursor.At, cursor.At, cursor.ID, limit+1)
 	if e != nil {
 		return out, e
 	}
@@ -54,7 +58,7 @@ func (s *Store) messagePage(conv, before, search string, limit int, owner bool) 
 	for rows.Next() {
 		var m Message
 		var enc, attachments string
-		if e = rows.Scan(&m.ID, &m.Direction, &m.At, &enc, &m.Origin, &m.Status, &attachments); e != nil {
+		if e = rows.Scan(&m.ID, &m.Direction, &m.At, &enc, &m.Origin, &m.Status, &attachments, &m.Revision); e != nil {
 			return out, e
 		}
 		if count == limit {
@@ -102,7 +106,7 @@ func (s *Store) Retention(days int) (int64, error) {
 		return 0, e
 	}
 	defer tx.Rollback()
-	result, e := tx.Exec("DELETE FROM messages WHERE julianday(at)<julianday(?)", cutoff)
+	result, e := tx.Exec("DELETE FROM messages WHERE julianday(at)<julianday(?) AND conversation NOT IN (SELECT conversation FROM archive_conversations UNION SELECT conversation FROM archive_pending)", cutoff)
 	if e != nil {
 		return 0, e
 	}

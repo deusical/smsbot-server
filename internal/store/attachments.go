@@ -24,6 +24,11 @@ func (s *Store) saveAttachments(tx *sql.Tx, id string, files []media.File) error
 		if err != nil {
 			return err
 		}
+		previousJSON, _ := json.Marshal(existing)
+		newJSON, _ := json.Marshal(files)
+		if string(previousJSON) == string(newJSON) {
+			return nil
+		}
 		for _, f := range existing {
 			if len(f.Data) > 0 {
 				return nil

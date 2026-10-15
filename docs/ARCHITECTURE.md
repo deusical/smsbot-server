@@ -10,6 +10,7 @@ Selected stack: Go service, SQLite/local WAL, libgm adapter, React/TypeScript we
 - `httpapi`: exact Host/origin checks, bounded strict JSON, owner cookies, revocable client bearer credentials, static embedded dashboard.
 - `web`: same-origin API, memory-only credentials, system theme, responsive navigation, snapshots polled every three seconds without overlapping refreshes, paused while the page is hidden. It is an installable web app (manifest plus a service worker that caches only the static shell and hashed assets, never `/api/` or `/healthz`); see docs/HOSTING.md for Tailscale HTTPS. Conversation refresh errors are shown separately from server connection failures. SSE and generated API clients are future improvements; polling is explicit in this milestone.
 - Google conversation refresh checks up to four independent full-detail requests concurrently, preserving inbox order and publishing the identity cache only after all checks succeed. Exact participant and pre-send identity checks remain required.
+- Dashboard state/readiness polling runs independently of settings, activity and conversation discovery, with a separate nonoverlap guard for each refresh lane. Slow startup discovery cannot hold login busy or prevent the paused controls from becoming available when transport readiness changes.
 - Dashboard Enable/Pause actions apply the state returned by the pause endpoint immediately, independently of conversation refresh. A revision check prevents state polls started before or during the action from overwriting the confirmed response. Failed mutations retain the previously displayed state and show the error.
 - Android: API-backed server screen, Keystore-encrypted connection, dispatch guards. Its existing local engine remains independent and unavailable in server mode.
 - Google startup account snapshots (`AccountChange.IsFake` in libgm) are informational and do not invalidate verified readiness. Actual account changes, logout, phone/data loss and active-session warnings still pause automation and require recovery. Diagnostics distinguish those event categories without recording account data.
@@ -52,3 +53,50 @@ The Google adapter normalizes text and media parts for both fresh events and ava
 Owner-only inbox preferences include attachment count, per-file MiB and combined MiB limits. Defaults are four files, 10 MiB each and 20 MiB combined. Zero disables each limit independently. Owner compose derives its JSON ceiling from the configured finite limits and base64/metadata overhead, or disables the ceiling when the policy is unlimited; there is no fixed 28 MiB upload ceiling. Nonempty files remain required. Downloads/previews use the current per-file policy; live/history normalization no longer drops inline files at 10 MiB or 32 media parts. Settings validation prevents negative values and integer overflow. Unlimited remains constrained by host memory/storage, SQLite and upstream limits, because uploads/downloads currently buffer bytes. Preferences stay encrypted and outside recipe/backup consent. Current limits are rechecked before dispatch. The durable encrypted plan and request digest bind exact file content and metadata. Uploads use the `generating` state outside the engine control mutex; cancellation/pause remain responsive. Current job state, consent, identity, freshness and sending policy are checked after upload and before persisting `submitting` with its transaction ID. Google submission is invoked once; uncertain submissions are never automatically retried. The pinned library's media upload/download setup calls do not accept a context; its HTTP client timeouts bound those calls, and cancellation is rechecked before submission. No background continuation can send after cancellation.
 
 Attachment expiry is enforced with a keyed read-only timestamp check; previews and range requests do not run table-wide retention writes. The owner-only content endpoint supports byte ranges, no-store, nosniff and safe Content-Disposition. Only an explicit image/audio/video allowlist can render inline; active documents always download with a sandbox CSP. Browser file previews use temporary object URLs that are revoked. The service worker never caches API/file content. Additive API v1 attachment support is advertised by the `attachments` capability; legacy Android clients receive no new private-file access.
+
+
+## Local history synchronization
+
+The owner inbox now uses a separate `internal/history` read-job service. Enabling
+collection starts resumable available-history ingestion and periodic recent
+reconciliation, independently of bot replies and global sending pause. The thread's
+History sync panel can request all available history or an RFC3339-backed date
+cutoff, cancel a backfill, and show saved counts, state and last successful sync.
+Stopping collection preserves the owner-readable local archive; it does not grant
+legacy clients access. Groups remain excluded and fetching/sending rechecks exact
+participant identity. Local text pages and search work while the phone is offline.
+
+Archive retention is separate from the bot's job retention: zero keeps archived
+messages indefinitely, otherwise the archive policy expires them. Already expired
+messages must be recovered from available upstream history. Schema v5 adds encrypted
+verified archive identities/checkpoints, encrypted observed content revisions, a
+local change feed and a conversation/time index. Existing service backups include
+these records but restore jobs cancelled, without collection consent. Historical
+commands and restored messages never execute. Previously observed revisions can be
+read through the owner API; upstream intermediate edits are not guaranteed. Recent
+reconciliation overlaps by 30 minutes and pages back to the prior successful sync;
+older ranges can be rescanned explicitly. No arbitrary old-edit detection guarantee
+is made without a covering scan or update event.
+
+The UI preloads local pages near the top and virtualizes long loaded histories.
+A local change cursor refreshes edits and new rows beyond the newest 50-message
+page. Original received-file bytes and scalable archive-specific backups remain
+PR 2 work; remote file references alone are not a complete file backup. Live Google
+sync/edit acceptance is pending; automated coverage uses offline fixtures.
+
+Migration protects existing private and opted-in conversation history from legacy startup expiry until verified archive bindings have been recorded. These pending preservation markers grant no collection or viewing rights.
+
+History fetches no longer share a mutex with live capture. Per-message change
+watermarks suppress stale concurrent snapshot writes; consent/job generations are
+rechecked before persistence. Successful network reads use a separate local commit
+budget. Verified archive metadata clears pending preservation markers atomically;
+background retention also runs without a browser or enabled collection. Stopped
+sync does not disable enrolled legacy compose. Inbox retry intents retain their
+original endpoint and key even when collection policy changes after submission.
+
+Recent reconciliation and deep backfill retain independent encrypted retry times,
+failure counters and sanitized errors. A recent failure ends that conversation's
+current tick; subsequent ticks can run either lane when its own backoff permits.
+Archive UI polling uses the change feed after the initial snapshot, and page reads
+and change-feed reads serialize so an older snapshot cannot resurrect deleted rows
+or overwrite an already-applied edit.

@@ -2587,3 +2587,7 @@ label {
   object-fit: cover;
   border-radius: 6px;
 }
+
+.history-sync { padding: 8px 16px; border-bottom: 1px solid var(--border); font-size: .85rem; }
+.history-sync p { margin: 8px 0; }
+.history-sync button { margin: 6px; }
