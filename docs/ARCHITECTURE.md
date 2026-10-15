@@ -80,8 +80,8 @@ is made without a covering scan or update event.
 
 The UI preloads local pages near the top and virtualizes long loaded histories.
 A local change cursor refreshes edits and new rows beyond the newest 50-message
-page. Original received-file bytes and scalable archive-specific backups remain
-PR 2 work; remote file references alone are not a complete file backup. Live Google
+page. Original files are preserved by the separate archive service; encrypted streaming
+backups and readable exports include saved originals and explicit missing counts. Live Google
 sync/edit acceptance is pending; automated coverage uses offline fixtures.
 
 Migration protects existing private and opted-in conversation history from legacy startup expiry until verified archive bindings have been recorded. These pending preservation markers grant no collection or viewing rights.
@@ -100,3 +100,27 @@ current tick; subsequent ticks can run either lane when its own backoff permits.
 Archive UI polling uses the change feed after the initial snapshot, and page reads
 and change-feed reads serialize so an older snapshot cannot resurrect deleted rows
 or overwrite an already-applied edit.
+
+
+## Original-file archive module
+
+`internal/archive` owns streaming encrypted originals, retry metadata, orphan cleanup,
+snapshot exports and staged offline restoration. Its host interface exposes only
+identity/consent authorization, original reads and conditional metadata updates; it
+cannot submit messages or dispatch commands. An owner-only API exposes policy and
+one persistent export job. Schema v5 is unchanged; encrypted attachment payloads gain
+optional blob/digest/retry fields. Operational backups materialize referenced originals
+for compatibility, retaining their existing aggregate ceiling. Archive-specific backups
+stream originals separately. Saved file metadata survives unchanged upstream echoes;
+a changed media source invalidates the old reference. File publication compares the
+source again after download and rechecks consent. Random blob names and encrypted
+chunks avoid plaintext files on disk except explicitly requested readable exports.
+
+
+Idle file sweeps use a one-minute cooldown, with an inexpensive change-sequence
+check to wake for newly observed messages or files. Unavailable sources remain
+terminal until a new source descriptor is observed. Policy-limited work resumes
+only after limits or committed blob usage changes. Locally submitted originals
+remain authoritative across exact transaction/alias echoes even after inline bytes
+are normalized into blobs and phone-side part IDs change. Received attachments
+with changed remote sources still invalidate their old blob references.

@@ -1,13 +1,14 @@
 package transport
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"smsbot-server/internal/media"
 	"strings"
-	"unicode/utf8"
+	"sync"
 
 	"go.mau.fi/mautrix-gmessages/pkg/libgm"
 	"go.mau.fi/mautrix-gmessages/pkg/libgm/gmproto"
@@ -75,9 +76,6 @@ func messageParts(m *gmproto.Message) (string, []media.File, bool) {
 			}
 			files = append(files, file)
 		} else {
-			return "", nil, false
-		}
-		if utf8.RuneCountInString(text.String()) > 12000 {
 			return "", nil, false
 		}
 	}
@@ -148,4 +146,59 @@ func (f *Fixture) DownloadFile(ctx context.Context, file media.File) ([]byte, er
 		return nil, errors.New("attachment_unavailable")
 	}
 	return append([]byte(nil), file.Data...), nil
+}
+
+// StreamingFileSource never substitutes a thumbnail for an original.
+type StreamingFileSource interface {
+	OpenFile(context.Context, media.File) (io.ReadCloser, error)
+}
+type cancelReadCloser struct {
+	io.ReadCloser
+	once sync.Once
+	done chan struct{}
+}
+
+func (r *cancelReadCloser) Close() error {
+	var err error
+	r.once.Do(func() { close(r.done); err = r.ReadCloser.Close() })
+	return err
+}
+func (g *Google) OpenFile(ctx context.Context, file media.File) (io.ReadCloser, error) {
+	if !g.Ready() || ctx.Err() != nil {
+		return nil, errors.New("attachment_unavailable")
+	}
+	if len(file.Data) > 0 {
+		return io.NopCloser(bytes.NewReader(file.Data)), nil
+	}
+	if file.RemoteID == "" || len(file.Key) != 32 {
+		return nil, errors.New("attachment_unavailable")
+	}
+	// libgm's setup request is bounded by its HTTP client's timeout. Once the
+	// response stream exists cancellation closes it, including blocked reads.
+	r, err := g.client.DownloadMedia(file.RemoteID, file.Key)
+	if err != nil {
+		return nil, errors.New("attachment_unavailable")
+	}
+	wrapped := &cancelReadCloser{ReadCloser: r, done: make(chan struct{})}
+	go func() {
+		select {
+		case <-ctx.Done():
+			wrapped.Close()
+		case <-wrapped.done:
+		}
+	}()
+	if ctx.Err() != nil {
+		wrapped.Close()
+		return nil, ctx.Err()
+	}
+	return wrapped, nil
+}
+func (f *Fixture) OpenFile(ctx context.Context, file media.File) (io.ReadCloser, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if len(file.Data) == 0 {
+		return nil, errors.New("attachment_unavailable")
+	}
+	return io.NopCloser(bytes.NewReader(file.Data)), nil
 }

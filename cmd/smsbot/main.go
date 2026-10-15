@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"smsbot-server/internal/archive"
 	"smsbot-server/internal/bot"
 	"smsbot-server/internal/httpapi"
 	"smsbot-server/internal/store"
@@ -40,6 +41,11 @@ func runWithInput(args []string, input io.Reader) error {
 	tlsCert := flags.String("tls-cert", "", "PEM TLS certificate path")
 	tlsKey := flags.String("tls-key", "", "PEM TLS private key path")
 	backup := flags.String("backup", "", "write encrypted offline backup to a new file")
+	archiveBackup := flags.String("archive-backup", "", "write streaming encrypted message archive to a new file")
+	archiveRestore := flags.String("archive-restore", "", "restore message archive offline into fresh initialized state")
+	archivePlain := flags.Bool("archive-plaintext", false, "export readable unencrypted TAR with original files")
+	archiveSince := flags.String("archive-since", "", "archive export start date as RFC3339")
+	archiveConversation := flags.String("archive-conversation", "", "export one conversation (default all archived)")
 	restore := flags.String("restore", "", "restore encrypted backup into fresh initialized state")
 	tokenFile := flags.String("owner-file", "", "file for initial owner credential")
 	init := flags.Bool("init", false, "initialize encrypted state and owner credential")
@@ -51,13 +57,16 @@ func runWithInput(args []string, input io.Reader) error {
 		return e
 	}
 	modes := 0
-	for _, selected := range []bool{*init, *fixture, *pair, *updateCookies, *backup != "", *restore != ""} {
+	for _, selected := range []bool{*init, *fixture, *pair, *updateCookies, *backup != "", *restore != "", *archiveBackup != "", *archiveRestore != ""} {
 		if selected {
 			modes++
 		}
 	}
 	if modes > 1 {
 		return errors.New("initialization, fixture, pairing and cookie-update modes are mutually exclusive")
+	}
+	if (*archiveSince != "" || *archiveConversation != "" || *archivePlain) && *archiveBackup == "" {
+		return errors.New("archive scope requires --archive-backup")
 	}
 	if *cookies && !*pair && !*updateCookies {
 		return errors.New("--cookies-stdin requires --pair or --update-cookies")
@@ -147,6 +156,50 @@ func runWithInput(args []string, input io.Reader) error {
 		return errors.New("cannot open state database")
 	}
 	defer s.DB.Close()
+	if *archiveBackup != "" || *archiveRestore != "" {
+		manager := archive.New(s, filepath.Join(absData, "archive"), nil)
+		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer cancel()
+		var counts archive.Counts
+		if *archiveBackup != "" {
+			scope := archive.Scope{Since: *archiveSince, Plaintext: *archivePlain}
+			if *archiveConversation != "" {
+				scope.Conversations = []string{*archiveConversation}
+			}
+			output, err := os.OpenFile(*archiveBackup, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+			if err != nil {
+				return errors.New("archive output must be new and writable")
+			}
+			complete := false
+			defer func() {
+				output.Close()
+				if !complete {
+					os.Remove(*archiveBackup)
+				}
+			}()
+			counts, err = manager.Export(ctx, output, scope, nil)
+			if err == nil {
+				err = output.Sync()
+			}
+			closeErr := output.Close()
+			if err != nil || closeErr != nil {
+				return errors.New("archive export failed")
+			}
+			complete = true
+		} else {
+			input, err := os.Open(*archiveRestore)
+			if err != nil {
+				return errors.New("cannot open archive")
+			}
+			defer input.Close()
+			counts, err = manager.Restore(ctx, input, nil)
+			if err != nil {
+				return errors.New("archive restore failed; use fresh initialized state and original protected key")
+			}
+		}
+		fmt.Printf("Archive operation complete: %d messages, %d originals, %d missing originals. Collection and sending remain disabled after restore.\n", counts.Messages, counts.SavedFiles, counts.MissingFiles)
+		return nil
+	}
 	if *backup != "" {
 		b, err := s.ExportBackup()
 		if err != nil {
@@ -264,6 +317,9 @@ func runWithInput(args []string, input io.Reader) error {
 	adapterDone := make(chan struct{})
 	captureDone := make(chan struct{})
 	go func() { defer close(captureDone); engine.RunCapture(ctx) }()
+	archiveDone := make(chan struct{})
+	go func() { defer close(archiveDone); engine.Archive.Run(ctx) }()
+	defer func() { cancel(); <-archiveDone }()
 	historyDone := make(chan struct{})
 	go func() { defer close(historyDone); engine.History.Run(ctx) }()
 	defer func() { cancel(); <-historyDone }()

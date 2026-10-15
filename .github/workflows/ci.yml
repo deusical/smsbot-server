@@ -26,3 +26,12 @@ jobs:
         working-directory: web
       - run: npx playwright install --with-deps chromium && npm test
         working-directory: web
+
+      - name: Preserve failed browser diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-failure-${{ github.event_name }}-${{ github.run_attempt }}
+          path: web/test-results/
+          retention-days: 7
+          if-no-files-found: ignore

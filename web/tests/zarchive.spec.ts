@@ -151,3 +151,32 @@ test("archive feed serializes with held older pages and never polls stale head s
   await page.request.put("/api/v1/inbox/settings",{headers,data:{...previous,revision:cfg.revision}});
  }
 });
+
+
+test("archive exports select readable format, download and delete the package",async({page})=>{
+ const previous=await setup(page);
+ try{
+  await emit(page,"export-ui-message","Synthetic readable export message");
+  await page.reload();
+  await page.getByRole("button",{name:"Settings",exact:true}).click();
+  await page.getByRole("button",{name:"Import & export",exact:true}).click();
+  await expect(page.getByRole("heading",{name:"Original file archive",exact:true})).toBeVisible();
+  await page.getByLabel("Archive export format").selectOption("plaintext");
+  await page.getByRole("button",{name:"Start message export",exact:true}).click();
+  await expect(page.getByRole("link",{name:"Download message export",exact:true})).toBeVisible({timeout:15000});
+  await expect(page.getByRole("link",{name:"Download message export",exact:true})).toHaveAttribute("download","messages-export.tar");
+  const file=await page.request.get(await page.getByRole("link",{name:"Download message export",exact:true}).getAttribute("href")||"");
+  expect(file.ok()).toBeTruthy();
+  expect((await file.body()).includes(Buffer.from("manifest.json"))).toBeTruthy();
+  expect((await file.body()).includes(Buffer.from("Synthetic readable export message"))).toBeTruthy();
+  await page.getByRole("button",{name:"Delete server export package",exact:true}).click();
+  await expect(page.getByRole("link",{name:"Download message export",exact:true})).toHaveCount(0);
+  await page.getByLabel("Archive export format").selectOption("encrypted");
+  await page.getByRole("button",{name:"Start message export",exact:true}).click();
+  await expect(page.getByRole("link",{name:"Download message export",exact:true})).toHaveAttribute("download","messages-archive.sma",{timeout:15000});
+  await page.getByRole("button",{name:"Delete server export package",exact:true}).click();
+ }finally{
+  const cfg=await(await page.request.get("/api/v1/inbox/settings")).json();
+  await page.request.put("/api/v1/inbox/settings",{headers,data:{...previous,revision:cfg.revision}});
+ }
+});

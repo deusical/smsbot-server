@@ -70,15 +70,22 @@ func (l Limits) RequestBytes() int64 {
 
 // Info is the only attachment representation returned in message lists.
 type Info struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-	MIME string `json:"mime"`
-	Size int64  `json:"size"`
+	ArchiveState string `json:"archive_state,omitempty"`
+	ArchiveError string `json:"archive_error,omitempty"`
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	MIME         string `json:"mime"`
+	Size         int64  `json:"size"`
 }
 
 // File is stored only inside encrypted payloads. Remote keys never reach clients.
 type File struct {
 	Info
+	BlobID       string `json:"blob_id,omitempty"`
+	Digest       string `json:"digest,omitempty"`
+	RetryAt      string `json:"retry_at,omitempty"`
+	RetryPolicy  string `json:"retry_policy,omitempty"`
+	Failures     int    `json:"failures,omitempty"`
 	Data         []byte `json:"data,omitempty"`
 	RemoteID     string `json:"remote_id,omitempty"`
 	Key          []byte `json:"key,omitempty"`

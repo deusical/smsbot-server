@@ -2,6 +2,7 @@ package transport
 
 import (
 	"smsbot-server/internal/media"
+	"strings"
 	"testing"
 	"time"
 
@@ -58,5 +59,14 @@ func TestAttachmentsNormalizeLiveAndHistoryWithoutLosingCaption(t *testing.T) {
 	}
 	if _, ok := normalize(&libgm.WrappedMessage{Message: m, IsOld: true}, now.Add(-time.Second)); ok {
 		t.Fatal("historical media replayed live")
+	}
+}
+
+func TestLongTextPreservedForArchive(t *testing.T) {
+	text := strings.Repeat("Synthetic long text ", 1000)
+	m := &gmproto.Message{MessageInfo: []*gmproto.MessageInfo{{Data: &gmproto.MessageInfo_MessageContent{MessageContent: &gmproto.MessageContent{Content: text}}}}}
+	got, _, ok := messageParts(m)
+	if !ok || got != text {
+		t.Fatal("archive normalization applied command length ceiling")
 	}
 }

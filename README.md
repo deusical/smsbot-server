@@ -156,6 +156,6 @@ is made without a covering scan or update event.
 
 The UI preloads local pages near the top and virtualizes long loaded histories.
 A local change cursor refreshes edits and new rows beyond the newest 50-message
-page. Original received-file bytes and scalable archive-specific backups remain
-PR 2 work; remote file references alone are not a complete file backup. Live Google
+page. Original files are preserved by the separate archive service; encrypted streaming
+backups and readable exports include saved originals and explicit missing counts. Live Google
 sync/edit acceptance is pending; automated coverage uses offline fixtures.

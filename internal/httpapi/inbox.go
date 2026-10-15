@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"bytes"
+	"io"
 	"mime"
 	"net/http"
 	"smsbot-server/internal/bot"
@@ -152,14 +153,49 @@ func (s *Server) inboxCompose(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) inboxAttachment(w http.ResponseWriter, r *http.Request) {
-	info, data, err := s.Engine.InboxAttachmentContent(r.Context(), r.PathValue("id"), r.PathValue("message"), r.PathValue("attachment"), r.URL.Query().Get("inline") == "1")
-	if err != nil {
-		if err.Error() == "attachment_size_limit" {
-			s.bad(w, 413, "attachment_size_limit")
-		} else {
-			s.bad(w, 409, "attachment_unavailable_or_access_disabled")
+	var content io.ReadSeeker
+	var info media.Info
+	var localClose io.Closer
+	file, localErr := s.Engine.LocalArchiveAttachment(r.PathValue("id"), r.PathValue("message"), r.PathValue("attachment"))
+	if localErr == nil {
+		settings, err := s.Engine.InboxSettings()
+		if err != nil {
+			s.bad(w, 500, "settings_unavailable")
+			return
 		}
-		return
+		if limit := settings.FileLimits().FileBytes(); limit > 0 && file.Size > limit {
+			s.bad(w, 413, "attachment_size_limit")
+			return
+		}
+	}
+	if localErr == nil && file.BlobID != "" {
+		local, err := s.Engine.Archive.OpenLocal(file)
+		if err != nil {
+			s.bad(w, 409, "archived_file_missing_or_corrupt")
+			return
+		}
+		content = local
+		info = file.Info
+		localClose = local
+	} else if localErr == nil && len(file.Data) > 0 {
+		content = bytes.NewReader(file.Data)
+		info = file.Info
+	}
+	if localClose != nil {
+		defer localClose.Close()
+	}
+	if content == nil {
+		infoValue, data, err := s.Engine.InboxAttachmentContent(r.Context(), r.PathValue("id"), r.PathValue("message"), r.PathValue("attachment"), r.URL.Query().Get("inline") == "1")
+		if err != nil {
+			if err.Error() == "attachment_size_limit" {
+				s.bad(w, 413, "attachment_size_limit")
+			} else {
+				s.bad(w, 409, "attachment_unavailable_or_access_disabled")
+			}
+			return
+		}
+		info = infoValue
+		content = bytes.NewReader(data)
 	}
 	disposition := "attachment"
 	if r.URL.Query().Get("inline") == "1" {
@@ -171,5 +207,7 @@ func (s *Server) inboxAttachment(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", info.MIME)
 	w.Header().Set("Content-Disposition", mime.FormatMediaType(disposition, map[string]string{"filename": media.SafeName(info.Name)}))
 	w.Header().Set("Content-Security-Policy", "default-src 'none'; sandbox")
-	http.ServeContent(w, r, info.Name, time.Time{}, bytes.NewReader(data))
+	controller := http.NewResponseController(w)
+	_ = controller.SetWriteDeadline(time.Time{})
+	http.ServeContent(deadlineResponse{ResponseWriter: w, controller: controller}, r, info.Name, time.Time{}, content)
 }

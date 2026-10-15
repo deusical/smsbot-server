@@ -10,7 +10,7 @@ Restore requires a fresh initialized database with no enrollment, jobs or messag
 
 The vault key is essential: a backup alone cannot recover messages. On Windows, key files are protected using CurrentUser DPAPI; copying that key file to another Windows account or Linux will not make it readable. Linux uses its own local key storage. This feature does not export an unprotected portable recovery key or automatically migrate Windows identity/platform protection. A same-identity recovery using the original vault is supported; cross-identity/platform recovery needs an explicitly designed key-transfer mechanism.
 
-The current bounded backup format supports up to 128 MiB of logical JSON (256 MiB maximum supplied ciphertext). Locally uploaded bytes are included; remote attachment references and keys are included, but remote bytes that were only viewed on demand are not archived. Large installations must reduce retained history or adopt a future streaming backup format; the command fails rather than silently omitting records.
+The current bounded backup format supports up to 128 MiB of logical JSON (256 MiB maximum supplied ciphertext). Locally uploaded bytes are included; remote attachment references and keys are included, but remote bytes that were only viewed on demand are not archived. Use the streaming message archive below for large history/file collections; the operational command fails rather than silently omitting records.
 
 ## Commands
 
@@ -55,6 +55,70 @@ is made without a covering scan or update event.
 
 The UI preloads local pages near the top and virtualizes long loaded histories.
 A local change cursor refreshes edits and new rows beyond the newest 50-message
-page. Original received-file bytes and scalable archive-specific backups remain
-PR 2 work; remote file references alone are not a complete file backup. Live Google
+page. Original files are preserved by the separate archive service; encrypted streaming
+backups and readable exports include saved originals and explicit missing counts. Live Google
 sync/edit acceptance is pending; automated coverage uses offline fixtures.
+
+
+## Original files and streaming message archives
+
+Settings > Import & export contains **Original file archive** and **Message history
+export**. Original preservation defaults to enabled for conversations with collection
+consent, with a 10 GiB disk quota and no per-file application cap. This is independent
+of bot replies, sending pause and viewing/upload limits. Set either limit to zero for
+unlimited. Each remote attempt has a 90-second budget; interrupted downloads restart
+from the beginning after recovery. Files show saved, pending, failed, unavailable or
+policy-limited state. Transient failures use retry backoff; originals with no source wait for source updates. Policy-limited files wait for changed limits or available quota space. Exact identity/consent checks apply. Expiry
+removes file references; periodic garbage collection removes unreferenced originals.
+Saved originals support authenticated local preview, download and byte ranges while
+the phone is offline or collection is stopped. Thumbnails never replace originals.
+
+Export all archives or one conversation, optionally from a date. A database snapshot
+keeps records consistent while capture continues. Collection of text remains active;
+file publication and garbage collection wait for the export. The snapshot and file
+staging require additional disk space beyond the original-file quota. Only the latest
+server package is kept; starting another removes the previous package. Jobs can be
+cancelled, and an interrupted export is explicitly marked after restart. Download the
+completed package, then use **Delete server export package** to remove its server copy.
+
+Choose **Encrypted backup** for recovery with the original protected key, or
+**Unencrypted readable export** for a TAR containing UTF-8 JSON records under
+`records/`, original bytes under `files/`, and a final `manifest.json` with counts and
+integrity digest. Readable records include messages and observed text revisions;
+pairing credentials, provider keys and media decryption keys are excluded. A readable
+export can be opened without the server key and contains private messages/files. It
+is an interchange export, not an input to the encrypted restore command.
+
+Streaming encrypted archives use authenticated ordered 64 KiB chunks, a final marker,
+and a manifest covering records and original-file ciphertext. They have no 128 MiB
+aggregate limit; each encrypted metadata record is limited to 16 MiB. Original bytes
+stream separately. Missing/corrupt originals are explicitly counted, not silently
+reported as backed up. Backups cover locally retained data; they do not establish
+complete upstream history or recover unobserved intermediate edits.
+
+Stop the service for CLI export or recovery. The existing exclusive state lock applies:
+
+```powershell
+.\bin\smsbot.exe --data YOUR_STATE_DIRECTORY --key YOUR_ORIGINAL_KEY_PATH --archive-backup YOUR_NEW_ARCHIVE.sma
+.\bin\smsbot.exe --data YOUR_STATE_DIRECTORY --key YOUR_ORIGINAL_KEY_PATH --archive-backup YOUR_NEW_EXPORT.tar --archive-plaintext
+```
+
+Both commands accept `--archive-conversation CONVERSATION_ID` and
+`--archive-since 2026-01-01T00:00:00Z`. Output must be a new file.
+
+Initialize fresh state with the same readable protected key, then restore offline:
+
+```powershell
+.\bin\smsbot.exe --data YOUR_NEW_STATE_DIRECTORY --key YOUR_ORIGINAL_KEY_PATH --init --owner-file YOUR_NEW_OWNER_FILE
+.\bin\smsbot.exe --data YOUR_NEW_STATE_DIRECTORY --key YOUR_ORIGINAL_KEY_PATH --archive-restore YOUR_ARCHIVE.sma
+```
+
+Offline restore uses available filesystem capacity rather than the background acquisition quota, so a fresh destination can recover archives exceeding the default 10 GiB download quota. The policy still limits later background downloads.
+
+Restore stages and verifies the whole package, manifest, ciphertext and original-file
+hashes before committing records. A failure leaves destination records unchanged.
+The destination must have no existing archive/messages/enrollment/job/memory evidence;
+use fresh state. Restore does not bring over pairing, providers, credentials, sending
+jobs or collection consent. Archives are stopped and sending is paused. Review and
+enable collection locally if desired. Existing Windows DPAPI identity limitations
+still apply; encrypted archives are not a portable key-transfer mechanism.

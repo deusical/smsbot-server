@@ -1,5 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
+
+test.use({trace: "retain-on-failure"});
 test("older pages preserve the viewport and new messages do not jump the reader", async ({
   page,
 }) => {
@@ -108,6 +110,19 @@ async function configure(page: Page, enabled: boolean) {
     ).ok(),
   ).toBeTruthy();
   await page.request.post("/api/v1/pause", { headers, data: { paused: true } });
+}
+
+// Retained history may contain many local pages before phone imports begin.
+async function loadAvailableHistory(page: Page) {
+  await expect(async () => {
+    const end = page.locator(".history-end");
+    if (!(await end.isVisible())) {
+      const older = page.getByRole("button", {name: "Load older messages", exact: true});
+      if (await older.isVisible() && await older.isEnabled()) await older.click();
+    }
+    await expect(end).toBeVisible({timeout: 500});
+  }).toPass({timeout: 15000, intervals: [250]});
+  await page.locator(".messages").evaluate(el => {el.scrollTop = 0});
 }
 
 test("attachment limits save as Unlimited and permit more than four files", async ({
@@ -240,14 +255,7 @@ test("conversation files show incoming images, download documents and recover hi
     expect(readFileSync((await download.path())!, "utf8")).toBe(
       "%PDF-1.4\nSynthetic document",
     );
-    if (
-      await page
-        .getByRole("button", { name: "Load older messages", exact: true })
-        .isVisible()
-    )
-      await page
-        .getByRole("button", { name: "Load older messages", exact: true })
-        .click();
+    await loadAvailableHistory(page);
     await expect(
       page.getByRole("button", {
         name: "Download synthetic-history.txt",
@@ -436,9 +444,31 @@ test("conversation preferences save explicitly and survive polling", async ({
 test("scrolling older history preserves messages and never routes imported commands", async ({
   page,
 }) => {
+  const historyReads: {path:string;status:number;messages?:number;imported?:number;hasNext?:boolean}[]=[];
+  page.on("response", async response => {
+    const path = new URL(response.url()).pathname;
+    if (!path.endsWith("/history") && !path.endsWith("/history/import")) return;
+    const item: typeof historyReads[number] = {path,status:response.status()};
+    try {
+      const body = await response.json();
+      item.messages = Array.isArray(body.messages) ? body.messages.length : undefined;
+      item.imported = body.imported;
+      item.hasNext = !!body.next_cursor;
+    } catch { /* HTTP status remains useful without a JSON response. */ }
+    historyReads.push(item);
+  });
   await login(page);
   await configure(page, true);
   try {
+    // Force history beyond two full local pages, independent of test order.
+    for (let i = 0; i < 110; i++) {
+      expect((await page.request.post("/api/v1/fixture/incoming", {
+        headers, data: {id: `history-pagination-${i}`, conversation_id: "demo-chat", participant_id: "demo-peer", text: `Synthetic pagination row ${i}`},
+      })).ok()).toBeTruthy();
+    }
+    const beforeJobs = (await (await page.request.get("/api/v1/activity")).json()).map((job: {id:string}) => job.id).sort();
+    await page.reload();
+    await expect(page.getByRole("heading", {name: "Home", exact:true})).toBeVisible();
     await page
       .getByRole("button", { name: "Conversations", exact: true })
       .click();
@@ -447,22 +477,30 @@ test("scrolling older history preserves messages and never routes imported comma
       .filter({ hasText: "Demo conversation" })
       .getByRole("button", { name: /Demo conversation/ })
       .click();
-    // A short thread loads older phone history on its own when scrolled to the
-    // top; otherwise the button requests it.
-    await page
-      .getByRole("button", { name: "Load older messages", exact: true })
-      .click({ timeout: 3000 })
-      .catch(() => {});
-    await expect(
-      page
-        .locator(".bubble.incoming")
-        .filter({ hasText: "Historical synthetic input must never execute" }),
-    ).toBeVisible();
-    await expect(
-      page.getByText(
-        "That’s everything your phone returned. Older messages may still exist.",
-      ),
-    ).toBeVisible();
+    // Background sync may populate additional local pages before import.
+    try {
+      await loadAvailableHistory(page);
+    } catch (error) {
+      console.log("History requests", JSON.stringify(historyReads));
+      console.log("History boundary diagnostic", JSON.stringify(await page.evaluate(() => {
+        const elements = [".history-end", ".messages", ".older", ".thread"].map(selector => {
+          const el = document.querySelector(selector);
+          if (!el) return {selector, missing:true};
+          const rect = el.getBoundingClientRect(), style = getComputedStyle(el);
+          return {selector, rect:{x:rect.x,y:rect.y,width:rect.width,height:rect.height}, display:style.display, visibility:style.visibility, shrink:style.flexShrink, disabled:el instanceof HTMLButtonElement ? el.disabled : null};
+        });
+        return {elements, note:document.querySelector(".inline-note")?.textContent, alert:document.querySelector(".inline-alert")?.textContent};
+      })));
+      throw error;
+    }
+
+    // Inspect the historical row only after all local and phone pages are loaded.
+    await page.locator(".messages").evaluate(el => {el.scrollTop = 0});
+    await expect(page.locator(".bubble.incoming").filter({hasText: "Historical synthetic input must never execute"})).toBeVisible();
+    await page.locator(".messages").evaluate(el => {el.scrollTop = el.scrollHeight});
+    await expect(page.getByText("Synthetic pagination row 109", {exact:true})).toBeVisible();
+    const afterJobs = (await (await page.request.get("/api/v1/activity")).json()).map((job: {id:string}) => job.id).sort();
+    expect(afterJobs).toEqual(beforeJobs);
   } finally {
     await configure(page, false);
   }

@@ -11,6 +11,7 @@ import {
   type Settings as BotSettings,
   type State,
 } from "./api";
+import { ArchiveSettings } from "./ArchiveSettings";
 import { Confirmation } from "./Confirmation";
 import { GenerationEditor } from "./Generation";
 import { Icon } from "./Icon";
@@ -91,7 +92,7 @@ export function SettingsPage({
           <InboxSection {...shared} conversations={conversations} />
         )}
         {section === "devices" && <DevicesSection {...shared} state={state} />}
-        {section === "backup" && <BackupSection {...shared} />}
+        {section === "backup" && <><BackupSection {...shared} />{state?.capabilities.includes("archive_backup")&&<ArchiveSettings conversations={conversations}/>}</>}
       </div>
     </div>
   );

@@ -1,8 +1,11 @@
 package store
 
 import (
+	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"smsbot-server/internal/media"
 	"time"
 )
@@ -29,9 +32,24 @@ func (s *Store) saveAttachments(tx *sql.Tx, id string, files []media.File) error
 		if string(previousJSON) == string(newJSON) {
 			return nil
 		}
+		// Locally submitted originals remain authoritative after normalization
+		// removes inline bytes. Exact transaction/alias matching selected this
+		// message; phone echoes may assign entirely different part IDs.
+		var localSend bool
+		if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM messages m JOIN message_meta meta ON meta.message=m.id WHERE m.id=? AND m.direction='outgoing' AND meta.origin='web')", id).Scan(&localSend); err != nil {
+			return err
+		}
 		for _, f := range existing {
-			if len(f.Data) > 0 {
+			if len(f.Data) > 0 || (localSend && f.BlobID != "") {
 				return nil
+			}
+		}
+		for i := range files {
+			for _, old := range existing {
+				if old.BlobID != "" && (SameFileSource(old, files[i]) || (old.RemoteID != "" && old.RemoteID == files[i].RemoteID && bytes.Equal(old.Key, files[i].Key))) {
+					files[i] = old
+					break
+				}
 			}
 		}
 	} else if err != sql.ErrNoRows {
@@ -99,4 +117,80 @@ func (s *Store) AttachmentSince(conv, message, attachment string, since time.Tim
 		}
 	}
 	return media.File{}, sql.ErrNoRows
+}
+
+// AttachmentBatch pages metadata, never an entire installation's file bytes.
+type AttachmentRecord struct {
+	Message      string
+	Conversation string
+	Files        []media.File
+}
+
+func (s *Store) AttachmentBatch(ctx context.Context, after string, limit int) ([]AttachmentRecord, error) {
+	rows, err := s.DB.QueryContext(ctx, "SELECT m.id,m.conversation,a.payload FROM messages m JOIN message_attachments a ON a.message=m.id JOIN archive_conversations c ON c.conversation=m.conversation WHERE m.id>? ORDER BY m.id LIMIT ?", after, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []AttachmentRecord
+	for rows.Next() {
+		var r AttachmentRecord
+		var enc string
+		if err = rows.Scan(&r.Message, &r.Conversation, &enc); err != nil {
+			return nil, err
+		}
+		r.Files, err = s.openAttachments(r.Message, enc)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+func SameFileSource(a, b media.File) bool {
+	return a.ID == b.ID && a.RemoteID == b.RemoteID && bytes.Equal(a.Key, b.Key) && bytes.Equal(a.Data, b.Data)
+}
+
+// UpdateArchivedFile uses compare-and-replace so a concurrent source update or
+// retention deletion cannot attach downloaded bytes to a different file.
+func (s *Store) UpdateArchivedFile(ctx context.Context, message string, expected, updated media.File) error {
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var enc string
+	if err = tx.QueryRowContext(ctx, "SELECT payload FROM message_attachments WHERE message=?", message).Scan(&enc); err != nil {
+		return err
+	}
+	files, err := s.openAttachments(message, enc)
+	if err != nil {
+		return err
+	}
+	found := false
+	for i := range files {
+		if SameFileSource(files[i], expected) {
+			files[i] = updated
+			found = true
+			break
+		}
+	}
+	if !found {
+		return errors.New("archive_file_changed")
+	}
+	b, err := json.Marshal(files)
+	if err != nil {
+		return err
+	}
+	enc, err = s.Vault.Seal("attachments:"+message, b)
+	if err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, "UPDATE message_attachments SET payload=? WHERE message=?", enc, message); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+func (s *Store) OpenAttachmentPayload(message, payload string) ([]media.File, error) {
+	return s.openAttachments(message, payload)
 }

@@ -2,9 +2,12 @@ package store
 
 import (
 	"bytes"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -184,6 +187,11 @@ func (s *Store) ExportBackup() ([]byte, error) {
 	for rows.Next() {
 		var a backupAttachment
 		if e = rows.Scan(&a.Message, &a.Payload); e != nil {
+			rows.Close()
+			return nil, e
+		}
+		a.Payload, e = s.inlineArchiveBlobs(a.Message, a.Payload)
+		if e != nil {
 			rows.Close()
 			return nil, e
 		}
@@ -441,4 +449,57 @@ func (s *Store) RestoreBackup(data []byte) error {
 		return e
 	}
 	return tx.Commit()
+}
+
+// Keep operational backups self-contained for small saved originals. The
+// archive-specific streaming format handles installations beyond this format's
+// existing logical JSON ceiling.
+func (s *Store) inlineArchiveBlobs(message, payload string) (string, error) {
+	files, err := s.openAttachments(message, payload)
+	if err != nil {
+		return "", err
+	}
+	changed := false
+	for i := range files {
+		f := &files[i]
+		if f.BlobID == "" {
+			continue
+		}
+		id, err := hex.DecodeString(f.BlobID)
+		if err != nil || len(id) != 16 {
+			return "", errors.New("invalid archived file")
+		}
+		if f.Size > MaxBackupBytes/2 {
+			return "", errors.New("use streaming archive backup for large originals")
+		}
+		source, err := os.Open(filepath.Join(filepath.Dir(s.Path), "archive", "blobs", f.BlobID+".enc"))
+		if err != nil {
+			return "", errors.New("archived original unavailable")
+		}
+		info, err := source.Stat()
+		if err != nil {
+			source.Close()
+			return "", err
+		}
+		reader, err := s.Vault.OpenSeekStream(source, info.Size(), f.Size, "blob:"+f.BlobID)
+		if err != nil {
+			source.Close()
+			return "", err
+		}
+		f.Data, err = io.ReadAll(io.LimitReader(reader, MaxBackupBytes/2+1))
+		source.Close()
+		if err != nil || len(f.Data) > MaxBackupBytes/2 {
+			return "", errors.New("archived original unavailable or too large")
+		}
+		f.BlobID = ""
+		changed = true
+	}
+	if !changed {
+		return payload, nil
+	}
+	b, err := json.Marshal(files)
+	if err != nil {
+		return "", err
+	}
+	return s.Vault.Seal("attachments:"+message, b)
 }

@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"path/filepath"
+	"smsbot-server/internal/archive"
 	"smsbot-server/internal/history"
 	"smsbot-server/internal/store"
 	"smsbot-server/internal/transport"
@@ -16,6 +18,7 @@ import (
 )
 
 type Engine struct {
+	Archive        *archive.Service
 	History        *history.Service
 	Store          *store.Store
 	Transport      transport.Transport
@@ -41,6 +44,7 @@ func New(s *store.Store, t transport.Transport) *Engine {
 	}
 	e := &Engine{Store: s, Transport: t, Provider: provider, now: time.Now, pending: map[string]context.CancelFunc{}, captureQueue: make(chan captureItem, 512)}
 	e.History = history.New(s, archiveHost{e})
+	e.Archive = archive.New(s, filepath.Join(filepath.Dir(s.Path), "archive"), archiveFileHost{e})
 	if settings, err := e.InboxSettings(); err == nil {
 		e.publishCaptureConsent(settings)
 		// Preserve existing opted-in history before startup's legacy expiry pass.

@@ -33,6 +33,8 @@ export type Job = {
   requested_reasoning?: string;
 };
 export type Attachment = {
+ archive_state?: string;
+ archive_error?: string;
   id: string;
   name: string;
   mime: string;

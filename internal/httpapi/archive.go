@@ -6,6 +6,7 @@ import (
 )
 
 func (s *Server) archiveRoutes() {
+	s.archiveBackupRoutes()
 	s.mux.HandleFunc("GET /api/v1/inbox/archive", s.protected(func(w http.ResponseWriter, r *http.Request) {
 		a, err := s.Engine.Store.Archives()
 		if err != nil {

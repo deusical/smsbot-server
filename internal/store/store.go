@@ -17,6 +17,7 @@ import (
 type Store struct {
 	DB    *sql.DB
 	Vault *vault.Vault
+	Path  string
 }
 type Job struct {
 	ID                 string   `json:"id"`
@@ -71,7 +72,7 @@ func Open(path string, v *vault.Vault) (*Store, error) {
 		return nil, e
 	}
 	db.SetMaxOpenConns(1)
-	s := &Store{db, v}
+	s := &Store{DB: db, Vault: v, Path: path}
 	if e = s.migrate(); e != nil {
 		db.Close()
 		return nil, e

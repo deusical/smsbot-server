@@ -84,8 +84,8 @@ func TestAttachmentOwnerAccessDownloadHeadersAndRevocation(t *testing.T) {
 	settings, _ = s.Engine.InboxSettings()
 	settings.Enabled = false
 	s.Engine.SetInboxSettings(context.Background(), settings)
-	if w = ownerRequest(s, "GET", url, ""); w.Code == 200 {
-		t.Fatal("file visible after consent disabled")
+	if w = ownerRequest(s, "GET", url, ""); w.Code != 200 || w.Body.String() != "<script>synthetic</script>" {
+		t.Fatal("local original unavailable after collection stopped")
 	}
 }
 

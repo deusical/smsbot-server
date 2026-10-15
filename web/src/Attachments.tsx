@@ -48,12 +48,16 @@ export function MessageAttachment({
   const [failed, setFailed] = useState(false);
   const [retry, setRetry] = useState(0);
   const [error, setError] = useState("");
-  const [downloading, setDownloading] = useState(false);
+ const [downloading, setDownloading] = useState(false);
+ useEffect(()=>{setFailed(false);setError("");setRetry(n=>n+1)},[attachment.id,attachment.archive_state]);
   const url = `/api/v1${base}/messages/${encodeURIComponent(message)}/attachments/${encodeURIComponent(attachment.id)}`;
   const source = `${url}?inline=1&retry=${retry}`;
   const oversized =
     fileLimitMB > 0 && attachment.size > fileLimitMB * 1024 * 1024;
   async function download() {
+    if(attachment.archive_state==="saved"){
+      const link=document.createElement("a");link.href=`/api/v1${base}/messages/${encodeURIComponent(message)}/attachments/${encodeURIComponent(attachment.id)}`;link.download=attachment.name;link.click();return;
+    }
     setDownloading(true);
     setError("");
     try {
@@ -115,7 +119,7 @@ export function MessageAttachment({
         <span>
           <strong>{attachment.name}</strong>
           <small>
-            {fileSize(attachment.size)} · {attachment.mime}
+            {attachment.archive_state ? `Original: ${attachment.archive_state.replaceAll("_", " ")} · ` : "Original: pending · "}{fileSize(attachment.size)} · {attachment.mime}
           </small>
         </span>
         <button

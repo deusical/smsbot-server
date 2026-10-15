@@ -1027,6 +1027,68 @@ paths:
       responses:
         '200': {description: Previous text snapshots with local observation timestamps}
 
+  /inbox/archive/files/policy:
+    get:
+      summary: Owner-only original preservation policy
+      responses:
+        '200': {description: 'enabled, max_file_mb and quota_mb; zero limits mean unlimited'}
+    put:
+      summary: Set original preservation policy independently of sending/viewing limits
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                enabled: {type: boolean}
+                max_file_mb: {type: integer, minimum: 0}
+                quota_mb: {type: integer, minimum: 0}
+      responses:
+        '200': {description: Saved policy}
+        '400': {description: Invalid policy}
+  /inbox/archive/backup:
+    get:
+      summary: Owner-only persistent export job status
+      responses:
+        '200': {description: 'Job or null; state, scope, sanitized error and message/original/missing/byte counts'}
+    post:
+      summary: Start a consistent local archive export; matching concurrent starts reuse the running job
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                plaintext: {type: boolean, default: false}
+                conversations: {type: array, maxItems: 500, items: {type: string}}
+                since: {type: string, description: 'RFC3339 cutoff or empty'}
+      responses:
+        '202': {description: Running job; starting a new job removes the preceding server package}
+        '409': {description: Invalid scope or export unavailable/busy}
+    delete:
+      summary: Delete the completed server export package and job status
+      responses:
+        '200': {description: Deleted}
+        '409': {description: Export running or file removal failed}
+  /inbox/archive/backup/cancel:
+    post:
+      summary: Cancel the current export without publishing a partial package
+      responses:
+        '200': {description: Cancellation requested}
+  /inbox/archive/backup/{job}/file:
+    parameters:
+    - {name: job, in: path, required: true, schema: {type: string}}
+    get:
+      summary: Download completed encrypted SMA or readable TAR export; owner cookie required
+      responses:
+        '200': {description: Completed package with attachment disposition and no-store}
+        '206': {description: Requested byte range}
+        '409': {description: Job incomplete or no longer available}
+
 components:
   securitySchemes:
     browserSession:
