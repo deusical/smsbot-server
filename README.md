@@ -37,6 +37,15 @@ Go 1.27.2 toolchain and Node.js 24 are pinned for this milestone. Dependencies a
 .\start.ps1                  # Fixture mode, starts paused
 ```
 
+Release builds omit linker/debug tables and embed only the current dashboard output.
+For a quick local rebuild with unchanged dependencies, use
+`./build.ps1 -SkipInstall -SkipChecks`; this still rebuilds the dashboard and binary.
+The default build installs locked dependencies, runs offline tests and vet, and
+reuses Go's content-keyed test cache. Use `-DebugSymbols` when you need debugger
+symbols, and `-SkipWeb` only when the embedded dashboard is already current.
+CI continues to run fresh race tests. Docker builds use BuildKit dependency and
+compiler cache mounts; run `docker build -t smsbot .` with BuildKit enabled.
+
 Open `http://127.0.0.1:8787`. Read the owner credential file locally as directed by the launcher and paste it into the dashboard. Do not send that credential to a coding agent. Secrets/state live in the local application data directory, outside source. Fixture and Google environments use different directories.
 
 In **Conversations**, turn on **Bot replies** for the demo conversation, flip the top-bar switch to **Live**, open the conversation and use **Simulate !ping**. Activity will show submitted; fixture mode makes no claim of delivery. The service runs while the browser is closed. Ctrl+C stops it cleanly; every startup pauses automation and cancels eligible old queue entries.

@@ -1,18 +1,20 @@
+# syntax=docker/dockerfile:1
 FROM node:24-bookworm-slim AS web
 WORKDIR /build/web
 COPY web/package.json web/package-lock.json ./
-RUN npm ci
+RUN --mount=type=cache,target=/root/.npm npm ci
 COPY web/ ./
 RUN npm run build
 
 FROM golang:1.27.2-bookworm AS build
 WORKDIR /build
 COPY go.mod go.sum ./
-RUN go mod download
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY cmd/ ./cmd/
 COPY internal/ ./internal/
 COPY --from=web /build/web/dist/ ./internal/httpapi/assets/
-RUN CGO_ENABLED=0 go build -trimpath -o /smsbot ./cmd/smsbot
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /smsbot ./cmd/smsbot
 
 FROM debian:bookworm-slim AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/* \

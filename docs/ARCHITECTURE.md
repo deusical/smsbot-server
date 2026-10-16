@@ -225,3 +225,16 @@ two browser shards in parallel; each browser runner keeps one worker and its own
 fixture database. The required `service` check passes only when the build, backend
 checks and both browser shards succeed. Race tests, vet, Go vulnerability scanning,
 production dependency auditing and the complete browser suite remain required.
+
+
+## Release build size and caching
+
+The local build and CI synchronize the embedded dashboard file set against Vite's
+current output, removing obsolete content-hashed files while retaining `.keep`.
+Unchanged files are not rewritten. Release builds (PowerShell, CI and Docker) use
+`-trimpath -ldflags="-s -w"`; debugger symbol tables are omitted, with an explicit
+PowerShell `-DebugSymbols` option for diagnostic builds. Dependencies and features
+remain unchanged. Local default validation uses Go's test cache; CI race tests
+still force execution. Optional local `-SkipInstall` and `-SkipChecks` switches
+support quick rebuilds without weakening default validation. BuildKit mounts retain
+npm downloads, Go modules and compiler output across Docker source rebuilds.

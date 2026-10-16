@@ -1,4 +1,9 @@
-param([switch]$SkipWeb)
+param(
+    [switch]$SkipWeb,
+    [switch]$SkipInstall,
+    [switch]$SkipChecks,
+    [switch]$DebugSymbols
+)
 $ErrorActionPreference = 'Stop'
 Push-Location $PSScriptRoot
 $previousGoTemp = $env:GOTMPDIR
@@ -7,13 +12,30 @@ try {
     $env:GOTMPDIR = Join-Path $PSScriptRoot '.build-temp'
     if (-not $SkipWeb) {
         Push-Location web
-        try { & npm.cmd ci; if ($LASTEXITCODE -ne 0) { throw 'Dependency installation failed' }; & npm.cmd run build; if ($LASTEXITCODE -ne 0) { throw 'Web build failed' } } finally { Pop-Location }
-        Copy-Item web/dist/* internal/httpapi/assets -Recurse -Force
+        try {
+            if (-not $SkipInstall) {
+                & npm.cmd ci
+                if ($LASTEXITCODE -ne 0) { throw 'Dependency installation failed' }
+            }
+            & npm.cmd run build
+            if ($LASTEXITCODE -ne 0) { throw 'Web build failed' }
+        } finally { Pop-Location }
+        # Vite uses content-hashed filenames. Replace the embedded file set so
+        # previous dashboard versions cannot accumulate inside the executable.
+        & node scripts/sync-web-assets.mjs
+        if ($LASTEXITCODE -ne 0) { throw 'Embedded asset synchronization failed' }
     }
-    & go test -count=1 ./...
-    if ($LASTEXITCODE -ne 0) { throw 'Offline tests failed' }
-    & go vet ./...
-    if ($LASTEXITCODE -ne 0) { throw 'Go vet failed' }
-    & go build -trimpath -o bin/smsbot.exe ./cmd/smsbot
+    if (-not $SkipChecks) {
+        # Reuse Go's content-keyed test cache for unchanged offline packages.
+        # CI still uses -race -count=1 to force a fresh validation run.
+        & go test ./...
+        if ($LASTEXITCODE -ne 0) { throw 'Offline tests failed' }
+        & go vet ./...
+        if ($LASTEXITCODE -ne 0) { throw 'Go vet failed' }
+    }
+    $buildArguments = @('build', '-trimpath')
+    if (-not $DebugSymbols) { $buildArguments += '-ldflags=-s -w' }
+    $buildArguments += @('-o', 'bin/smsbot.exe', './cmd/smsbot')
+    & go @buildArguments
     if ($LASTEXITCODE -ne 0) { throw 'Build failed' }
 } finally { $env:GOTMPDIR = $previousGoTemp; Pop-Location }
