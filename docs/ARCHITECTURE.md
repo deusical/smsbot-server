@@ -216,3 +216,12 @@ no conversation identifiers, messages, API state or credentials are stored there
 Hidden panels stay mounted so polling, automatic checks and date drafts continue.
 Errors remain visible outside the hidden details with a review action. Display
 controls never call sync cancellation, change collection consent or affect sending.
+
+## CI execution
+
+Offline checks run once per pull request commit and on main pushes. Superseded
+pull request runs are cancelled. A shared fixture build feeds backend checks and
+two browser shards in parallel; each browser runner keeps one worker and its own
+fixture database. The required `service` check passes only when the build, backend
+checks and both browser shards succeed. Race tests, vet, Go vulnerability scanning,
+production dependency auditing and the complete browser suite remain required.

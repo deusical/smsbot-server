@@ -1,9 +1,16 @@
 name: Offline checks
-on: [push, pull_request]
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
-  service:
+  build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -15,23 +22,84 @@ jobs:
           node-version: '24'
           cache: npm
           cache-dependency-path: web/package-lock.json
-      - run: npm ci && npm run build
+      - run: npm ci && npm run build && npm audit --omit=dev
         working-directory: web
       - run: cp -r web/dist/* internal/httpapi/assets/
-      - run: go test -race -count=1 ./... && go vet ./... && go build -trimpath -o bin/smsbot ./cmd/smsbot
+      - run: go build -trimpath -o bin/smsbot ./cmd/smsbot
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fixture-build
+          path: |
+            bin/smsbot
+            web/dist/
+          retention-days: 1
+          compression-level: 1
+  backend:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.2'
+          # Keep race-test cache entries separate from the fixture build's cache.
+          cache-dependency-path: |
+            go.sum
+            .github/workflows/ci.yml
+      - uses: actions/download-artifact@v4
+        with:
+          name: fixture-build
+      - run: cp -r web/dist/* internal/httpapi/assets/
+      - run: go test -race -count=1 ./...
+      - run: go vet ./...
       - run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
         env:
           GOTOOLCHAIN: go1.27.2
-      - run: npm audit --omit=dev
+  browser:
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: actions/download-artifact@v4
+        with:
+          name: fixture-build
+      - run: chmod +x bin/smsbot
+      - run: npm ci
         working-directory: web
-      - run: npx playwright install --with-deps chromium && npm test
+      - run: npx playwright install --with-deps --only-shell chromium
         working-directory: web
-
+      # Keep one worker per fixture database; shards run on separate runners.
+      - run: npm test -- --shard=${{ matrix.shard }}/2
+        working-directory: web
       - name: Preserve failed browser diagnostics
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: browser-failure-${{ github.event_name }}-${{ github.run_attempt }}
+          name: browser-failure-${{ matrix.shard }}-${{ github.run_attempt }}
           path: web/test-results/
           retention-days: 7
           if-no-files-found: ignore
+  # Preserve the required check name and fail closed if any prerequisite fails or skips.
+  service:
+    if: always()
+    needs: [build, backend, browser]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every offline check
+        env:
+          BUILD_RESULT: ${{ needs.build.result }}
+          BACKEND_RESULT: ${{ needs.backend.result }}
+          BROWSER_RESULT: ${{ needs.browser.result }}
+        run: |
+          test "$BUILD_RESULT" = success
+          test "$BACKEND_RESULT" = success
+          test "$BROWSER_RESULT" = success
