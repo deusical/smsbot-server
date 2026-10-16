@@ -65,8 +65,11 @@ func New(s *store.Store, root string, h FileHost) *Service {
 	return &Service{Store: s, Root: root, Host: h}
 }
 func (s *Service) Policy() (Policy, error) {
+	return s.policy(context.Background())
+}
+func (s *Service) policy(ctx context.Context) (Policy, error) {
 	p := Policy{Enabled: true, QuotaMiB: 10 * 1024}
-	b, err := s.Store.GetSecretSetting("archive_files", "archive-files-policy")
+	b, err := s.Store.GetSecretSettingContext(ctx, "archive_files", "archive-files-policy")
 	if err != nil {
 		return p, err
 	}

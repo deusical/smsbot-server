@@ -242,3 +242,22 @@ remain unchanged. Local default validation uses Go's test cache; CI race tests
 still force execution. Optional local `-SkipInstall` and `-SkipChecks` switches
 support quick rebuilds without weakening default validation. BuildKit mounts retain
 npm downloads, Go modules and compiler output across Docker source rebuilds.
+
+
+## Archive storage overview and verification ranges
+
+The owner Archive page polls `/inbox/archive/stats` every 15 seconds while visible.
+It reports physical encrypted originals, the shared database and WAL/SHM, exports,
+and temporary archive working files separately. Counts include messages belonging
+to retained archive identities. Quotas apply only to originals; the database also
+contains service settings and bot records. Measurements can change during file
+publication or cleanup and do not imply complete upstream history. Stats reads
+never wait on the long-running export publication mutex or access the phone.
+
+Capture-repair metadata records the observation time separately from original
+message time. A failed historical edit/status update checks a two-minute window
+on either side of the original message, bounded by now. Live failures retain the
+original capture interval. Multiple pending failures still conservatively merge
+coverage, invalidate the repair cursor and advance its generation. Older saved
+ranges remain queued until verified; they are not silently discarded or treated
+as proof of an uninterrupted outage. This metadata remains encrypted in settings.

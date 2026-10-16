@@ -4,9 +4,31 @@ import {ArchiveSettings} from "./ArchiveSettings";
 import {CaptureChecks} from "./CaptureChecks";
 import {HistorySync, importLabel, type Archive} from "./HistorySync";
 import type {Workspace} from "./workspace";
+type StorageStats = {original_bytes:number;original_files:number;database_bytes:number;export_bytes:number;temporary_bytes:number;total_bytes:number;messages:number;quota_bytes:number;measured_at:string};
+export function formatBytes(value:number):string {
+  if (!value) return "0 B";
+  const unit=Math.min(4,Math.floor(Math.log(value)/Math.log(1024)));
+  return `${(value/1024**unit).toLocaleString(undefined,{maximumFractionDigits:1})} ${["B","KiB","MiB","GiB","TiB"][unit]}`;
+}
 export function ArchivePage({conversations, inbox, state, workspace}: {conversations: Conversation[]; inbox: InboxSettings | null; state: State | null; workspace: Workspace}) {
   const [rows,setRows] = useState<Archive[]>([]), [selected,setSelected] = useState("");
   const [error,setError] = useState(""), [loaded,setLoaded] = useState(false), [busy,setBusy] = useState(false);
+  const [query,setQuery] = useState("");
+  const [stats,setStats] = useState<StorageStats | null>(null), [statsError,setStatsError] = useState(false);
+  const statsSupported=!!state?.capabilities.includes("archive_stats");
+  useEffect(() => {
+    if (!statsSupported) return;
+    let disposed=false, reading=false;
+    const refresh=async()=>{
+      if (reading || document.visibilityState === "hidden") return;
+      reading=true;
+      try { const result=await api<StorageStats>("/inbox/archive/stats"); if(!disposed){setStats(result);setStatsError(false);} }
+      catch {if(!disposed)setStatsError(true);}
+      finally {reading=false;}
+    };
+    void refresh(); const timer=setInterval(()=>void refresh(),15000);
+    return ()=>{disposed=true;clearInterval(timer);};
+  },[statsSupported]);
   const reading = useRef(false), mutating = useRef(false), epoch = useRef(0);
   const supported = !!state?.capabilities.includes("archive_history");
   useEffect(() => {
@@ -26,7 +48,9 @@ export function ArchivePage({conversations, inbox, state, workspace}: {conversat
   for (const conversation of conversations) known.set(conversation.id,{...conversation,archived:known.has(conversation.id) || !!conversation.archived});
   const current = rows.find(row => row.conversation.id === selected) ?? rows[0];
   const conversation = current && known.get(current.conversation.id)!;
+  const filtered=rows.filter(row => (known.get(row.conversation.id)?.label || "Saved conversation").toLocaleLowerCase().includes(query.toLocaleLowerCase()));
   const active = rows.filter(row => ["queued","running","retrying"].includes(row.state)).length;
+  const pendingChecks=(state?.inbox_capture_gaps ?? []).filter(gap => gap.state !== "checked_available").length;
   const checked = rows.filter(row => row.state === "available_pages_exhausted").length;
   const update = (result: Archive) => setRows(previous => previous.map(row => row.conversation.id === result.conversation.id ? result : row));
   const mutation = (value: boolean) => {epoch.current++; mutating.current = value; setBusy(value);};
@@ -35,23 +59,36 @@ export function ArchivePage({conversations, inbox, state, workspace}: {conversat
       <h2>Background archive</h2>
       <p role="status" aria-label="Background archive scope">{inbox?.enabled ? `${inbox.scope === "all" ? "All individual conversations" : `${inbox.conversations.length} selected individual conversations`}; all available history by default; ${inbox.archive_retention_days ? `keep ${inbox.archive_retention_days} days` : "keep indefinitely"}.` : "Collection stopped; saved history stays readable."}</p>
       <p>Archiving continues with this tab closed and while sending is paused. Collection access is managed in Settings, Messages &amp; privacy.</p>
-      {supported ? <div className="archive-summary" aria-label="Archive overview"><span><strong>{rows.length}</strong> conversations tracked</span><span><strong>{active}</strong> imports active</span><span><strong>{checked}</strong> available pages checked</span></div> : <p>History archiving is not supported by this server.</p>}
-      <p className="muted">These counts describe history scans, not original-file completion or a guarantee that every message is available.</p>
+      {supported ? <div className="archive-summary" aria-label="Archive overview">
+        <div className="archive-stat storage-stat"><span>Storage used</span><strong>{stats ? formatBytes(stats.total_bytes) : "â€”"}</strong><small>{statsError ? "Measurement unavailable; retrying" : stats ? "Originals, database and exports" : statsSupported ? "Measuring local storage..." : "Update server for storage metrics"}</small></div>
+        <div className="archive-stat"><span>Saved messages</span><strong>{stats ? stats.messages.toLocaleString() : "â€”"}</strong><small>In archived conversations</small></div>
+        <div className="archive-stat"><span>Original files</span><strong>{stats ? stats.original_files.toLocaleString() : "â€”"}</strong><small>{stats ? `${formatBytes(stats.original_bytes)} / ${stats.quota_bytes ? formatBytes(stats.quota_bytes) : "unlimited"}` : "Preserved locally"}</small></div>
+        <div className="archive-stat"><span>Conversations tracked</span><strong>{loaded ? rows.length : "—"}</strong><small>{active} {active === 1 ? "import active" : "imports active"}</small></div>
+      </div> : <p>History archiving is not supported by this server.</p>}
+      {stats && <details className="archive-storage"><summary>Storage breakdown{statsError ? " (last successful measurement)" : ""}</summary><dl>
+        <div><dt>Original files</dt><dd>{formatBytes(stats.original_bytes)}</dd></div>
+        <div><dt>Shared service database, including journal</dt><dd>{formatBytes(stats.database_bytes)}</dd></div>
+        <div><dt>Backup exports</dt><dd>{formatBytes(stats.export_bytes)}</dd></div>
+        <div><dt>Temporary and working files</dt><dd>{formatBytes(stats.temporary_bytes)}</dd></div>
+        <div><dt>Original-file storage limit</dt><dd>{stats.quota_bytes ? formatBytes(stats.quota_bytes) : "Unlimited"}</dd></div>
+      </dl><p className="muted">Measured {new Date(stats.measured_at).toLocaleTimeString()}; refreshes every 15 seconds. The database also contains service settings and bot activity. File counts describe stored originals, not download completion.</p></details>}
+      <p className="muted">{checked} {checked === 1 ? "history scan checked" : "history scans checked"} all available pages. Google may not expose every message or original file.</p>
       {error && <p role="alert">{error}</p>}
       {state?.inbox_capture_gap_unknown && <p role="alert">A possible capture gap has unknown scope. The server cannot confirm which conversations or dates were affected.</p>}
-      {state?.inbox_capture_gap && !state.inbox_capture_gap_unknown && <p role="status">{(state.inbox_capture_gaps ?? []).filter(gap => gap.state !== "checked_available").length} conversations have capture checks pending.</p>}
+      {state?.inbox_capture_gap && !state.inbox_capture_gap_unknown && <p role="status">{pendingChecks} {pendingChecks === 1 ? "conversation needs" : "conversations need"} history verification.</p>}
     </section>
     {supported && <section className="panel"><h2>Conversation history</h2>
       {!loaded && !error && <p>Loading archive progress...</p>}
       {loaded && !rows.length && <p>No conversations archived yet. Enable collection in Settings, Messages &amp; privacy.</p>}
       {!!rows.length && <div className="archive-grid"><div>
-        <label>Conversation<select aria-label="Archive conversation" value={current?.conversation.id ?? ""} disabled={busy} onChange={e => setSelected(e.target.value)}>{rows.map(row => <option key={row.conversation.id} value={row.conversation.id}>{known.get(row.conversation.id)?.label || "Saved conversation"}</option>)}</select></label>
-        <ul className="archive-jobs" aria-label="Archive jobs">{rows.map(row => <li key={row.conversation.id}><button type="button" className="ghost" disabled={busy} aria-pressed={current?.conversation.id === row.conversation.id} onClick={() => setSelected(row.conversation.id)}>{known.get(row.conversation.id)?.label || "Saved conversation"}<br/><small>{importLabel(row.state)}</small></button></li>)}</ul>
-      </div>{current && <div><h3>{conversation.label || "Saved conversation"}</h3>
+        <label>Find a conversation<input type="search" aria-label="Find archived conversation" placeholder="Search conversations" value={query} onChange={event=>setQuery(event.target.value)} /></label>
+        <ul className="archive-jobs" aria-label="Archive jobs">{filtered.map(row => <li key={row.conversation.id}><button type="button" className="ghost" disabled={busy} aria-label={`Select ${known.get(row.conversation.id)?.label || "Saved conversation"}`} aria-pressed={current?.conversation.id === row.conversation.id} onClick={() => setSelected(row.conversation.id)}><span className="archive-conversation-name">{known.get(row.conversation.id)?.label || "Saved conversation"}</span><small className={`archive-state state-${row.state}`}>{importLabel(row.state)}</small></button></li>)}</ul>
+        {!filtered.length && <p className="muted">No matching conversations.</p>}
+      </div>{current && <div className="archive-detail"><h3 title={conversation.label}>{conversation.label || "Saved conversation"}</h3>
         <HistorySync key={current.conversation.id} record={current} ready={!!state?.transport_ready && inboxAllows(inbox,conversation)} onUpdate={update} onBusy={mutation} />
       </div>}</div>}
     </section>}
-    {!!state?.inbox_capture_gaps?.length && <section className="panel"><h2>Capture checks</h2>{state.inbox_capture_gaps.map(gap => {
+    {!!state?.inbox_capture_gaps?.length && <section className="panel"><h2>History verification</h2><p className="muted">Automatic checks after a message could not be captured. A verification range does not mean the phone was offline throughout that time.</p>{state.inbox_capture_gaps.map(gap => {
       const affected = known.get(gap.conversation);
       return <div key={gap.conversation}><h3>{affected?.label || "Saved conversation"}</h3><CaptureChecks gaps={[gap]} ready={!!state.transport_ready && !!affected && inboxAllows(inbox,affected)} /></div>;
     })}</section>}

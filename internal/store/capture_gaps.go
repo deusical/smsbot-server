@@ -9,6 +9,8 @@ import (
 // The key hashes the conversation and the complete payload is encrypted.
 type CaptureGap struct {
 	Conversation string `json:"conversation"`
+	Kind         string `json:"kind,omitempty"`
+	ObservedAt   string `json:"observed_at,omitempty"`
 	Since        string `json:"since"`
 	Until        string `json:"until"`
 	Reason       string `json:"reason"`

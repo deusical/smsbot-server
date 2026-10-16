@@ -71,15 +71,15 @@ test("Archive includes saved conversations beyond the discovered inbox page and 
   const older={...app.record,conversation:{id:"synthetic-older-chat",participant_id:"synthetic-older-peer",label:"Older saved conversation",protocol:"RCS",writable:true,archived:true},since:"",state:"available_pages_exhausted"};
   await page.route("**/api/v1/inbox/archive",route=>route.fulfill({json:[app.record,older]}));
   await page.getByRole("button",{name:"Archive",exact:true}).click();
-  await expect(page.getByLabel("Archive overview")).toContainText("2 conversations tracked");
+  await expect(page.getByLabel("Archive overview")).toContainText("2");
   await expect(page.getByLabel("Archive export conversations").locator("option")).toContainText(["All archived conversations","Demo conversation","Older saved conversation"]);
   await page.getByText("Advanced import options",{exact:true}).click();
   await page.getByLabel("History from",{exact:true}).fill("2026-06-01");
-  await page.getByLabel("Archive conversation",{exact:true}).selectOption("synthetic-older-chat");
+  await page.getByRole("button",{name:"Select Older saved conversation",exact:true}).click();
   await page.getByText("Advanced import options",{exact:true}).click();
   await expect(page.getByLabel("History from",{exact:true})).toHaveValue("");
   await expect(page.getByRole("status",{name:"Import progress"})).toContainText("All available pages checked");
-  await page.getByLabel("Archive conversation",{exact:true}).selectOption("demo-chat");
+  await page.getByRole("button",{name:"Select Demo conversation",exact:true}).click();
   await page.getByText("Advanced import options",{exact:true}).click();
   await expect(page.getByLabel("History from",{exact:true})).toHaveValue("2026-07-16");
 });
@@ -98,4 +98,37 @@ test("enrolled text-history import remains available in Archive with collection 
   await expect(page.getByText("All available phone pages checked.",{exact:true})).toBeVisible();
   await expect(page.getByRole("button",{name:"Import phone history",exact:true})).toBeDisabled();
   expect(calls).toBe(2);expect(app.mutations()).toBe(0);
+});
+
+
+test("storage breakdown and searchable long conversation names stay bounded",async({page})=>{
+  const app=await prepare(page);
+  const label="Synthetic long conversation " + "0123456789*".repeat(16);
+  await page.route("**/api/v1/inbox/archive",route=>route.fulfill({json:[app.record,{...app.record,conversation:{id:"long-chat",label},state:"available_pages_exhausted"}]}));
+  await page.route("**/api/v1/inbox/archive/stats",route=>route.fulfill({json:{original_bytes:1048576,original_files:3,database_bytes:1048576,export_bytes:1048576,temporary_bytes:0,total_bytes:3145728,messages:1234,quota_bytes:10737418240,measured_at:"2026-10-16T12:00:00Z"}}));
+  await page.getByRole("button",{name:"Archive",exact:true}).click();
+  await expect(page.getByLabel("Archive overview")).toContainText("3 MiB");
+  await page.getByText("Storage breakdown",{exact:true}).click();
+  await expect(page.getByText("10 GiB",{exact:true})).toBeVisible();
+  await page.getByLabel("Find archived conversation").fill("Synthetic long");
+  await expect(page.locator(".archive-jobs button")).toHaveCount(1);
+  await page.locator(".archive-jobs button").click();
+  await expect(page.getByRole("status",{name:"Import progress"})).toContainText("Detailed scan counts are not available");
+  for (const width of [1280,390]) {
+    await page.setViewportSize({width,height:844});
+    expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBeTruthy();
+    const nameBox=await page.locator(".archive-conversation-name").boundingBox();
+    expect(nameBox?.height).toBeGreaterThan(10);
+    expect(await page.locator(".archive-jobs").evaluate(el=>el.scrollWidth<=el.clientWidth)).toBeTruthy();
+    await page.screenshot({path:`.test-state/archive-overview-${width}.png`,fullPage:true});
+  }
+});
+
+
+test("failed storage measurement stays explicit instead of showing zero",async({page})=>{
+ await prepare(page);
+ await page.route("**/api/v1/inbox/archive/stats",route=>route.fulfill({status:503,json:{error:"archive_stats_unavailable"}}));
+ await page.getByRole("button",{name:"Archive",exact:true}).click();
+ await expect(page.getByLabel("Archive overview")).toContainText("Measurement unavailable; retrying");
+ await expect(page.locator(".storage-stat strong")).not.toHaveText("0 B");
 });

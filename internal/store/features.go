@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -16,8 +17,11 @@ func (s *Store) SetSecretSetting(key, scope string, plain []byte) error {
 	return err
 }
 func (s *Store) GetSecretSetting(key, scope string) ([]byte, error) {
+	return s.GetSecretSettingContext(context.Background(), key, scope)
+}
+func (s *Store) GetSecretSettingContext(ctx context.Context, key, scope string) ([]byte, error) {
 	var enc string
-	err := s.DB.QueryRow("SELECT value FROM settings WHERE key=?", key).Scan(&enc)
+	err := s.DB.QueryRowContext(ctx, "SELECT value FROM settings WHERE key=?", key).Scan(&enc)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}

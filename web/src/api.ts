@@ -1,6 +1,6 @@
 export type CaptureGap = {
  conversation: string; since: string; until: string; reason: string;
- state: string; checked_at?: string; retry_at?: string;
+ state: string; checked_at?: string; retry_at?: string; kind?: string; observed_at?: string;
 };
 export type State = {
   api_version: number;

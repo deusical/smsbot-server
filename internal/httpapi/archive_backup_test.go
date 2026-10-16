@@ -113,3 +113,18 @@ func TestArchiveExportOwnerFormatAndDeletion(t *testing.T) {
 		}
 	}
 }
+
+func TestArchiveStatsOwnerOnly(t *testing.T) {
+	s := apiSetup(t)
+	if w := req(s, "GET", "/api/v1/inbox/archive/stats", "", "fixture-client", ""); w.Code != 403 {
+		t.Fatal("client accessed storage metrics", w.Code)
+	}
+	w := ownerRequest(s, "GET", "/api/v1/inbox/archive/stats", "")
+	var value struct {
+		DatabaseBytes int64  `json:"database_bytes"`
+		MeasuredAt    string `json:"measured_at"`
+	}
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &value) != nil || value.DatabaseBytes <= 0 || value.MeasuredAt == "" {
+		t.Fatal("owner metrics unavailable", w.Code)
+	}
+}

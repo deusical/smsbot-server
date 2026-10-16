@@ -1,12 +1,23 @@
 package httpapi
 
 import (
+	"context"
 	"net/http"
 	"smsbot-server/internal/archive"
 	"time"
 )
 
 func (s *Server) archiveBackupRoutes() {
+	s.mux.HandleFunc("GET /api/v1/inbox/archive/stats", s.protected(func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		defer cancel()
+		stats, err := s.Engine.Archive.Stats(ctx)
+		if err != nil {
+			s.bad(w, 503, "archive_stats_unavailable")
+			return
+		}
+		s.json(w, 200, stats)
+	}))
 	s.mux.HandleFunc("DELETE /api/v1/inbox/archive/backup", s.protected(func(w http.ResponseWriter, r *http.Request) {
 		if err := s.Engine.Archive.DeleteExport(); err != nil {
 			s.bad(w, 409, "cannot_delete_export")

@@ -37,6 +37,32 @@ func seedGap(t *testing.T, e *Engine, at time.Time) {
 	e.noteCaptureGap(transport.Incoming{ConversationID: "demo-chat", At: at, Text: "synthetic private body"}, consent.epoch, "capture_check_failed")
 	e.flushCaptureGaps()
 }
+func TestHistoricalCaptureFailureTargetsMessageTimeAndPersistsObservation(t *testing.T) {
+	e, _ := setup(t)
+	enableInbox(t, e)
+	at := time.Now().AddDate(-1, 0, 0).UTC()
+	e.noteCaptureGap(transport.Incoming{ConversationID: "demo-chat", At: at, Historical: true}, e.captureConsent.Load().epoch, "phone_unavailable")
+	e.flushCaptureGaps()
+	gaps, err := e.Store.CaptureGaps()
+	if err != nil || len(gaps) != 1 {
+		t.Fatal("persist targeted check", err)
+	}
+	g := gaps[0]
+	since, _ := time.Parse(time.RFC3339Nano, g.Since)
+	until, _ := time.Parse(time.RFC3339Nano, g.Until)
+	observed, _ := time.Parse(time.RFC3339Nano, g.ObservedAt)
+	if g.Kind != "historical_update" || !since.Equal(at.Add(-2*time.Minute)) || !until.Equal(at.Add(2*time.Minute)) || time.Since(observed) > time.Minute {
+		t.Fatal("historical update became a continuous outage")
+	}
+	// A later live failure must retain both unverified ranges, restart repair,
+	// and avoid presenting their union as a single historical update.
+	e.noteCaptureGap(transport.Incoming{ConversationID: "demo-chat", At: time.Now()}, e.captureConsent.Load().epoch, "phone_unavailable")
+	e.flushCaptureGaps()
+	gaps, err = e.Store.CaptureGaps()
+	if err != nil || len(gaps) != 1 || gaps[0].Kind != "mixed" || gaps[0].Since != g.Since || gaps[0].Generation <= g.Generation {
+		t.Fatal("merged repair lost coverage", err)
+	}
+}
 func TestCaptureGapPersistsRepairsAndNeverRunsCommands(t *testing.T) {
 	e, f := setup(t)
 	enableInbox(t, e)

@@ -22,7 +22,18 @@ func (e *Engine) noteCaptureGap(m transport.Incoming, epoch uint64, reason strin
 	if at.IsZero() || at.After(now) {
 		at = now
 	}
-	g := store.CaptureGap{Conversation: m.ConversationID, Since: at.Add(-2 * time.Minute).UTC().Format(time.RFC3339Nano), Until: now.UTC().Format(time.RFC3339Nano), Reason: reason, State: "queued"}
+	until := now
+	kind := "live_capture"
+	if m.Historical && !m.At.IsZero() && !m.At.After(now) {
+		// An edit/status update retains the original message timestamp. Recheck
+		// its neighborhood, rather than inventing an outage from then to now.
+		kind = "historical_update"
+		until = at.Add(2 * time.Minute)
+		if until.After(now) {
+			until = now
+		}
+	}
+	g := store.CaptureGap{Kind: kind, ObservedAt: now.UTC().Format(time.RFC3339Nano), Conversation: m.ConversationID, Since: at.Add(-2 * time.Minute).UTC().Format(time.RFC3339Nano), Until: until.UTC().Format(time.RFC3339Nano), Reason: reason, State: "queued"}
 	e.gapMu.Lock()
 	defer e.gapMu.Unlock()
 	if e.pendingGaps == nil {
@@ -45,10 +56,17 @@ func mergeCaptureGap(old, next store.CaptureGap) store.CaptureGap {
 		next.Generation = old.Generation + 1
 		return next
 	}
-	if old.Since < next.Since {
+	if old.Kind != next.Kind {
+		next.Kind = "mixed"
+	}
+	oldSince, _ := time.Parse(time.RFC3339Nano, old.Since)
+	nextSince, _ := time.Parse(time.RFC3339Nano, next.Since)
+	oldUntil, _ := time.Parse(time.RFC3339Nano, old.Until)
+	nextUntil, _ := time.Parse(time.RFC3339Nano, next.Until)
+	if oldSince.Before(nextSince) {
 		next.Since = old.Since
 	}
-	if old.Until > next.Until {
+	if oldUntil.After(nextUntil) {
 		next.Until = old.Until
 	}
 	next.Generation = old.Generation + 1

@@ -31,7 +31,8 @@ test("saved import date, independent progress and gap repair status stay underst
  await expect(page.getByLabel("History from",{exact:true})).toHaveValue("2026-07-16");
  await expect(page.getByRole("status",{name:"Import progress"})).toContainText("Waiting for a history worker turn");
  await expect(page.getByRole("status",{name:"Recent message checks"})).toContainText("last completed");
- await expect(page.getByText("Possible capture gap:",{exact:false})).toBeVisible();
+ await page.locator(".capture-checks summary").click();
+ await expect(page.getByText("Range to recheck:",{exact:false})).toBeVisible();
  await page.getByLabel("History from",{exact:true}).fill("2026-06-01");
  await expect(page.getByText("Unsaved date selection.",{exact:false})).toBeVisible();
  await page.waitForTimeout(3200);
@@ -40,7 +41,7 @@ test("saved import date, independent progress and gap repair status stay underst
  await expect(page.getByText("Unsaved date selection.",{exact:false})).toHaveCount(0);
  record={...record,state:"running",checked:100,pages:2,updated:4,scanned_through:"2026-08-01T12:00:00Z",last_progress_at:"2026-10-16T12:10:00Z"};
  gapState="checking";
- await expect(page.getByRole("status",{name:"Import progress"})).toContainText("100 messages checked across 2 pages; 0 newly saved; 4 updated");
+ await expect(page.getByRole("status",{name:"Import progress"})).toContainText("100 messages checked2 pages0 newly saved4 updated");
  await expect(page.getByText("Checking available phone history for this range.",{exact:false})).toBeVisible();
  gapState="checked_available";
  await expect(page.getByText("Available history in this range rechecked",{exact:false})).toBeVisible();
@@ -48,7 +49,7 @@ test("saved import date, independent progress and gap repair status stay underst
  await page.getByRole("button",{name:"Cancel history import",exact:true}).click();
  await expect(page.getByRole("status",{name:"Import progress"})).toContainText("Import cancelled");
  ready=false;gapState="queued";reason="phone_unavailable";
- await expect(page.getByText("the phone was unavailable during live capture",{exact:false})).toBeVisible();
+ await expect(page.getByText("the phone was unavailable when a message update arrived",{exact:false})).toBeVisible();
  await expect(page.getByText("Waiting for phone connection and enabled conversation access;",{exact:false})).toBeVisible();
  await page.setViewportSize({width:390,height:844});
  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBeTruthy();

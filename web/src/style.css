@@ -2608,16 +2608,44 @@ label {
 .older ~ .messages { padding-top: 16px; }
 
 
-.archive-page { display: grid; gap: 20px; max-width: 1100px; }
+.archive-page { display: grid; gap: 20px; max-width: 1240px; }
 .archive-page .panel { padding: 20px; min-width: 0; }
-.archive-page .archive-grid { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(0, 2fr); gap: 20px; }
-.archive-page .capture-checks { max-height: none; overflow: visible; padding: 12px 0; }
-.archive-summary { display: flex; flex-wrap: wrap; gap: 20px; margin: 16px 0; }
-.archive-summary strong { display: block; font-size: 24px; }
+.archive-summary strong { display: block; }
 .archive-page select, .archive-page input { max-width: 100%; }
-.archive-page .archive-jobs { max-height: 380px; overflow-y: auto; padding: 0; list-style: none; }
 .archive-jobs button { width: 100%; text-align: left; margin: 3px 0; }
-.archive-jobs button[aria-pressed="true"] { border-color: var(--accent); }
+.archive-jobs button[aria-pressed="true"] { border-color: var(--signal); }
 .archive-page .action-row { display: flex; flex-wrap: wrap; gap: 10px; margin: 12px 0; }
 .archive-page details { margin-top: 14px; }
-@media (max-width: 700px) { .archive-page .archive-grid { grid-template-columns: 1fr; } }
+
+/* Archive management: bounded conversation names and a quiet storage overview. */
+.archive-summary { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 12px; margin: 22px 0 16px; }
+.archive-stat { min-width: 0; padding: 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); }
+.archive-stat > span { display: block; font-size: 13px; color: var(--muted); }
+.archive-stat strong { margin: 8px 0; font-size: 28px; line-height: 1.15; }
+.archive-stat small { display: block; font-size: 12px; color: var(--muted); }
+.archive-storage dl { margin: 12px 0; }
+.archive-storage dl > div { display: flex; justify-content: space-between; gap: 16px; padding: 6px 0; }
+.archive-storage dd { margin: 0; flex-shrink: 0; }
+.archive-page .archive-grid { display: grid; grid-template-columns: minmax(0,280px) minmax(0,1fr); gap: 20px; margin-top: 18px; }
+.archive-grid > div { min-width: 0; }
+.archive-page .archive-jobs { padding: 0; list-style: none; overflow-y: auto; max-height: 460px; overflow-x: hidden; margin: 12px 0 0; }
+.archive-page .archive-jobs button { height: auto; min-height: 68px; display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 7px; white-space: normal; padding: 12px; min-width: 0; box-sizing: border-box; }
+.archive-conversation-name { flex-shrink: 0; display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+.archive-jobs .archive-state { font-weight: 400; font-size: 12px; color: var(--muted); }
+.archive-jobs button[aria-pressed="true"] { background: color-mix(in srgb,var(--signal) 10%,transparent); }
+.archive-detail { border-left: 1px solid var(--line); padding-left: 20px; }
+.archive-page h3 { overflow-wrap: anywhere; }
+.archive-detail h3 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.archive-progress { padding: 16px; margin: 14px 0; border: 1px solid var(--line); border-radius: 12px; }
+.archive-progress p { margin-bottom: 10px; }
+.archive-progress-counts { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; margin: 16px 0; font-size: 12px; color: var(--muted); }
+.archive-progress-counts strong { display: block; font-size: 22px; color: var(--text); }
+.archive-page .capture-checks { max-height: none; overflow: visible; padding: 10px 0; }
+.archive-page .capture-checks summary { cursor: pointer; }
+@media (max-width:700px) {
+ .archive-summary { grid-template-columns: repeat(2,minmax(0,1fr)); }
+ .archive-page .archive-grid { grid-template-columns: minmax(0,1fr); }
+ .archive-page .archive-jobs { max-height: 220px; }
+ .archive-detail { border-left: 0; padding-left: 0; border-top: 1px solid var(--line); padding-top: 16px; }
+ .archive-page .panel { padding: 16px; }
+}

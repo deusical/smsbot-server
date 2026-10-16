@@ -973,6 +973,18 @@ paths:
         '416':
           description: Unsatisfiable byte range
 
+  /inbox/archive/stats:
+    get:
+      summary: Owner-only local archive storage metrics (archive_stats capability)
+      responses:
+        '200':
+          description: >-
+            original_bytes, original_files, database_bytes (shared database plus WAL/SHM),
+            export_bytes, temporary_bytes, total_bytes, messages (archived conversations),
+            quota_bytes (original-file quota; zero means unlimited), measured_at (RFC3339).
+            Disk measurements are approximate during concurrent downloads, exports and cleanup.
+        '403': {description: Owner required}
+        '503': {description: Measurement unavailable; never reported as zero usage}
   /inbox/archive:
     get:
       summary: Owner-only retained archive identities and durable sync progress
@@ -1111,7 +1123,7 @@ components:
       properties:
         inbox_capture_gap:
           type: boolean
-          description: Owner-only warning that optional capture may have missed messages since startup.
+          description: Owner-only pending history-verification warning; ranges are not confirmed outages or proof of missing messages.
         api_version:
           type: integer
           const: 1
