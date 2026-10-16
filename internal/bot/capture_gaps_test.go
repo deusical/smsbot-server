@@ -37,6 +37,65 @@ func seedGap(t *testing.T, e *Engine, at time.Time) {
 	e.noteCaptureGap(transport.Incoming{ConversationID: "demo-chat", At: at, Text: "synthetic private body"}, consent.epoch, "capture_check_failed")
 	e.flushCaptureGaps()
 }
+func TestCompletedImportResolvesOnlyCoveredEarlierCaptureFailures(t *testing.T) {
+	for _, tc := range []struct {
+		name, state   string
+		cutoff, newer bool
+		changedPolicy bool
+		retention     int
+		resolved      bool
+	}{
+		{name: "full import", state: "available_pages_exhausted", resolved: true},
+		{name: "import still running", state: "running"},
+		{name: "policy changed during scan", state: "available_pages_exhausted", changedPolicy: true},
+		{name: "cancelled import", state: "cancelled"},
+		{name: "date cutoff excludes gap", state: "cutoff_reached", cutoff: true},
+		{name: "new failure during import", state: "available_pages_exhausted", newer: true},
+		{name: "retention excludes gap", state: "available_pages_exhausted", retention: 30},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e, _ := setup(t)
+			cfg := enableInbox(t, e)
+			start := time.Now().Add(-time.Minute)
+			gap := store.CaptureGap{Conversation: "demo-chat", Since: start.AddDate(-1, 0, 0).UTC().Format(time.RFC3339Nano), Until: start.Add(-time.Minute).UTC().Format(time.RFC3339Nano), State: "checking", Generation: 7, Cursor: "synthetic-cursor"}
+			if tc.newer {
+				gap.ObservedAt = start.Add(time.Second).UTC().Format(time.RFC3339Nano)
+			}
+			if err := e.Store.SaveCaptureGap(gap); err != nil {
+				t.Fatal(err)
+			}
+			a := store.Archive{ScanRevision: cfg.Revision, Conversation: transport.Conversation{ID: "demo-chat", ParticipantID: "demo-peer", Writable: true}, State: tc.state, RequestedAt: start.UTC().Format(time.RFC3339Nano), Generation: 1}
+			if tc.changedPolicy {
+				a.ScanRevision = cfg.Revision + 1
+			}
+			if tc.cutoff {
+				a.Since = start.Add(-time.Hour).UTC().Format(time.RFC3339Nano)
+			}
+			if err := (archiveHost{e}).Commit(context.Background(), a, history.Policy{Revision: cfg.Revision, Deep: true, Retention: tc.retention}, transport.HistoryPage{}, false); err != nil {
+				t.Fatal(err)
+			}
+			gaps, err := e.Store.CaptureGaps()
+			if err != nil || len(gaps) != 1 {
+				t.Fatal("gap missing", err)
+			}
+			if (gaps[0].State == "checked_available") != tc.resolved {
+				t.Fatal("incorrect import coverage resolution")
+			}
+			if tc.resolved {
+				if gaps[0].Generation <= gap.Generation || gaps[0].Cursor != "" || gaps[0].CheckedAt == "" {
+					t.Fatal("completion lost generation guard")
+				}
+				if err := e.finishGapAttempt(gap, errors.New("synthetic late failure")); err != nil {
+					t.Fatal(err)
+				}
+				gaps, _ = e.Store.CaptureGaps()
+				if gaps[0].State != "checked_available" {
+					t.Fatal("stale repair reopened completed import")
+				}
+			}
+		})
+	}
+}
 func TestHistoricalCaptureFailureTargetsMessageTimeAndPersistsObservation(t *testing.T) {
 	e, _ := setup(t)
 	enableInbox(t, e)
@@ -63,6 +122,28 @@ func TestHistoricalCaptureFailureTargetsMessageTimeAndPersistsObservation(t *tes
 		t.Fatal("merged repair lost coverage", err)
 	}
 }
+func TestRepairReconcilesAnImportCompletedBeforeRestart(t *testing.T) {
+	e, f := setup(t)
+	cfg := enableInbox(t, e)
+	source := &gapTransport{Fixture: f}
+	e.Transport = source
+	start := time.Now().Add(-time.Minute)
+	a := store.Archive{ScanRevision: cfg.Revision, Conversation: transport.Conversation{ID: "demo-chat", ParticipantID: "demo-peer", Writable: true}, State: "available_pages_exhausted", RequestedAt: start.UTC().Format(time.RFC3339Nano), Generation: 1}
+	if err := e.Store.SaveArchive(a, 0); err != nil {
+		t.Fatal(err)
+	}
+	gap := store.CaptureGap{Conversation: "demo-chat", Since: start.AddDate(-1, 0, 0).UTC().Format(time.RFC3339Nano), Until: start.Add(-time.Minute).UTC().Format(time.RFC3339Nano), State: "checking", Generation: 1}
+	if err := e.Store.SaveCaptureGap(gap); err != nil {
+		t.Fatal(err)
+	}
+	if err := (archiveHost{e}).RepairCaptureGap(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	gaps, err := e.Store.CaptureGaps()
+	if err != nil || len(gaps) != 1 || gaps[0].State != "checked_available" || source.calls != 0 {
+		t.Fatal("completed import was redundantly repaired", err)
+	}
+}
 func TestCaptureGapPersistsRepairsAndNeverRunsCommands(t *testing.T) {
 	e, f := setup(t)
 	enableInbox(t, e)
@@ -81,7 +162,7 @@ func TestCaptureGapPersistsRepairsAndNeverRunsCommands(t *testing.T) {
 		t.Fatal(err)
 	}
 	gaps, unknown := e.CaptureGapStatus()
-	if unknown || len(gaps) != 1 || gaps[0].State != "checked_available" || gaps[0].CheckedAt == "" || e.InboxCaptureGap() {
+	if unknown || len(gaps) != 1 || gaps[0].State != "checked_available" || gaps[0].CheckedAt == "" || gaps[0].Pages != 1 || gaps[0].Checked != 1 || gaps[0].LastProgressAt == "" || e.InboxCaptureGap() {
 		t.Fatal("rechecked range did not resolve warning")
 	}
 	page, err := e.Store.OwnerMessagePage("demo-chat", "", "", 50)

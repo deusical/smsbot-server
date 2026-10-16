@@ -156,7 +156,13 @@ func (h archiveHost) Commit(ctx context.Context, a store.Archive, p history.Poli
 	if currentFocus.After(previousFocus) {
 		a.FocusAt = current.FocusAt
 	}
-	return e.Store.SaveArchive(a, p.Retention)
+	if err := e.Store.SaveArchive(a, p.Retention); err != nil {
+		return err
+	}
+	if !stateOnly && p.Deep && (a.State == "available_pages_exhausted" || a.State == "cutoff_reached") {
+		return e.finishCaptureGapsFromImport(a, p.Retention, p.Revision)
+	}
+	return nil
 }
 
 // RequestArchive starts a durable rescan. An identical in-flight request is
@@ -212,6 +218,7 @@ func (e *Engine) RequestArchive(ctx context.Context, conv, since string, cancel 
 	a.Conversation = c
 	a.Since = since
 	a.State = "queued"
+	a.ScanRevision = s.Revision
 	a.RequestSource = "owner"
 	a.RequestedAt = e.now().UTC().Format(time.RFC3339Nano)
 	a.LastAttemptAt = ""

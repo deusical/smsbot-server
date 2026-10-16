@@ -23,18 +23,19 @@ export function HistorySync({record, ready, onUpdate, onBusy}: {record: Archive;
     finally { pending.current = false; setBusy(false); onBusy(false); }
   }
   return <>
+    <p className="muted">Save this conversation locally. Archive again to check all available history, add missing messages and reconcile edits. Missing original files download in the background under your file archive policy. Existing saved data is kept.</p>
     <div className="action-row">
-      <button type="button" disabled={busy || !ready} onClick={() => void start()}>Archive all available history</button>
+      <button type="button" disabled={busy || !ready} onClick={() => void start()}>Archive conversation</button>
       <button type="button" disabled={busy || !["queued","running","retrying"].includes(record.state)} onClick={() => void start(true)}>Cancel history import</button>
     </div>
     <div className="archive-progress" role="status" aria-label="Import progress">
       <p><strong>Older-history import: {importLabel(record.state)}</strong></p>
-      <p>{record.since ? `Limited to messages from ${new Date(record.since).toLocaleDateString()}. Archive all available history to remove this limit.` : "All available history requested."}</p>
-      <p>{!ready && ["queued","running","retrying"].includes(record.state) ? "Waiting for a phone connection and enabled conversation access." : record.state === "queued" ? "Waiting for a history worker turn. Explicit imports run ahead of routine inbox checks." : record.state === "running" ? "Fetching history in batches; visible-section checks continue between batches." : record.state === "retrying" ? `History fetch failed. Retrying${record.retry_at ? ` after ${new Date(record.retry_at).toLocaleTimeString()}` : " automatically"}.` : record.state === "cancelled" ? "Import cancelled. Saved messages are kept." : record.state === "cutoff_reached" ? "Requested start date reached." : "All available pages checked. Google may not expose every message."}</p>
+      <p>{record.since ? `Limited to messages from ${new Date(record.since).toLocaleDateString()}. Use Archive conversation to remove this limit.` : record.state === "not_started" ? "No history scan requested yet." : "All available history requested."}</p>
+      <p>{record.state === "not_started" ? "Not archived yet. Select Archive conversation to start saving available history." : !ready && ["queued","running","retrying"].includes(record.state) ? "Waiting for a phone connection and enabled conversation access." : record.state === "queued" ? "Waiting for a history worker turn. Explicit imports run ahead of routine inbox checks." : record.state === "running" ? "Fetching history in batches; visible-section checks continue between batches." : record.state === "retrying" ? `History fetch failed. Retrying${record.retry_at ? ` after ${new Date(record.retry_at).toLocaleTimeString()}` : " automatically"}.` : record.state === "cancelled" ? "Import cancelled. Saved messages are kept." : record.state === "cutoff_reached" ? "Requested start date reached." : "All available pages checked. Google may not expose every message."}</p>
       {(record.pages || record.scanned_through || record.last_progress_at || ["queued","running","retrying"].includes(record.state)) ? <>
         <div className="archive-progress-counts"><span><strong>{record.checked ?? 0}</strong> messages checked</span><span><strong>{record.pages ?? 0}</strong> pages</span><span><strong>{record.imported}</strong> newly saved</span><span><strong>{record.updated ?? 0}</strong> updated</span></div>
         <p className="muted">{record.scanned_through ? `Checked through ${new Date(record.scanned_through).toLocaleString()}.` : record.last_progress_at ? "No dated message returned in this scan." : "No older-history page checked in this request yet."}</p>
-      </> : <p className="muted">Detailed scan counts are not available for this import.</p>}
+      </> : record.state !== "not_started" && <p className="muted">Detailed scan counts are not available for this import.</p>}
 
       {record.last_progress_at && <p>Last progress {new Date(record.last_progress_at).toLocaleString()}.</p>}
     </div>
@@ -51,5 +52,5 @@ export function HistorySync({record, ready, onUpdate, onBusy}: {record: Archive;
   </>;
 }
 export function importLabel(state: string): string {
-  return ({queued:"waiting",running:"fetching",retrying:"waiting to retry",cutoff_reached:"start date reached",available_pages_exhausted:"available pages checked"} as Record<string,string>)[state] || state.replaceAll("_"," ");
+  return ({queued:"waiting",running:"fetching",retrying:"waiting to retry",cutoff_reached:"start date reached",not_started:"not archived yet",available_pages_exhausted:"available pages checked"} as Record<string,string>)[state] || state.replaceAll("_"," ");
 }

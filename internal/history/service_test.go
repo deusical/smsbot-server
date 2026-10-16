@@ -61,6 +61,29 @@ type retryHost struct {
 	calls []string
 	fail  map[string]bool
 }
+type repairRetryHost struct {
+	*retryHost
+	repairs int
+}
+
+func (h *repairRetryHost) RepairCaptureGap(context.Context) error { h.repairs++; return nil }
+func TestFailedViewedSectionDoesNotStarveImportsAndRepairs(t *testing.T) {
+	v, _ := vault.New(make([]byte, 32))
+	s, err := store.Open(filepath.Join(t.TempDir(), "state.db"), v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.DB.Close()
+	h := &repairRetryHost{retryHost: &retryHost{s: s, fail: map[string]bool{"view": true}}}
+	a := store.Archive{Conversation: transport.Conversation{ID: "chat", ParticipantID: "peer", Writable: true}, State: "running", Cursor: "old", RequestedAt: time.Now().UTC().Format(time.RFC3339Nano), RefreshState: "queued", RefreshCursor: "view", RecentRetryAt: time.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano), Generation: 1}
+	if err = s.SaveArchive(a, 0); err != nil {
+		t.Fatal(err)
+	}
+	New(s, h).Tick(context.Background())
+	if len(h.calls) != 2 || h.calls[0] != "view" || h.calls[1] != "old" || h.repairs != 1 {
+		t.Fatal("failed view starved independent history work", h.calls, h.repairs)
+	}
+}
 
 func (h *retryHost) Prune(context.Context) error { return nil }
 func (h *retryHost) Discover(context.Context) ([]transport.Conversation, error) {

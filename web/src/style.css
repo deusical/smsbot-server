@@ -2649,3 +2649,17 @@ label {
  .archive-detail { border-left: 0; padding-left: 0; border-top: 1px solid var(--line); padding-top: 16px; }
  .archive-page .panel { padding: 16px; }
 }
+
+.archive-stat strong.archive-metric-placeholder { font-size: 18px; line-height: 32px; color: var(--muted); }
+.archive-page details.archive-verification { margin-top: 0; padding: 16px 20px; }
+.archive-verification > summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; cursor: pointer; font-weight: 600; list-style: none; }
+.archive-verification > summary::before { content: "+"; color: var(--muted); }
+.archive-verification[open] > summary::before { content: "-"; }
+.archive-verification > summary span { flex: 1; }
+.archive-verification > summary small { color: var(--muted); font-size: 12px; font-weight: 400; }
+.archive-repair-row { border-top: 1px solid var(--line); padding-top: 14px; margin-top: 14px; }
+.archive-page .archive-repair-row .capture-checks { padding: 0; }
+.capture-checks details { font-size: 12px; color: var(--muted); }
+.capture-checks dl { display: grid; gap: 10px; margin: 12px 0; }
+.capture-checks dd { margin: 4px 0 0; overflow-wrap: anywhere; }
+@media (max-width:700px) { .archive-verification > summary { flex-wrap: wrap; } }

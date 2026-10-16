@@ -73,9 +73,8 @@ func (s *Service) Tick(ctx context.Context) {
 	}
 	if focus != nil && !focus.Conversation.Group && focus.Conversation.Writable && focus.Conversation.ParticipantID != "" {
 		if p, err := s.Host.Policy(focus.Conversation); err == nil {
-			if s.refreshStep(ctx, *focus, p) != nil {
-				return
-			}
+			// A failed view refresh must not starve explicit imports or repairs.
+			_ = s.refreshStep(ctx, *focus, p)
 		}
 	}
 	// Explicit imports get one bounded page before routine discovery. Rotate by
@@ -187,6 +186,9 @@ func (s *Service) step(ctx context.Context, a store.Archive, p Policy, cursor st
 	}
 	p.Snapshot = &snapshot
 	if !recent {
+		if cursor == "" && a.Pages == 0 {
+			a.ScanRevision = p.Revision
+		}
 		p.Deep = true
 		a.State = "running"
 		a.LastAttemptAt = time.Now().UTC().Format(time.RFC3339Nano)

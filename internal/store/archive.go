@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -13,6 +14,7 @@ import (
 // Archive holds encrypted verified identity and durable read-job checkpoints.
 // Consent is always checked separately; the record itself never authorizes sync.
 type Archive struct {
+	ScanRevision   int64  `json:"scan_revision,omitempty"`
 	RequestSource  string `json:"request_source,omitempty"`
 	RequestedAt    string `json:"requested_at,omitempty"`
 	LastAttemptAt  string `json:"last_attempt_at,omitempty"`
@@ -88,14 +90,18 @@ func (s *Store) SaveArchive(a Archive, retention int) error {
 	}
 	return tx.Commit()
 }
-func (s *Store) Archives() ([]Archive, error) {
-	rows, err := s.DB.Query("SELECT conversation,payload FROM archive_conversations ORDER BY conversation")
+func (s *Store) Archives() ([]Archive, error) { return s.ArchivesContext(context.Background()) }
+func (s *Store) ArchivesContext(ctx context.Context) ([]Archive, error) {
+	rows, err := s.DB.QueryContext(ctx, "SELECT conversation,payload FROM archive_conversations ORDER BY conversation")
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	out := []Archive{}
 	for rows.Next() {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		var conv, enc string
 		if err = rows.Scan(&conv, &enc); err != nil {
 			return nil, err

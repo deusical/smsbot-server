@@ -1,8 +1,10 @@
 package httpapi
 
 import (
+	"context"
 	"net/http"
 	"smsbot-server/internal/store"
+	"time"
 )
 
 func (s *Server) archiveRoutes() {
@@ -23,7 +25,9 @@ func (s *Server) archiveRoutes() {
 		s.json(w, 202, a)
 	}))
 	s.mux.HandleFunc("GET /api/v1/inbox/archive", s.protected(func(w http.ResponseWriter, r *http.Request) {
-		a, err := s.Engine.Store.Archives()
+		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		defer cancel()
+		a, err := s.Engine.Store.ArchivesContext(ctx)
 		if err != nil {
 			s.bad(w, 500, "archive_unavailable")
 			return

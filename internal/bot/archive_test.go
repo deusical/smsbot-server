@@ -10,6 +10,55 @@ import (
 	"time"
 )
 
+func TestArchiveConversationCreatesReusesAndRearchivesWithoutDeletingSavedHistory(t *testing.T) {
+	e, f := setup(t)
+	enableInbox(t, e)
+	first, err := e.RequestArchive(context.Background(), "demo-chat", "", false)
+	if err != nil || first.State != "queued" {
+		t.Fatal("first archive", err)
+	}
+	first.State = "running"
+	first.Cursor = "synthetic-checkpoint"
+	first.Pages = 8
+	first.Checked = 400
+	if err = e.Store.SaveArchive(first, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err = e.Store.SaveObservedFiles("demo-chat", "saved-message", "", "incoming", "Synthetic saved text", "history", "", time.Now().Add(-time.Hour), nil); err != nil {
+		t.Fatal(err)
+	}
+	type result struct {
+		a   store.Archive
+		err error
+	}
+	done := make(chan result, 2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			a, err := e.RequestArchive(context.Background(), "demo-chat", "", false)
+			done <- result{a, err}
+		}()
+	}
+	for i := 0; i < 2; i++ {
+		r := <-done
+		if r.err != nil || r.a.Generation != first.Generation || r.a.Cursor != first.Cursor || r.a.Pages != 8 || r.a.Checked != 400 {
+			t.Fatal("repeat click reset active archive", r.err)
+		}
+	}
+	first.State = "available_pages_exhausted"
+	first.Cursor = ""
+	if err = e.Store.SaveArchive(first, 0); err != nil {
+		t.Fatal(err)
+	}
+	again, err := e.RequestArchive(context.Background(), "demo-chat", "", false)
+	if err != nil || again.State != "queued" || again.Generation <= first.Generation || again.Pages != 0 {
+		t.Fatal("completed archive did not rescan", err)
+	}
+	page, err := e.Store.OwnerMessagePage("demo-chat", "", "", 50)
+	if err != nil || len(page.Messages) != 1 || len(f.Sent) != 0 {
+		t.Fatal("rearchive deleted history or sent a message", err)
+	}
+}
+
 func TestLiveCaptureDuringFetchWinsOverStaleSnapshot(t *testing.T) {
 	e, f := setup(t)
 	cfg := enableInbox(t, e)

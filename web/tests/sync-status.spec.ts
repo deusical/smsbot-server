@@ -31,6 +31,7 @@ test("saved import date, independent progress and gap repair status stay underst
  await expect(page.getByLabel("History from",{exact:true})).toHaveValue("2026-07-16");
  await expect(page.getByRole("status",{name:"Import progress"})).toContainText("Waiting for a history worker turn");
  await expect(page.getByRole("status",{name:"Recent message checks"})).toContainText("last completed");
+ await page.locator(".archive-verification > summary").click();
  await page.locator(".capture-checks summary").click();
  await expect(page.getByText("Range to recheck:",{exact:false})).toBeVisible();
  await page.getByLabel("History from",{exact:true}).fill("2026-06-01");
@@ -51,6 +52,10 @@ test("saved import date, independent progress and gap repair status stay underst
  ready=false;gapState="queued";reason="phone_unavailable";
  await expect(page.getByText("the phone was unavailable when a message update arrived",{exact:false})).toBeVisible();
  await expect(page.getByText("Waiting for phone connection and enabled conversation access;",{exact:false})).toBeVisible();
+ await page.getByRole("button",{name:"Switch to dark theme"}).click();
+ await page.locator(".archive-verification").screenshot({path:".test-state/archive-repair-details-dark.png"});
+ await page.locator(".archive-verification > summary").click();
+ await page.locator(".archive-verification").screenshot({path:".test-state/archive-repair-collapsed-dark.png"});
  await page.setViewportSize({width:390,height:844});
  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBeTruthy();
 });

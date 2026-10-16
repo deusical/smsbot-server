@@ -23,7 +23,7 @@ test("conversation stays clear while automatic checks continue and Archive owns 
   await expect(page.getByText("Synthetic saved message",{exact:true})).toBeVisible();
   await expect(page.getByRole("status",{name:"Background archive scope"})).toHaveCount(0);
   await expect(page.getByText("Sync details",{exact:true})).toHaveCount(0);
-  await expect(page.getByRole("button",{name:"Archive all available history",exact:true})).toHaveCount(0);
+  await expect(page.getByRole("button",{name:"Archive conversation",exact:true})).toHaveCount(0);
   await expect.poll(app.checks).toBeGreaterThan(0);
   expect(app.reads()).toBe(0);
   await expect(page.locator(".attachment-info")).not.toContainText("Original:");
@@ -32,7 +32,7 @@ test("conversation stays clear while automatic checks continue and Archive owns 
   await expect(page.getByRole("status",{name:"Background archive scope"})).toBeVisible();
   await expect(page.getByRole("status",{name:"Import progress"})).toContainText("Limited to messages from");
   await expect(page.getByLabel("History from",{exact:true})).toBeHidden();
-  await page.getByRole("button",{name:"Archive all available history",exact:true}).click();
+  await page.getByRole("button",{name:"Archive conversation",exact:true}).click();
   await expect(page.getByRole("status",{name:"Import progress"})).toContainText("All available history requested");
   expect(app.record.since).toBe("");expect(app.mutations()).toBe(1);
   app.record.error="history_fetch_failed";app.record.state="retrying";
@@ -131,4 +131,52 @@ test("failed storage measurement stays explicit instead of showing zero",async({
  await page.getByRole("button",{name:"Archive",exact:true}).click();
  await expect(page.getByLabel("Archive overview")).toContainText("Measurement unavailable; retrying");
  await expect(page.locator(".storage-stat strong")).not.toHaveText("0 B");
+});
+
+
+test("loading metrics stay readable, do not claim zero, and can be retried",async({page})=>{
+ await prepare(page);
+ let release!:()=>void; const held=new Promise<void>(resolve=>release=resolve);
+ let calls=0;
+ await page.route("**/api/v1/inbox/archive",async route=>{calls++;await held;await route.fulfill({json:[]}).catch(()=>{});});
+ await page.route("**/api/v1/inbox/archive/stats",async route=>{await held;await route.fulfill({json:{total_bytes:1024,messages:0,original_files:0,original_bytes:0,database_bytes:1024,export_bytes:0,temporary_bytes:0,quota_bytes:0,measured_at:"2026-10-16T12:00:00Z"}}).catch(()=>{});});
+ await page.getByRole("button",{name:"Archive",exact:true}).click();
+ await expect(page.locator(".archive-stat strong")).toHaveText(["Loading","Loading","Loading","Loading"]);
+ await expect(page.getByLabel("Archive overview")).not.toContainText("0 imports active");
+ await expect(page.locator(".archive-page")).not.toContainText("0 history scans");
+ await expect(page.getByRole("button",{name:"Retry archive loading"})).toBeVisible();
+ await page.getByRole("button",{name:"Retry archive loading"}).click();
+ await expect.poll(()=>calls).toBeGreaterThan(1);
+ await page.getByRole("button",{name:"Switch to dark theme"}).click();
+ await page.screenshot({path:".test-state/archive-loading-dark.png"});
+ release();
+ await expect(page.locator(".storage-stat strong")).toHaveText("1 KiB");
+ await expect(page.getByText("No conversations archived yet.",{exact:false})).toBeVisible();
+ await page.unrouteAll({behavior:"wait"});
+});
+
+
+test("Archive conversation starts a first archive and coalesces rapid clicks",async({page})=>{
+ const app=await prepare(page);
+ let saved=false,calls=0;
+ let release!:()=>void;const held=new Promise<void>(resolve=>release=resolve);
+ await page.route("**/api/v1/inbox/archive",route=>route.fulfill({json:saved?[app.record]:[]}));
+ await page.route("**/api/v1/inbox/conversations/demo-chat/sync",async route=>{
+  expect(route.request().postDataJSON()).toEqual({since:"",cancel:false});calls++;
+  await held;saved=true;app.record.since="";app.record.state="queued";await route.fulfill({json:app.record});
+ });
+ await page.getByRole("button",{name:"Archive",exact:true}).click();
+ await expect(page.getByRole("status",{name:"Import progress"})).toContainText("Not archived yet");
+ const button=page.getByRole("button",{name:"Archive conversation",exact:true});
+ await button.evaluate((element:HTMLButtonElement)=>{element.click();element.click();});
+ await expect.poll(()=>calls).toBe(1);await expect(button).toBeDisabled();release();
+ await expect(page.getByRole("status",{name:"Import progress"})).toContainText("All available history requested");
+ await expect(button).toBeEnabled();
+ await button.click();await expect.poll(()=>calls).toBe(2);
+ await expect(button).toBeEnabled();
+ app.record.state="available_pages_exhausted";
+ await expect(page.getByRole("status",{name:"Import progress"})).toContainText("All available pages checked");
+ await button.click();await expect.poll(()=>calls).toBe(3);
+ await expect(page.getByRole("status",{name:"Import progress"})).toContainText("All available history requested");
+ await page.unrouteAll({behavior:"wait"});
 });

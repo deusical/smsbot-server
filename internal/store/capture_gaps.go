@@ -8,18 +8,21 @@ import (
 // CaptureGap contains no message text, file keys, or raw transport errors.
 // The key hashes the conversation and the complete payload is encrypted.
 type CaptureGap struct {
-	Conversation string `json:"conversation"`
-	Kind         string `json:"kind,omitempty"`
-	ObservedAt   string `json:"observed_at,omitempty"`
-	Since        string `json:"since"`
-	Until        string `json:"until"`
-	Reason       string `json:"reason"`
-	State        string `json:"state"`
-	CheckedAt    string `json:"checked_at,omitempty"`
-	RetryAt      string `json:"retry_at,omitempty"`
-	Failures     int    `json:"-"`
-	Cursor       string `json:"-"`
-	Generation   int64  `json:"-"`
+	Conversation   string `json:"conversation"`
+	Kind           string `json:"kind,omitempty"`
+	ObservedAt     string `json:"observed_at,omitempty"`
+	Since          string `json:"since"`
+	Until          string `json:"until"`
+	Reason         string `json:"reason"`
+	State          string `json:"state"`
+	Pages          int    `json:"pages,omitempty"`
+	Checked        int    `json:"checked,omitempty"`
+	LastProgressAt string `json:"last_progress_at,omitempty"`
+	CheckedAt      string `json:"checked_at,omitempty"`
+	RetryAt        string `json:"retry_at,omitempty"`
+	Failures       int    `json:"-"`
+	Cursor         string `json:"-"`
+	Generation     int64  `json:"-"`
 }
 
 // Private checkpoint fields must persist but must never be returned by the API.

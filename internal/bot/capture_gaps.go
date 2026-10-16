@@ -70,6 +70,8 @@ func mergeCaptureGap(old, next store.CaptureGap) store.CaptureGap {
 		next.Until = old.Until
 	}
 	next.Generation = old.Generation + 1
+	next.Pages, next.Checked = 0, 0
+	next.LastProgressAt = ""
 	next.Cursor = ""
 	next.CheckedAt = ""
 	next.RetryAt = ""
@@ -223,6 +225,33 @@ func (h archiveHost) RepairCaptureGap(ctx context.Context) error {
 	if err != nil {
 		return e.finishGapAttempt(g, err)
 	}
+	// Also reconcile imports completed before this worker/software restarted.
+	// Identity and enabled-access checks above still apply.
+	if a.State == "available_pages_exhausted" || a.State == "cutoff_reached" {
+		e.mu.Lock()
+		current, loadErr := e.Store.Archive(c.ID)
+		latest, policyErr := e.InboxSettings()
+		resolved := false
+		if policyErr == nil && latest.Revision == policy.Revision && latest.Allows(c) && loadErr == nil && current.Generation == a.Generation && current.Conversation.ParticipantID == c.ParticipantID {
+			err = e.finishCaptureGapsFromImport(current, policy.Retention, policy.Revision)
+			if err == nil {
+				saved, readErr := e.Store.CaptureGaps()
+				err = readErr
+				for _, item := range saved {
+					if item.Conversation == g.Conversation && item.State == "checked_available" {
+						resolved = true
+					}
+				}
+			}
+		}
+		e.mu.Unlock()
+		if err != nil {
+			return e.finishGapAttempt(g, err)
+		}
+		if resolved {
+			return nil
+		}
+	}
 	since, err := time.Parse(time.RFC3339Nano, g.Since)
 	if err != nil {
 		return err
@@ -270,8 +299,68 @@ func (h archiveHost) RepairCaptureGap(ctx context.Context) error {
 	if err = h.Commit(persist, a, policy, page, false); err != nil {
 		return e.finishGapAttempt(*selected, err)
 	}
+	g.Pages++
+	g.Checked += len(page.Messages)
+	g.LastProgressAt = e.now().UTC().Format(time.RFC3339Nano)
 	return e.finishGapAttempt(g, nil)
 }
+
+// Caller holds e.mu. A full import started after a failure also repairs that
+// failure; do not leave an independent warning running after the same coverage
+// was successfully re-read. Never resolve failures observed after import start.
+func (e *Engine) finishCaptureGapsFromImport(a store.Archive, retention int, revision int64) error {
+	if a.ScanRevision == 0 || a.ScanRevision != revision {
+		return nil
+	}
+	started, err := time.Parse(time.RFC3339Nano, a.RequestedAt)
+	if err != nil {
+		return nil
+	}
+	cutoff, err := store.ParseArchiveSince(a.Since)
+	if err != nil {
+		return err
+	}
+	if retention > 0 {
+		retainedSince := e.now().AddDate(0, 0, -retention)
+		if cutoff.IsZero() || retainedSince.After(cutoff) {
+			cutoff = retainedSince
+		}
+	}
+	gaps, err := e.Store.CaptureGaps()
+	if err != nil {
+		return err
+	}
+	for _, g := range gaps {
+		if g.Conversation != a.Conversation.ID || g.State == "checked_available" {
+			continue
+		}
+		until, parseErr := time.Parse(time.RFC3339Nano, g.Until)
+		if parseErr != nil || until.After(started) {
+			continue
+		}
+		if g.ObservedAt != "" {
+			observed, parseErr := time.Parse(time.RFC3339Nano, g.ObservedAt)
+			if parseErr != nil || observed.After(started) {
+				continue
+			}
+		}
+		since, parseErr := time.Parse(time.RFC3339Nano, g.Since)
+		if parseErr != nil || (!cutoff.IsZero() && cutoff.After(since)) {
+			continue
+		}
+		g.State = "checked_available"
+		g.CheckedAt = e.now().UTC().Format(time.RFC3339Nano)
+		g.LastProgressAt = g.CheckedAt
+		g.Generation++ // an in-flight range repair must not overwrite completion
+		g.Cursor, g.RetryAt = "", ""
+		g.Failures = 0
+		if err = e.Store.SaveCaptureGap(g); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (e *Engine) finishGapAttempt(g store.CaptureGap, attemptErr error) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()

@@ -261,3 +261,30 @@ original capture interval. Multiple pending failures still conservatively merge
 coverage, invalidate the repair cursor and advance its generation. Older saved
 ranges remain queued until verified; they are not silently discarded or treated
 as proof of an uninterrupted outage. This metadata remains encrypted in settings.
+
+
+Completed owner imports resolve pending repair ranges only when import start is
+at or after both failure observation and range end, and its cutoff/retention
+covers the full range. Resolution increments repair generation, invalidating
+older in-flight attempts. Restarted repair workers reconcile previously completed
+imports using the same coverage and verified-identity checks. Newer failures and
+partially covered ranges remain pending. Imports record the settings revision at
+scan start; changed-policy or older unversioned scans cannot resolve a range by
+assumption. Repair pages record checked counts and
+last progress independently from deep-import counters. Failed viewed-section
+reads cannot starve independent imports or capture repairs.
+
+Archive loading uses explicit text placeholders, request cancellation on unmount,
+eight-second browser deadlines, a five-second owner index SQL deadline and a retry
+action for slow reads. Returning to a visible tab refreshes immediately. Technical
+repair ranges remain available under a compact expandable repair panel.
+
+
+The Archive page offers one **Archive conversation** action for both a first
+archive and a re-scan. Eligible discovered conversations without a saved archive
+appear alongside retained archives. The existing consent/identity-checked sync
+endpoint creates the durable job, preserves local messages and revisions, and
+reuses an identical in-flight job without resetting its cursor. A completed or
+cancelled job starts a fresh full scan. Re-ingested attachment references feed the
+existing original-file worker, subject to its enabled policy, quotas and retries;
+a finished message scan does not imply original-file download completion.
