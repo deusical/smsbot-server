@@ -328,13 +328,15 @@ func runWithInput(args []string, input io.Reader) error {
 			defer close(adapterDone)
 			google.Run(ctx, func(m transport.Incoming) {
 				if _, err := engine.Ingest(ctx, m); err != nil {
-					_ = engine.Pause(true)
+					if !errors.Is(err, transport.ErrUnavailable) || engine.ConnectionInterrupted() != nil {
+						_ = engine.Pause(true)
+					}
 				}
 			}, func() { _ = engine.Pause(true) }, func(conv, txn, state, reported string) {
 				if engine.Reconcile(conv, txn, state, reported) != nil {
 					_ = engine.Pause(true)
 				}
-			})
+			}, engine.ConnectionInterrupted)
 		}()
 	} else {
 		close(adapterDone)
@@ -342,7 +344,10 @@ func runWithInput(args []string, input io.Reader) error {
 	workerDone := make(chan struct{})
 	go func() {
 		defer close(workerDone)
-		engine.Run(ctx, func(error) {
+		engine.Run(ctx, func(err error) {
+			if errors.Is(err, transport.ErrUnavailable) && engine.ConnectionInterrupted() == nil {
+				return
+			}
 			_ = engine.Pause(true)
 			fmt.Fprintln(os.Stderr, "Worker: processing failed; automation paused; inspect activity locally")
 		})

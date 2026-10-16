@@ -1,8 +1,16 @@
+export type CaptureGap = {
+ conversation: string; since: string; until: string; reason: string;
+ state: string; checked_at?: string; retry_at?: string;
+};
 export type State = {
   api_version: number;
   inbox_capture_gap?: boolean;
+  inbox_capture_gap_unknown?: boolean;
+  inbox_capture_gaps?: CaptureGap[];
   paused: boolean;
   transport_ready: boolean;
+  connection_state?: string;
+  connection_retry_at?: string;
   transport: string;
   fixture: boolean;
   capabilities: string[];
@@ -33,6 +41,7 @@ export type Job = {
   requested_reasoning?: string;
 };
 export type Attachment = {
+ preview_only?: boolean;
  archive_state?: string;
  archive_error?: string;
   id: string;
@@ -159,10 +168,11 @@ export async function api<T>(
   path: string,
   method = "GET",
   body?: unknown,
+  signal?: AbortSignal,
 ): Promise<T> {
   const response = await fetch("/api/v1" + path, {
     method,
-    signal: method === "GET" ? AbortSignal.timeout(25000) : undefined,
+    signal: signal ?? (method === "GET" ? AbortSignal.timeout(25000) : undefined),
     credentials: "same-origin",
     headers: body === undefined ? {} : { "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),

@@ -26,7 +26,7 @@ The paired transport sends a complete reply up to the configured character cap; 
 
 Provider generation and delivery acceptance on the real phone, personal HTTPS/private-network setup, locked/open/background-phone cases, sustained authentication and browser handoff remain owner-controlled acceptance checks. Automated provider checks use local mocks or the HTTP-free fixture provider. Public hosting and portable cross-platform key recovery are outside this development milestone.
 
-The owner reports a successful live `!ping` after cookie recovery. Full live acceptance, reconnect behavior, long-term uptime, locked-phone behavior, competing paired clients and Linux live Google operation remain pending. Offline Linux container startup/recovery has been rehearsed. Network/authentication events pause automation; restart and inspect before reenabling. An overloaded receive-event queue also pauses automation and discards command input across the gap. Queue availability recovers after draining, while replies remain paused for owner review; diagnostics distinguish overload from connection failure. Do not promise unattended reliability yet. See the [completion plan](docs/COMPLETION_PLAN.md) for feature, client and deployment work alongside authentication observation.
+The owner reports a successful live `!ping` after cookie recovery. Full live acceptance, reconnect behavior, long-term uptime, locked-phone behavior, competing paired clients and Linux live Google operation remain pending. Offline Linux container startup/recovery has been rehearsed. Temporary network/phone outages block sending and automatically retry a verified phone check with bounded backoff. Recovery preserves the owner's Live/Pause choice: previously Live resumes for fresh commands, while explicit Pause remains paused. Unsent pre-gap work is cancelled and delayed commands from the gap never execute. Authentication, account changes, competing sessions, fatal connection errors and session-storage failures still pause automation and require owner intervention. Every process restart still starts paused. An overloaded receive-event queue also pauses automation and discards command input across the gap. Queue availability recovers after draining, while replies remain paused for owner review; diagnostics distinguish overload from connection failure. Do not promise unattended reliability yet. See the [completion plan](docs/COMPLETION_PLAN.md) for feature, client and deployment work alongside authentication observation.
 
 ## Develop on Windows
 
@@ -159,3 +159,21 @@ A local change cursor refreshes edits and new rows beyond the newest 50-message
 page. Original files are preserved by the separate archive service; encrypted streaming
 backups and readable exports include saved originals and explicit missing counts. Live Google
 sync/edit acceptance is pending; automated coverage uses offline fixtures.
+
+
+### Understanding archive progress
+
+Conversations shows the enabled collection scope and archive retention. Background
+archiving continues while tabs are closed and is independent of bot enrollment and
+Live/Pause. Each conversation separates visible-section checks, recent reconciliation
+and older-history import progress. The import form restores its saved date; a blank
+date requests all available history. Explicit requests run ahead of routine inbox
+discovery in bounded, fair batches. Progress counts checked pages/messages separately
+from newly saved or updated rows, so zero newly saved is not a frozen or empty archive.
+
+A capture check names the affected conversation, approximate time range and reason,
+then automatically retries available-history reads while current access permits.
+Completed checks say available range rechecked; they do not establish completeness.
+Unknown-scope failures remain explicitly unverified. Gap records are encrypted and
+owner-only. Attachments continue downloading separately. Live Google gap-repair and
+manual-import priority acceptance remain pending; automated checks use offline data.

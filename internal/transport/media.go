@@ -65,13 +65,24 @@ func messageParts(m *gmproto.Message) (string, []media.File, bool) {
 			if file.Size < 0 {
 				file.Size = 0
 			}
-			if file.RemoteID == "" && len(content.GetMediaData()) > 0 {
-				file.Size = int64(len(content.GetMediaData()))
-			}
+			file.SizeUnverified = true
+			file.ConversationID = m.GetConversationID()
+			file.Timestamp = m.GetTimestamp()
+			file.MessageID = m.GetMessageID()
+			file.ActionID = part.GetActionMessageID()
 			if file.RemoteID == "" {
-				file.Data = append([]byte(nil), content.GetMediaData()...)
-				if len(file.Data) > 0 {
-					file.Size = int64(len(file.Data))
+				// Inline image data supplied by Messages is a placeholder preview.
+				// Full-size media arrives after GetFullSizeImage, via a message update.
+				if strings.HasPrefix(file.MIME, "image/") {
+					file.PreviewOnly = true
+					file.PreviewData = append([]byte(nil), content.GetMediaData()...)
+					file.Size = 0
+					file.ArchiveState = "pending"
+				} else {
+					file.Data = append([]byte(nil), content.GetMediaData()...)
+					if len(file.Data) > 0 {
+						file.Size = int64(len(file.Data))
+					}
 				}
 			}
 			files = append(files, file)
@@ -102,6 +113,16 @@ func (g *Google) DownloadFile(ctx context.Context, file media.File) ([]byte, err
 	}
 	if len(file.Data) > 0 {
 		return file.Data, nil
+	}
+	if file.RemoteID == "" && file.MessageID != "" && file.ActionID != "" {
+		var err error
+		file, err = g.fullSizeFile(ctx, file)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if file.ReadLimit > 0 && file.Size > file.ReadLimit {
+		return nil, errors.New("attachment_size_limit")
 	}
 	if file.RemoteID == "" || len(file.Key) != 32 {
 		return nil, errors.New("attachment_unavailable")
@@ -169,6 +190,13 @@ func (g *Google) OpenFile(ctx context.Context, file media.File) (io.ReadCloser, 
 	}
 	if len(file.Data) > 0 {
 		return io.NopCloser(bytes.NewReader(file.Data)), nil
+	}
+	if file.RemoteID == "" && file.MessageID != "" && file.ActionID != "" {
+		var err error
+		file, err = g.fullSizeFile(ctx, file)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if file.RemoteID == "" || len(file.Key) != 32 {
 		return nil, errors.New("attachment_unavailable")

@@ -132,3 +132,27 @@ func TestIndependentRecentAndBackfillRetries(t *testing.T) {
 		t.Fatalf("backfill success altered recent backoff: %v %+v", h.calls, a)
 	}
 }
+
+func TestCompletedOlderHistoryIsRecheckedGradually(t *testing.T) {
+	v, _ := vault.New(make([]byte, 32))
+	s, err := store.Open(filepath.Join(t.TempDir(), "state.db"), v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.DB.Close()
+	h := &retryHost{s: s, fail: map[string]bool{}}
+	worker := New(s, h)
+	a := store.Archive{Conversation: transport.Conversation{ID: "chat", ParticipantID: "peer", Writable: true}, State: "available_pages_exhausted", Generation: 1, Pages: 20, Checked: 1000, Imported: 50, DeepCheckedAt: time.Now().Add(-25 * time.Hour).UTC().Format(time.RFC3339Nano), RecentRetryAt: time.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano)}
+	if err := s.SaveArchive(a, 0); err != nil {
+		t.Fatal(err)
+	}
+	worker.Tick(context.Background())
+	worker.Tick(context.Background())
+	if len(h.calls) != 1 {
+		t.Fatal("old history was not revisited once on schedule", h.calls)
+	}
+	a, _ = s.Archive("chat")
+	if a.DeepCheckedAt == "" || a.State != "available_pages_exhausted" || a.Pages != 1 || a.Checked != 0 || a.Imported != 0 {
+		t.Fatal("rescan progress missing")
+	}
+}

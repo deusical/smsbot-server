@@ -225,9 +225,26 @@ func (s *Server) state(w http.ResponseWriter, r *http.Request) {
 		s.bad(w, 500, "storage_error")
 		return
 	}
-	value := map[string]any{"api_version": 1, "paused": p, "transport_ready": s.Engine.Transport.Ready(), "transport": map[bool]string{true: "fixture", false: "google_messages"}[s.Fixture], "fixture": s.Fixture, "capabilities": []string{"fixed_commands", "enrollment", "activity", "encrypted_inbox", "configuration", "models", "history", "history_import", "playground", "approvals", "manual_compose", "recipes", "ai_commands", "full_inbox", "attachments", "archive_history", "archive_files", "archive_backup"}}
+	value := map[string]any{"api_version": 1, "paused": p, "transport_ready": s.Engine.Transport.Ready(), "transport": map[bool]string{true: "fixture", false: "google_messages"}[s.Fixture], "fixture": s.Fixture, "capabilities": []string{"fixed_commands", "enrollment", "activity", "encrypted_inbox", "configuration", "models", "history", "history_import", "playground", "approvals", "manual_compose", "recipes", "ai_commands", "full_inbox", "attachments", "archive_history", "archive_refresh", "archive_files", "archive_backup"}}
+	if reporter, ok := s.Engine.Transport.(transport.ConnectionReporter); ok {
+		connection := reporter.ConnectionStatus()
+		value["connection_state"] = connection.State
+		if connection.RetryAt != "" {
+			value["connection_retry_at"] = connection.RetryAt
+		}
+	}
+
 	if r.Header.Get("Authorization") == "" {
-		value["inbox_capture_gap"] = s.Engine.InboxCaptureGap()
+		gaps, unknown := s.Engine.CaptureGapStatus()
+		active := unknown
+		for _, g := range gaps {
+			if g.State != "checked_available" {
+				active = true
+			}
+		}
+		value["inbox_capture_gap"] = active
+		value["inbox_capture_gaps"] = gaps
+		value["inbox_capture_gap_unknown"] = unknown
 	}
 	s.json(w, 200, value)
 }

@@ -40,6 +40,9 @@ type FileHost interface {
 	CommitFile(context.Context, transport.Conversation, int64, string, media.File, media.File) error
 }
 type Service struct {
+	focusKey     string
+	focusCursor  string
+	focusRound   int
 	closing      bool
 	Store        *store.Store
 	Root         string
@@ -127,26 +130,43 @@ func (s *Service) Tick(ctx context.Context) {
 	if err := s.Store.DB.QueryRowContext(ctx, "SELECT coalesce(max(seq),0) FROM message_changes").Scan(&sequence); err != nil {
 		return
 	}
-	if time.Now().Before(s.nextScan) && policy == s.scanPolicy && sequence == s.idleSequence {
-		return
-	}
-	s.scanPolicy = policy
-	records, err := s.Store.AttachmentBatch(ctx, s.cursor, 20)
+	focus, err := s.focusBatch(ctx)
 	if err != nil {
 		return
 	}
-	if len(records) == 0 {
-		s.cursor = ""
-		s.idleSequence = sequence
-		s.nextScan = time.Now().Add(time.Minute)
-		return
+	focused := map[string]bool{}
+	for _, r := range focus {
+		focused[r.Message] = true
 	}
-	s.nextScan = time.Time{}
+	records := focus
+	if !(time.Now().Before(s.nextScan) && policy == s.scanPolicy && sequence == s.idleSequence) {
+		s.scanPolicy = policy
+		batch, err := s.Store.AttachmentBatch(ctx, s.cursor, 20)
+		if err != nil {
+			return
+		}
+		if len(batch) == 0 {
+			s.cursor = ""
+			s.idleSequence = sequence
+			s.nextScan = time.Now().Add(time.Minute)
+		} else {
+			s.nextScan = time.Time{}
+		}
+		for _, r := range batch {
+			if !focused[r.Message] {
+				records = append(records, r)
+			}
+		}
+	}
 	for _, record := range records {
 		if ctx.Err() != nil {
 			return
 		}
-		s.cursor = record.Message
+		if focused[record.Message] {
+			s.focusCursor = record.Message
+		} else {
+			s.cursor = record.Message
+		}
 		a, err := s.Store.Archive(record.Conversation)
 		if err != nil {
 			continue
@@ -155,7 +175,15 @@ func (s *Service) Tick(ctx context.Context) {
 			if ctx.Err() != nil {
 				return
 			}
-			if file.BlobID != "" || (file.ArchiveState == "unavailable" && file.RemoteID == "" && len(file.Data) == 0) {
+			if repairer, ok := s.Host.(interface {
+				Repair(context.Context, transport.Conversation, string, media.File) (bool, error)
+			}); ok {
+				repaired, err := repairer.Repair(ctx, a.Conversation, record.Message, file)
+				if repaired || err != nil {
+					return
+				}
+			}
+			if file.BlobID != "" || (file.ArchiveState == "unavailable" && file.RemoteID == "" && len(file.Data) == 0 && file.ActionID == "") {
 				continue
 			}
 			if file.ArchiveState == "policy_limited" {
@@ -174,8 +202,45 @@ func (s *Service) Tick(ctx context.Context) {
 				s.ingest(call, a.Conversation, revision, record.Message, file, policy)
 			}
 			cancel()
+			// One bounded file attempt per turn allows new viewing priorities
+			// and consent changes to take effect between downloads.
+			return
 		}
 	}
+}
+
+func (s *Service) focusBatch(ctx context.Context) ([]store.AttachmentRecord, error) {
+	s.focusRound++
+	// Reserve every third turn for the background sweep.
+	if s.focusRound%3 == 0 {
+		return nil, nil
+	}
+	archives, err := s.Store.Archives()
+	if err != nil {
+		return nil, err
+	}
+	var focus store.Archive
+	var focusedAt time.Time
+	for _, a := range archives {
+		at, err := time.Parse(time.RFC3339Nano, a.FocusAt)
+		if err == nil && time.Since(at) < 2*time.Minute && a.RefreshSince != "" && a.RefreshUntil != "" && at.After(focusedAt) {
+			focus = a
+			focusedAt = at
+		}
+	}
+	if focus.Conversation.ID == "" {
+		return nil, nil
+	}
+	key := focus.Conversation.ID + "|" + focus.RefreshSince + "|" + focus.RefreshUntil
+	if key != s.focusKey {
+		s.focusKey = key
+		s.focusCursor = ""
+	}
+	rows, err := s.Store.AttachmentRangeBatch(ctx, focus.Conversation.ID, focus.RefreshSince, focus.RefreshUntil, s.focusCursor, 20)
+	if len(rows) == 0 {
+		s.focusCursor = ""
+	}
+	return rows, err
 }
 
 type contextReader struct {
@@ -279,7 +344,7 @@ func (s *Service) ingest(ctx context.Context, c transport.Conversation, revision
 		_ = s.Host.CommitFile(ctx, c, revision, message, file, updated)
 		return
 	}
-	if file.RemoteID == "" && len(file.Data) == 0 {
+	if file.RemoteID == "" && len(file.Data) == 0 && file.ActionID == "" {
 		updated.ArchiveState = "unavailable"
 		updated.ArchiveError = "original_unavailable"
 		updated.RetryAt = ""
@@ -330,7 +395,7 @@ func (s *Service) ingest(ctx context.Context, c transport.Conversation, revision
 		_ = s.Host.CommitFile(ctx, c, revision, message, file, updated)
 		return
 	}
-	if file.Size > 0 && size != file.Size {
+	if file.Size > 0 && !file.SizeUnverified && size != file.Size {
 		updated.ArchiveError = "original_size_mismatch"
 		_ = s.Host.CommitFile(ctx, c, revision, message, file, updated)
 		return
@@ -338,6 +403,8 @@ func (s *Service) ingest(ctx context.Context, c transport.Conversation, revision
 	updated.BlobID = id
 	updated.Digest = hex.EncodeToString(digest.Sum(nil))
 	updated.Size = size
+	updated.SizeUnverified = false
+	updated.PreviewOnly = false
 	updated.Data = nil
 	updated.ArchiveState = "saved"
 	updated.ArchiveError = ""

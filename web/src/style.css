@@ -2592,3 +2592,11 @@ label {
 .history-sync { padding: 8px 16px; border-bottom: 1px solid var(--border); font-size: .85rem; }
 .history-sync p { margin: 8px 0; }
 .history-sync button { margin: 6px; }
+
+/* Sync controls stay readable without covering the message scroller. */
+.sync-status { flex: none; max-height: 40%; overflow-y: auto; }
+.capture-checks { flex: none; max-height: 25%; overflow-y: auto; }
+.capture-summary { flex-direction: column; align-items: stretch; }
+.capture-summary > button { margin-left: 0; }
+.older { position: static; translate: none; flex: none; align-self: center; margin: 6px; }
+.older ~ .messages { padding-top: 16px; }

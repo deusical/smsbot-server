@@ -1,9 +1,13 @@
 package bot
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
+	"smsbot-server/internal/archive"
 	"smsbot-server/internal/media"
+	"smsbot-server/internal/store"
 	"smsbot-server/internal/transport"
 	"testing"
 	"time"
@@ -294,5 +298,97 @@ func TestAttachmentReadsEnforceExpiryWithoutPruning(t *testing.T) {
 	e.Store.DB.QueryRow("SELECT count(*) FROM messages WHERE id=?", message).Scan(&count)
 	if count != 1 {
 		t.Fatal("read pruned expired message")
+	}
+}
+
+type originalRepairTransport struct{ *transport.Fixture }
+
+func (f *originalRepairTransport) RefreshFile(ctx context.Context, conv, id string, at time.Time, file media.File) (media.File, error) {
+	file.Data = nil
+	file.PreviewData = []byte("tiny preview")
+	file.RemoteID = "synthetic-original"
+	file.MessageID = "synthetic-message"
+	file.ActionID = "synthetic-action"
+	file.Size = 25000
+	file.SizeUnverified = true
+	return file, nil
+}
+func (f *originalRepairTransport) DownloadFile(ctx context.Context, file media.File) ([]byte, error) {
+	if file.RemoteID == "synthetic-original" {
+		return make([]byte, 32000), nil
+	}
+	return nil, errors.New("original_unavailable")
+}
+func TestLegacyInlinePreviewIsRepairedForOriginalDownload(t *testing.T) {
+	e, f := setup(t)
+	enableInbox(t, e)
+	e.Transport = &originalRepairTransport{f}
+	old := media.File{Info: media.Info{ID: "part-0", MIME: "image/jpeg", Size: 8}, Data: []byte("preview")}
+	if err := e.Store.SaveObservedFiles("demo-chat", "synthetic-message", "", "outgoing", "", "phone", "", time.Now(), []media.File{old}); err != nil {
+		t.Fatal(err)
+	}
+	p, _ := e.Store.OwnerMessagePage("demo-chat", "", "", 50)
+	id := p.Messages[0].ID
+	info, b, err := e.InboxAttachment(context.Background(), "demo-chat", id, "part-0")
+	if err != nil || len(b) != 32000 || info.Size != 32000 {
+		t.Fatal("legacy preview served instead of original", err)
+	}
+	repaired, err := e.Store.Attachment("demo-chat", id, "part-0")
+	if err != nil || len(repaired.Data) != 0 || repaired.RemoteID != "synthetic-original" || repaired.Size != 32000 || repaired.SizeUnverified {
+		t.Fatal("repair was not persisted", err)
+	}
+}
+func TestInlinePreviewNeverBecomesOriginal(t *testing.T) {
+	e, f := setup(t)
+	enableInbox(t, e)
+	e.Transport = &thumbnailTransport{f}
+	file := media.File{Info: media.Info{ID: "part-0", MIME: "image/jpeg", PreviewOnly: true}, PreviewData: []byte("tiny preview"), MessageID: "synthetic-message", ActionID: "synthetic-action"}
+	if err := e.Store.SaveObservedFiles("demo-chat", "synthetic-message", "", "incoming", "", "phone", "", time.Now(), []media.File{file}); err != nil {
+		t.Fatal(err)
+	}
+	p, _ := e.Store.OwnerMessagePage("demo-chat", "", "", 50)
+	id := p.Messages[0].ID
+	if _, b, err := e.InboxAttachmentContent(context.Background(), "demo-chat", id, "part-0", true); err != nil || string(b) != "tiny preview" {
+		t.Fatal("preview unavailable", err)
+	}
+	if _, _, err := e.InboxAttachment(context.Background(), "demo-chat", id, "part-0"); err == nil {
+		t.Fatal("preview downloaded as original")
+	}
+}
+
+func (f *originalRepairTransport) OpenFile(ctx context.Context, file media.File) (io.ReadCloser, error) {
+	if file.RemoteID == "synthetic-original" {
+		return io.NopCloser(bytes.NewReader(make([]byte, 32000))), nil
+	}
+	return nil, errors.New("original_unavailable")
+}
+func TestArchiveRepairsLegacyPreviewBeforeSavingOriginal(t *testing.T) {
+	e, f := setup(t)
+	enableInbox(t, e)
+	e.Transport = &originalRepairTransport{f}
+	c := transport.Conversation{ID: "demo-chat", ParticipantID: "demo-peer", Writable: true}
+	if err := e.Store.SaveArchive(store.Archive{Conversation: c, State: "running", Generation: 1}, 0); err != nil {
+		t.Fatal(err)
+	}
+	file := media.File{Info: media.Info{ID: "part-0", MIME: "image/jpeg", Size: 7}, Data: []byte("preview")}
+	if err := e.Store.SaveObservedFiles(c.ID, "synthetic-message", "", "incoming", "", "phone", "", time.Now(), []media.File{file}); err != nil {
+		t.Fatal(err)
+	}
+	e.Archive.Tick(context.Background())
+	// Restart the scanner after descriptor repair, before downloading the original.
+	e.Archive = archive.New(e.Store, e.Archive.Root, archiveFileHost{e})
+	e.Archive.Tick(context.Background())
+	saved, err := e.Store.Attachment(c.ID, store.Hash(c.ID+"\x00synthetic-message"), "part-0")
+	if err != nil || saved.ArchiveState != "saved" || saved.Size != 32000 || saved.PreviewOnly {
+		t.Fatal("archive retained thumbnail as original", err)
+	}
+	r, err := e.Archive.OpenLocal(saved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	b, err := io.ReadAll(r)
+	if err != nil || len(b) != 32000 {
+		t.Fatal("archived original bytes missing", err)
 	}
 }

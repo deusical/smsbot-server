@@ -22,6 +22,10 @@ import (
 
 // Google is opt-in and never instantiated by fixture mode.
 type Google struct {
+	recovery      recoveryControl
+	recoveryWake  chan struct{}
+	recoveryProbe func(context.Context) error // offline fault injection; nil in production
+	fullMedia     fullMediaRequests
 	client        *libgm.Client
 	vault         *vault.Vault
 	path          string
@@ -44,7 +48,7 @@ type Google struct {
 }
 
 func NewGoogle(v *vault.Vault, path string) *Google {
-	return &Google{vault: v, path: path, updates: make(chan any, 256), overflowWake: make(chan struct{}, 1), conversations: map[string]*gmproto.Conversation{}}
+	return &Google{recoveryWake: make(chan struct{}, 1), vault: v, path: path, updates: make(chan any, 256), overflowWake: make(chan struct{}, 1), conversations: map[string]*gmproto.Conversation{}}
 }
 func (g *Google) attach(auth *libgm.AuthData) {
 	g.client = libgm.NewClient(auth, nil, zerolog.New(io.Discard), exhttp.SensibleClientSettings)
@@ -54,20 +58,23 @@ func (g *Google) attach(auth *libgm.AuthData) {
 // libgm invokes this synchronously on its receive loop. Never wait for the
 // consumer, touch storage, or make a phone request here.
 func (g *Google) enqueue(event any) {
+	_, reason, hard, _, failed := connectionFailure(event)
+	if failed {
+		g.noteFailure(reason, hard)
+	}
+	original := event
 	switch e := event.(type) {
-	case *events.AccountChange:
-		if !e.IsFake {
-			g.healthFailure.Store(true)
-		}
-	case *events.ListenFatalError, *events.ListenTemporaryError, *events.PingFailed,
-		*events.GaiaLoggedOut, *events.PhoneNotResponding, *events.NoDataReceived, *events.HackySetActiveMayFail:
-		// Preserve the failure even if its diagnostic event cannot be queued.
-		g.healthFailure.Store(true)
+	case *events.ListenRecovered, *events.PhoneRespondingAgain:
+		g.wakeRecovery(true)
+		return
+	case *events.AccountChange, *events.ListenFatalError, *events.ListenTemporaryError, *events.PingFailed, *events.GaiaLoggedOut, *events.PhoneNotResponding, *events.NoDataReceived, *events.HackySetActiveMayFail:
 	case *events.AuthTokenRefreshed, *gmproto.Settings, *gmproto.Conversation:
 	case *libgm.WrappedMessage:
 		if e == nil || e.Message == nil {
 			return
 		}
+
+		g.fullMedia.deliver(e.Message)
 
 		// Historical incoming messages cannot run commands or reconcile sends.
 		// Retain outgoing status events for transaction reconciliation.
@@ -83,6 +90,9 @@ func (g *Google) enqueue(event any) {
 		}
 	default:
 		return
+	}
+	if failed {
+		event = connectionEvent{original}
 	}
 	g.queueMu.Lock()
 	defer g.queueMu.Unlock()
@@ -101,15 +111,10 @@ func (g *Google) beginOverflowRecovery(pause func()) {
 	pause()
 	// No work from before the gap may be submitted later. Refresh identities
 	// through the normal full-detail picker before accepting new commands.
-	g.listMu.Lock()
+	g.invalidateIdentities()
 	g.mu.Lock()
-	g.listed = time.Time{}
-	g.list = nil
-	g.conversations = map[string]*gmproto.Conversation{}
-	g.settings = nil
+	g.settings = nil // A dropped settings event makes the overflow case different from reconnecting.
 	g.mu.Unlock()
-	g.listMu.Unlock()
-	g.discovery.invalidate()
 	g.diagnose("event_queue_overflow", errors.New("unavailable"))
 }
 
@@ -274,12 +279,23 @@ func eligible(c *gmproto.Conversation) bool {
 }
 func (g *Google) LookupConversation(ctx context.Context, id string) (Conversation, error) {
 	if !g.Ready() {
-		return Conversation{}, errors.New("phone connection unavailable")
+		return Conversation{}, ErrUnavailable
 	}
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	c, err := g.client.GetConversation(ctx, id)
-	if err != nil || c.GetConversationID() != id {
+	if err != nil {
+		if !errors.Is(err, context.Canceled) {
+			reason, hard := "reconnecting", false
+			if credentialError(err) {
+				reason, hard = "login_required", true
+			}
+			g.noteFailure(reason, hard)
+			g.diagnose("conversation_lookup", err)
+		}
+		return Conversation{}, ErrUnavailable
+	}
+	if c.GetConversationID() != id {
 		return Conversation{}, errors.New("ineligible_conversation")
 	}
 	g.mu.Lock()
@@ -465,11 +481,40 @@ func normalize(w *libgm.WrappedMessage, started time.Time) (Incoming, bool) {
 	}
 	return Incoming{ID: w.GetMessageID(), ConversationID: w.GetConversationID(), ParticipantID: w.GetParticipantID(), Text: text, Attachments: files, At: at, Outgoing: outgoing, TransactionID: w.GetTmpID(), Status: status}, true
 }
-func (g *Google) Run(ctx context.Context, incoming func(Incoming), pause func(), receipt func(string, string, string, string)) {
+func (g *Google) Run(ctx context.Context, incoming func(Incoming), pause func(), receipt func(string, string, string, string), interrupted ...func() error) {
 	timer := time.NewTicker(30 * time.Second)
 	defer timer.Stop()
+	recoveryTimer := time.NewTicker(time.Second)
+	defer recoveryTimer.Stop()
+	results := make(chan recoveryResult, 1)
+	interruptionHandled := false
+	var pausedEpoch uint64
+	handleFailure := func() {
+		failed, hard, epoch := g.failureSnapshot()
+		if !failed {
+			interruptionHandled = false
+			return
+		}
+		if !interruptionHandled {
+			interruptionHandled = true
+			if len(interrupted) > 0 {
+				if interrupted[0]() != nil {
+					g.noteFailure("storage_error", true)
+					pause()
+				}
+			} else {
+				pause()
+			}
+		}
+		if hard && pausedEpoch != epoch {
+			pausedEpoch = epoch
+			pause()
+		}
+	}
 	recoveringOverflow := false
 	for {
+		handleFailure()
+		g.startRecovery(ctx, time.Now(), results)
 		if g.overflow.Load() {
 			if !recoveringOverflow {
 				g.beginOverflowRecovery(pause)
@@ -483,35 +528,50 @@ func (g *Google) Run(ctx context.Context, incoming func(Incoming), pause func(),
 		select {
 		case <-ctx.Done():
 			return
+		case <-recoveryTimer.C:
+			if g.client != nil && !g.client.IsConnected() && !g.healthFailure.Load() {
+				g.noteFailure("reconnecting", false)
+			}
+		case <-g.recoveryWake:
+		case result := <-results:
+			recovered, hard := g.finishRecovery(result, time.Now())
+			if recovered {
+				interruptionHandled = false
+				g.diagnose("connection_recovered", nil)
+			} else if hard {
+				pause()
+				g.diagnose("recovery_blocked", result.err)
+			} else if result.err != nil {
+				g.diagnose("recovery_retry", result.err)
+			}
 		case <-g.overflowWake:
 			// The next iteration pauses and drains; the callback stays nonblocking.
 		case <-timer.C:
-			if !g.ready.Load() || g.healthFailure.Load() {
-				pause()
-			}
+
 			if g.Save() != nil {
 				g.diagnose("periodic_save_failed", errors.New("save_failed"))
-				g.ready.Store(false)
+				g.noteFailure("storage_error", true)
 				pause()
 			}
 		case event := <-g.updates:
+			if wrapped, ok := event.(connectionEvent); ok {
+				event = wrapped.event
+			} else {
+				if _, reason, hard, _, failed := connectionFailure(event); failed {
+					g.noteFailure(reason, hard)
+				}
+			}
+			if name, _, _, err, failed := connectionFailure(event); failed {
+				handleFailure()
+				g.diagnose(name, err)
+				continue
+			}
 			switch e := event.(type) {
 			case *events.AuthTokenRefreshed:
 				if g.persistRefresh() != nil {
+					g.noteFailure("storage_error", true)
 					pause()
 				}
-			case *events.ListenFatalError:
-				g.diagnose("listen_fatal", e.Error)
-				g.ready.Store(false)
-				pause()
-			case *events.ListenTemporaryError:
-				g.diagnose("listen_temporary", e.Error)
-				g.ready.Store(false)
-				pause()
-			case *events.PingFailed:
-				g.diagnose("ping_failed", e.Error)
-				g.ready.Store(false)
-				pause()
 			case *gmproto.Settings:
 				g.mu.Lock()
 				g.settings = e
@@ -538,7 +598,7 @@ func (g *Google) Run(ctx context.Context, incoming func(Incoming), pause func(),
 				if state != "" && e.GetTmpID() != "" {
 					receipt(e.GetConversationID(), e.GetTmpID(), state, status.String())
 				}
-				if m, ok := normalize(e, g.started); ok && !g.overflow.Load() {
+				if m, ok := normalize(e, g.started); ok && !g.overflow.Load() && !g.healthFailure.Load() {
 					incoming(m)
 				} else if !g.overflow.Load() {
 					if item, ok := historicalText(e.Message, e.GetConversationID()); ok {
@@ -552,22 +612,7 @@ func (g *Google) Run(ctx context.Context, incoming func(Incoming), pause func(),
 					g.diagnose("account_snapshot", nil)
 					continue
 				}
-				g.diagnose("account_change", errors.New("unavailable"))
-				g.ready.Store(false)
-				pause()
-			case *events.GaiaLoggedOut, *events.PhoneNotResponding, *events.NoDataReceived, *events.HackySetActiveMayFail:
-				eventName := "google_logged_out"
-				switch e.(type) {
-				case *events.PhoneNotResponding:
-					eventName = "phone_not_responding"
-				case *events.NoDataReceived:
-					eventName = "no_data_received"
-				case *events.HackySetActiveMayFail:
-					eventName = "active_session_warning"
-				}
-				g.diagnose(eventName, errors.New("unavailable"))
-				g.ready.Store(false)
-				pause()
+
 			}
 		}
 	}

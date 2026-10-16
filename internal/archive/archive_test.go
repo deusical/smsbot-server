@@ -678,3 +678,60 @@ func TestIdleArchiveScanSleepsAndWakesForNewFiles(t *testing.T) {
 		t.Fatal("new attachment did not wake idle worker", err)
 	}
 }
+
+func TestGoogleReportedSizeDoesNotReplaceMeasuredOriginalSize(t *testing.T) {
+	for _, unverified := range []bool{false, true} {
+		s, manager := setup(t)
+		f := media.File{Info: media.Info{ID: "original", MIME: "image/jpeg", Size: 794}, SizeUnverified: unverified, RemoteID: "synthetic-original"}
+		seed(t, s, []media.File{f})
+		data := bytes.Repeat([]byte("synthetic-original"), 1000)
+		manager.Host = &fileHost{s: s, data: data}
+		manager.Tick(context.Background())
+		saved, err := s.Attachment("chat", store.Hash("chat\x00message"), "original")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if unverified {
+			if saved.ArchiveState != "saved" || saved.Size != int64(len(data)) || saved.SizeUnverified {
+				t.Fatal("reported size blocked or mislabeled full original")
+			}
+		} else if saved.ArchiveError != "original_size_mismatch" {
+			t.Fatal("verified original size check bypassed")
+		}
+	}
+}
+
+type viewedFileHost struct {
+	*fileHost
+	openedIDs []string
+}
+
+func (h *viewedFileHost) Open(ctx context.Context, f media.File) (io.ReadCloser, error) {
+	h.openedIDs = append(h.openedIDs, f.RemoteID)
+	return h.fileHost.Open(ctx, f)
+}
+func TestViewedOriginalPriorityKeepsBackgroundProgress(t *testing.T) {
+	s, manager := setup(t)
+	now := time.Now()
+	global := media.File{Info: media.Info{ID: "global", Size: 8}, RemoteID: "global-original"}
+	seed(t, s, []media.File{global})
+	c := transport.Conversation{ID: "viewed", ParticipantID: "viewed-peer", Writable: true}
+	if err := s.SaveArchive(store.Archive{Conversation: c, Generation: 1, State: "running", RefreshSince: now.Add(-time.Hour).UTC().Format(time.RFC3339Nano), RefreshUntil: now.Add(time.Minute).UTC().Format(time.RFC3339Nano), FocusAt: now.UTC().Format(time.RFC3339Nano)}, 0); err != nil {
+		t.Fatal(err)
+	}
+	f := media.File{Info: media.Info{ID: "viewed-file", Size: 8}, RemoteID: "viewed-original"}
+	if err := s.SaveObservedFiles(c.ID, "viewed-message", "", "incoming", "", "phone", "", now, []media.File{f}); err != nil {
+		t.Fatal(err)
+	}
+	host := &viewedFileHost{fileHost: &fileHost{s: s, data: []byte("original")}}
+	manager.Host = host
+	manager.Tick(context.Background())
+	if len(host.openedIDs) != 1 || host.openedIDs[0] != "viewed-original" {
+		t.Fatal("viewed original did not get priority", host.openedIDs)
+	}
+	manager.Tick(context.Background())
+	manager.Tick(context.Background())
+	if len(host.openedIDs) != 2 || host.openedIDs[1] != "global-original" {
+		t.Fatal("focus starved background originals", host.openedIDs)
+	}
+}

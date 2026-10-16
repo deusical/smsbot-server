@@ -178,3 +178,12 @@ func historicalText(m *gmproto.Message, conv string) (HistoricalMessage, bool) {
 	}
 	return HistoricalMessage{ID: m.GetMessageID(), Direction: direction, Text: text, Attachments: files, At: at, TransactionID: m.GetTmpID(), Status: status}, true
 }
+
+// A range scan starts immediately above the viewed section, rather than paging
+// through years of newer history to recheck an old section.
+type HistoryRangeSource interface{ HistoryCursorBefore(time.Time) string }
+
+func (g *Google) HistoryCursorBefore(until time.Time) string {
+	b, _ := proto.Marshal(&gmproto.Cursor{LastItemTimestamp: until.UnixMilli()})
+	return base64.RawURLEncoding.EncodeToString(b)
+}

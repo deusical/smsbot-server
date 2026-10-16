@@ -677,3 +677,34 @@ test("background history polling queues an older-page click and keeps pause usab
     await configure(page, false);
   }
 });
+
+
+test("unarchived inbox keeps polling snapshots for latest messages", async ({ page }) => {
+  await login(page);
+  await configure(page, true);
+  let snapshots = 0;
+  let changes = 0;
+  await page.route("**/api/v1/inbox/conversations/demo-chat/history?*", route => {
+    snapshots++;
+    return route.fulfill({ json: {
+      messages: [{ id: "snapshot-initial", direction: "incoming", text: "Synthetic initial snapshot", at: "2026-01-01T00:00:00Z" },
+        ...(snapshots > 1 ? [{ id: "snapshot-latest", direction: "incoming", text: "Synthetic latest snapshot", at: "2026-01-01T00:01:00Z" }] : [])],
+      next_cursor: "",
+    } });
+  });
+  await page.route("**/api/v1/inbox/conversations/demo-chat/changes?*", route => {
+    changes++;
+    return route.fulfill({ status: 409, json: { error: "archive_unavailable" } });
+  });
+  try {
+    await page.reload();
+    await page.getByRole("button", { name: "Conversations", exact: true }).click();
+    await page.locator(".conversation").filter({ hasText: "Demo conversation" }).getByRole("button", { name: /Demo conversation/ }).click();
+    await expect(page.getByText("Synthetic initial snapshot", { exact: true })).toBeVisible();
+    await expect(page.getByText("Synthetic latest snapshot", { exact: true })).toBeVisible({ timeout: 10000 });
+    expect(snapshots).toBeGreaterThan(1);
+    expect(changes).toBe(0);
+  } finally {
+    await configure(page, false);
+  }
+});

@@ -156,7 +156,9 @@ func (e *Engine) Receive(ctx context.Context, m transport.Incoming) (bool, error
 	}
 
 	if err := e.Observe(ctx, m); err != nil {
-		e.captureGap.Store(true)
+		if consent := e.captureConsent.Load(); consent != nil {
+			e.noteCaptureGap(m, consent.epoch, captureFailureReason(err))
+		}
 	}
 	accepted, err := e.Accept(ctx, m)
 	if accepted && err == nil {

@@ -99,13 +99,20 @@ func (s *Server) inboxHistory(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	var p store.InboxPage
-	if _, archiveErr := s.Engine.Store.Archive(r.PathValue("id")); archiveErr == nil {
+	_, archiveErr := s.Engine.Store.Archive(r.PathValue("id"))
+	if archiveErr == nil {
 		p, err = s.localArchivePage(r.PathValue("id"), r.URL.Query().Get("cursor"), r.URL.Query().Get("search"), limit)
 	} else {
 		p, err = s.Engine.InboxPage(r.Context(), r.PathValue("id"), r.URL.Query().Get("cursor"), r.URL.Query().Get("search"), limit)
 	}
 	if err != nil {
 		s.bad(w, 409, "history_unavailable_or_access_disabled")
+		return
+	}
+	if archiveErr != nil {
+		// Only persisted archives support the change feed. Without this distinction,
+		// the dashboard stops snapshot polling and repeatedly requests a missing feed.
+		s.json(w, 200, map[string]any{"messages": p.Messages, "next_cursor": p.NextCursor})
 		return
 	}
 	s.json(w, 200, p)

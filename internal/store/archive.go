@@ -13,25 +13,44 @@ import (
 // Archive holds encrypted verified identity and durable read-job checkpoints.
 // Consent is always checked separately; the record itself never authorizes sync.
 type Archive struct {
-	RecentRetryAt  string                 `json:"recent_retry_at,omitempty"`
-	RecentFailures int                    `json:"recent_failures"`
-	RecentError    string                 `json:"recent_error,omitempty"`
-	RecentCursor   string                 `json:"recent_cursor"`
-	RecentSince    string                 `json:"recent_since"`
-	RecentStarted  string                 `json:"recent_started"`
-	RetryAt        string                 `json:"retry_at,omitempty"`
-	Failures       int                    `json:"failures"`
-	Duplicates     int                    `json:"duplicates"`
-	Skipped        int                    `json:"skipped"`
-	Conversation   transport.Conversation `json:"conversation"`
-	Cursor         string                 `json:"cursor"`
-	Since          string                 `json:"since"`
-	State          string                 `json:"state"`
-	Imported       int                    `json:"imported"`
-	Oldest         string                 `json:"oldest"`
-	LastSync       string                 `json:"last_sync"`
-	Error          string                 `json:"error,omitempty"`
-	Generation     int64                  `json:"generation"`
+	RequestSource  string `json:"request_source,omitempty"`
+	RequestedAt    string `json:"requested_at,omitempty"`
+	LastAttemptAt  string `json:"last_attempt_at,omitempty"`
+	LastProgressAt string `json:"last_progress_at,omitempty"`
+	Checked        int    `json:"checked"`
+	Pages          int    `json:"pages"`
+	Updated        int    `json:"updated"`
+	ScannedThrough string `json:"scanned_through,omitempty"`
+
+	DeepCheckedAt    string                 `json:"deep_checked_at,omitempty"`
+	RefreshSince     string                 `json:"refresh_since,omitempty"`
+	RefreshUntil     string                 `json:"refresh_until,omitempty"`
+	RefreshCursor    string                 `json:"refresh_cursor,omitempty"`
+	RefreshState     string                 `json:"refresh_state,omitempty"`
+	RefreshCheckedAt string                 `json:"refresh_checked_at,omitempty"`
+	RefreshRetryAt   string                 `json:"refresh_retry_at,omitempty"`
+	RefreshFailures  int                    `json:"refresh_failures,omitempty"`
+	RefreshError     string                 `json:"refresh_error,omitempty"`
+	FocusAt          string                 `json:"focus_at,omitempty"`
+	RecentRetryAt    string                 `json:"recent_retry_at,omitempty"`
+	RecentFailures   int                    `json:"recent_failures"`
+	RecentError      string                 `json:"recent_error,omitempty"`
+	RecentCursor     string                 `json:"recent_cursor"`
+	RecentSince      string                 `json:"recent_since"`
+	RecentStarted    string                 `json:"recent_started"`
+	RetryAt          string                 `json:"retry_at,omitempty"`
+	Failures         int                    `json:"failures"`
+	Duplicates       int                    `json:"duplicates"`
+	Skipped          int                    `json:"skipped"`
+	Conversation     transport.Conversation `json:"conversation"`
+	Cursor           string                 `json:"cursor"`
+	Since            string                 `json:"since"`
+	State            string                 `json:"state"`
+	Imported         int                    `json:"imported"`
+	Oldest           string                 `json:"oldest"`
+	LastSync         string                 `json:"last_sync"`
+	Error            string                 `json:"error,omitempty"`
+	Generation       int64                  `json:"generation"`
 }
 
 func (s *Store) Archive(conv string) (Archive, error) {

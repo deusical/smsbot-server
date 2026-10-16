@@ -64,5 +64,46 @@ func (e *Engine) LocalArchiveAttachment(conv, message, attachment string) (media
 	if settings.ArchiveRetentionDays > 0 {
 		since = e.now().AddDate(0, 0, -settings.ArchiveRetentionDays)
 	}
-	return e.Store.AttachmentSince(conv, message, attachment, since)
+	file, err := e.Store.AttachmentSince(conv, message, attachment, since)
+	if err == nil {
+		if legacy, _ := e.legacyGooglePreview(conv, message, file); legacy {
+			return media.File{}, errors.New("original_requires_refresh")
+		}
+	}
+	return file, err
+}
+
+// Repair old imported previews before considering any blob an original. Saved
+// web uploads are excluded; replacement uses the normal consent/identity CAS.
+func (h archiveFileHost) Repair(ctx context.Context, c transport.Conversation, message string, file media.File) (bool, error) {
+	// Upgrade descriptors written before measured original sizes were tracked.
+	if _, ok := h.e.Transport.(transport.FileRefresher); ok && file.MessageID != "" && !file.SizeUnverified && file.ArchiveState != "saved" {
+		revision, err := h.Authorize(ctx, c)
+		if err != nil {
+			return false, err
+		}
+		updated := file
+		updated.SizeUnverified = true
+		updated.RetryAt = ""
+		updated.Failures = 0
+		return true, h.CommitFile(ctx, c, revision, message, file, updated)
+	}
+	legacy, at := h.e.legacyGooglePreview(c.ID, message, file)
+	if !legacy {
+		return false, nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	revision, err := h.Authorize(ctx, c)
+	if err != nil {
+		return false, err
+	}
+	refreshed, err := h.e.Transport.(transport.FileRefresher).RefreshFile(ctx, c.ID, message, at, file)
+	if err != nil {
+		return false, err
+	}
+	if err = h.CommitFile(ctx, c, revision, message, file, refreshed); err != nil {
+		return false, err
+	}
+	return true, nil
 }

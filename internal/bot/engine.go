@@ -29,7 +29,10 @@ type Engine struct {
 	pending        map[string]context.CancelFunc
 	captureQueue   chan captureItem
 	captureConsent atomic.Pointer[captureConsent]
-	captureGap     atomic.Bool
+	gapMu          sync.Mutex
+	gapFlushMu     sync.Mutex
+	flushingGaps   map[string]pendingCaptureGap
+	pendingGaps    map[string]pendingCaptureGap
 }
 
 func New(s *store.Store, t transport.Transport) *Engine {
@@ -42,7 +45,7 @@ func New(s *store.Store, t transport.Transport) *Engine {
 			_ = s.SetPublicSetting("model_catalog", models)
 		}
 	}
-	e := &Engine{Store: s, Transport: t, Provider: provider, now: time.Now, pending: map[string]context.CancelFunc{}, captureQueue: make(chan captureItem, 512)}
+	e := &Engine{Store: s, Transport: t, Provider: provider, now: time.Now, pending: map[string]context.CancelFunc{}, pendingGaps: map[string]pendingCaptureGap{}, captureQueue: make(chan captureItem, 512)}
 	e.History = history.New(s, archiveHost{e})
 	e.Archive = archive.New(s, filepath.Join(filepath.Dir(s.Path), "archive"), archiveFileHost{e})
 	if settings, err := e.InboxSettings(); err == nil {
@@ -71,6 +74,19 @@ func (e *Engine) Pause(value bool) error {
 	}
 	return e.Store.Pause(value)
 }
+
+// ConnectionInterrupted cancels unsent work without changing the owner's Live/Pause choice.
+// Submitted or uncertain intents retain their state and are never retried here.
+func (e *Engine) ConnectionInterrupted() error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for _, cancel := range e.pending {
+		cancel()
+	}
+	_, err := e.Store.DB.Exec("UPDATE jobs SET state='cancelled',code='connection_interrupted',plan='' WHERE state IN ('queued','generating','awaiting_approval')")
+	return err
+}
+
 func (e *Engine) Unenroll(id string) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()

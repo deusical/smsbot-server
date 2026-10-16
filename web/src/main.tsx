@@ -33,6 +33,29 @@ type ConversationPage = {
   partial?: boolean;
 };
 
+function connectionLabel(status?: string): string {
+  switch (status) {
+    case "reconnecting": return "Reconnecting to phone";
+    case "phone_unreachable": return "Waiting for phone";
+    case "login_required": return "Phone login required";
+    case "session_conflict": return "Messages session conflict";
+    case "account_changed": return "Phone account changed";
+    case "storage_error": return "Session could not be saved";
+    case "connection_error": return "Phone connection needs attention";
+    case "receive_overload": return "Phone event queue overloaded";
+    default: return "Phone offline";
+  }
+}
+function connectionSummary(state: State): string {
+  const status = state.connection_state;
+  if (status && !["reconnecting", "phone_unreachable", "connected"].includes(status)) {
+    return connectionLabel(status) + ". Sending is blocked. Resolve the issue and restart the service; review before going live.";
+  }
+  return state.paused
+    ? "Reconnecting to your phone. Sending will stay paused."
+    : "Reconnecting to your phone. Sending is blocked and will resume after verification. You can pause to prevent resuming.";
+}
+
 function App() {
   const [page, setPage] = useState<Page>("Home"),
     [state, setState] = useState<State | null>(null);
@@ -374,7 +397,7 @@ function App() {
             }
           >
             <span className="dot" />
-            {state?.transport_ready ? "Phone connected" : "Phone offline"}
+            {state?.transport_ready ? "Phone connected" : connectionLabel(state?.connection_state)}
           </span>
         </div>
       </aside>
@@ -582,7 +605,7 @@ function Home({
   const summary = !state
     ? "Checking the server…"
     : !state.transport_ready
-      ? "Your phone is offline. Nothing can be sent until it reconnects."
+      ? connectionSummary(state)
       : state.paused
         ? inbox?.enabled
           ? "Nothing will be sent. Incoming messages are still saved."

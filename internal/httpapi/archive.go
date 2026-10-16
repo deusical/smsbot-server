@@ -7,6 +7,21 @@ import (
 
 func (s *Server) archiveRoutes() {
 	s.archiveBackupRoutes()
+	s.mux.HandleFunc("POST /api/v1/inbox/conversations/{id}/refresh", s.protected(func(w http.ResponseWriter, r *http.Request) {
+		var v struct {
+			Since string `json:"since"`
+			Until string `json:"until"`
+		}
+		if !s.decode(w, r, &v) {
+			return
+		}
+		a, err := s.Engine.RequestArchiveRefresh(r.Context(), r.PathValue("id"), v.Since, v.Until)
+		if err != nil {
+			s.bad(w, 409, "refresh_unavailable_or_invalid_range")
+			return
+		}
+		s.json(w, 202, a)
+	}))
 	s.mux.HandleFunc("GET /api/v1/inbox/archive", s.protected(func(w http.ResponseWriter, r *http.Request) {
 		a, err := s.Engine.Store.Archives()
 		if err != nil {

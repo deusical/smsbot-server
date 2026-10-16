@@ -40,7 +40,18 @@ func (e *Engine) publishCaptureConsent(s InboxSettings) {
 	}
 	e.captureConsent.Store(&captureConsent{s, epoch})
 }
-func (e *Engine) InboxCaptureGap() bool { return e.captureGap.Load() }
+func (e *Engine) InboxCaptureGap() bool {
+	gaps, unknown := e.CaptureGapStatus()
+	if unknown {
+		return true
+	}
+	for _, g := range gaps {
+		if g.State != "checked_available" {
+			return true
+		}
+	}
+	return false
+}
 func (e *Engine) QueueObservation(m transport.Incoming) {
 	consent := e.captureConsent.Load()
 	if consent == nil || !consent.settings.Enabled || m.ID == "" || m.ConversationID == "" || (m.Text == "" && len(m.Attachments) == 0) {
@@ -61,11 +72,26 @@ func (e *Engine) QueueObservation(m transport.Incoming) {
 	select {
 	case e.captureQueue <- captureItem{m, consent.epoch}:
 	default:
-		e.captureGap.Store(true)
+		e.noteCaptureGap(m, consent.epoch, "capture_queue_full")
 	}
 }
 func (e *Engine) RunCapture(ctx context.Context) {
 	var workers sync.WaitGroup
+	workers.Add(1)
+	go func() {
+		defer workers.Done()
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				e.flushCaptureGaps()
+				return
+			case <-ticker.C:
+				e.flushCaptureGaps()
+			}
+		}
+	}()
 	for i := 0; i < 4; i++ {
 		workers.Add(1)
 		go func() {
@@ -83,11 +109,11 @@ func (e *Engine) RunCapture(ctx context.Context) {
 						continue
 					}
 					if !item.message.Historical && e.now().Sub(item.message.At) > 2*time.Minute {
-						e.captureGap.Store(true)
+						e.noteCaptureGap(item.message, item.epoch, "capture_delayed")
 						continue
 					}
 					if err := e.observe(ctx, item.message, item.epoch); err != nil {
-						e.captureGap.Store(true)
+						e.noteCaptureGap(item.message, item.epoch, captureFailureReason(err))
 					}
 				}
 			}

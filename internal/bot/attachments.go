@@ -49,11 +49,31 @@ func (e *Engine) InboxAttachmentContent(ctx context.Context, conv, message, atta
 	if err != nil {
 		return media.Info{}, nil, errors.New("attachment_unavailable")
 	}
+	previous := file
+	repaired := false
+	if legacy, at := e.legacyGooglePreview(conv, message, file); legacy {
+		if preview {
+			file.PreviewData = file.Data
+			file.Data = nil
+			file.Size = 0
+			file.ArchiveState = "pending"
+		} else {
+			source := e.Transport.(transport.FileRefresher)
+			file, err = source.RefreshFile(ctx, conv, message, at, file)
+			if err != nil {
+				return media.Info{}, nil, err
+			}
+			repaired = true
+		}
+	}
 	file.ReadLimit = current.FileLimits().FileBytes()
 	if file.ReadLimit > 0 && file.Size > file.ReadLimit {
 		return media.Info{}, nil, errors.New("attachment_size_limit")
 	}
 	data := file.Data
+	if preview && len(file.PreviewData) > 0 {
+		data = file.PreviewData
+	}
 	if len(data) == 0 {
 		source, ok := e.Transport.(transport.FileSource)
 		if !ok {
@@ -87,6 +107,30 @@ func (e *Engine) InboxAttachmentContent(ctx context.Context, conv, message, atta
 	if limit := current.FileLimits().FileBytes(); limit > 0 && int64(len(data)) > limit {
 		return media.Info{}, nil, errors.New("attachment_size_limit")
 	}
+	if !preview {
+		file.Size = int64(len(data))
+		file.SizeUnverified = false
+	}
+	if repaired || (!preview && (previous.Size != file.Size || previous.SizeUnverified)) {
+		if err := e.Store.UpdateArchivedFile(ctx, message, previous, file); err != nil {
+			return media.Info{}, nil, errors.New("attachment_changed")
+		}
+	}
 	file.Info.Size = int64(len(data))
 	return file.Info, data, nil
+}
+
+// Legacy Google imports stored inline image previews as originals. Local web
+// sends remain authoritative. No size/dimension heuristic decides originality.
+func (e *Engine) legacyGooglePreview(conv, message string, file media.File) (bool, time.Time) {
+	if _, ok := e.Transport.(transport.FileRefresher); !ok || file.MessageID != "" || file.RemoteID != "" || !strings.HasPrefix(file.MIME, "image/") {
+		return false, time.Time{}
+	}
+	var origin, at string
+	err := e.Store.DB.QueryRow(`SELECT coalesce(meta.origin,''),m.at FROM messages m LEFT JOIN message_meta meta ON meta.message=m.id WHERE m.conversation=? AND m.id=?`, conv, message).Scan(&origin, &at)
+	if err != nil || origin == "web" {
+		return false, time.Time{}
+	}
+	stamp, err := time.Parse(time.RFC3339Nano, at)
+	return err == nil, stamp
 }

@@ -1,3 +1,4 @@
+import { CaptureChecks } from "./CaptureChecks";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { HistorySync } from "./HistorySync";
 import {
@@ -124,6 +125,31 @@ export function ConversationHistory({
   const changesDone = useRef<Promise<void> | null>(null);
   const messagesRef = useRef<Message[]>([]);
   messagesRef.current = messages;
+  const [viewRange, setViewRange] = useState<{since: string; until: string} | null>(null);
+  const openedAt = useRef(new Date().toISOString());
+  const rangeFrame = useRef(0);
+  function updateViewedRange() {
+    const el = scroll.current;
+    if (!el) return;
+    const bounds = el.getBoundingClientRect();
+    const indices = Array.from(el.querySelectorAll<HTMLElement>("[data-message-index]"))
+      .filter(node => { const r = node.getBoundingClientRect(); return r.bottom >= bounds.top && r.top <= bounds.bottom; })
+      .map(node => Number(node.dataset.messageIndex));
+    const rows = messagesRef.current;
+    const first = indices.length ? Math.max(0, Math.min(...indices) - 5) : Math.max(0, rows.length - 50);
+    const last = indices.length ? Math.min(rows.length - 1, Math.max(...indices) + 5) : rows.length - 1;
+    const since = rows[first]?.at ?? new Date(Date.parse(openedAt.current) - 30 * 60 * 1000).toISOString();
+    const until = el.scrollHeight - el.scrollTop - el.clientHeight < 80 ? "" : rows[last]?.at ?? "";
+    setViewRange(previous => previous?.since === since && previous.until === until ? previous : {since, until});
+  }
+  function scheduleViewedRange() {
+    cancelAnimationFrame(rangeFrame.current);
+    rangeFrame.current = requestAnimationFrame(updateViewedRange);
+  }
+  useEffect(() => {
+    scheduleViewedRange();
+    return () => cancelAnimationFrame(rangeFrame.current);
+  }, [messages, conversation.id, query]);
   const request = useRef(1),
     inFlight = useRef(0),
     inFlightDone = useRef<{ generation: number; done: Promise<void> } | null>(
@@ -162,7 +188,9 @@ export function ConversationHistory({
         !result.next_cursor || result.next_cursor === importCursor,
       );
       setNotice(
-        `Imported ${result.imported} message${result.imported === 1 ? "" : "s"} from your phone. Commands in old messages never run.`,
+        result.imported > 0
+          ? `Saved ${result.imported} additional message${result.imported === 1 ? "" : "s"} from this phone page. Old commands never run.`
+          : "Phone page checked; no additional messages were saved. Existing saved messages may have been refreshed.",
       );
       const first = messagesRef.current[0];
       const before = first
@@ -332,6 +360,8 @@ export function ConversationHistory({
   }
   useEffect(() => {
     request.current++;
+    openedAt.current = new Date().toISOString();
+    setViewRange(null);
     inFlight.current = 0;
     setMessages([]);
     changeCursor.current = null;
@@ -502,7 +532,8 @@ export function ConversationHistory({
           {enrollControl}
         </div>
       </header>
-      {state?.capabilities.includes("archive_history") && (inbox?.enabled || conversation.archived) && <HistorySync id={conversation.id} ready={!!state?.transport_ready && !!inbox?.enabled} />}
+      {state?.capabilities.includes("archive_history") && (inbox?.enabled || conversation.archived) && <HistorySync key={conversation.id} id={conversation.id} ready={!!state?.transport_ready && inboxAllows(inbox, conversation)} range={viewRange ?? undefined} automatic={!!state.capabilities.includes("archive_refresh")} />}
+      <CaptureChecks gaps={(state?.inbox_capture_gaps ?? []).filter(g => g.conversation === conversation.id)} ready={!!state?.transport_ready && inboxAllows(inbox, conversation)} />
       {searchOpen && (
         <label className="search thread-search">
           <Icon name="search" size={16} />
@@ -554,6 +585,7 @@ export function ConversationHistory({
         className="messages"
         ref={scroll}
         onScroll={() => {
+          scheduleViewedRange();
           const el = scroll.current;
           if (!el) return;
           if (el.scrollHeight - el.scrollTop - el.clientHeight < 80)
@@ -614,7 +646,7 @@ export function ConversationHistory({
           const divider = index === 0 || day !== dayLabel(messages[index - 1].at);
           const at = new Date(m.at);
           return (
-            <div key={m.id} data-index={row?.index} ref={row ? virtualizer.measureElement : undefined} style={row ? {position: "absolute", top: 0, left: 0, width: "100%", transform: `translateY(${row.start}px)`} : undefined} className="message-group">
+            <div key={m.id} data-message-index={index} data-index={row?.index} ref={row ? virtualizer.measureElement : undefined} style={row ? {position: "absolute", top: 0, left: 0, width: "100%", transform: `translateY(${row.start}px)`} : undefined} className="message-group">
               {divider && (
                 <div className="day" role="separator">
                   <span>{day}</span>

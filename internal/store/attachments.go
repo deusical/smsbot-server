@@ -40,12 +40,18 @@ func (s *Store) saveAttachments(tx *sql.Tx, id string, files []media.File) error
 			return err
 		}
 		for _, f := range existing {
-			if len(f.Data) > 0 || (localSend && f.BlobID != "") {
+			if localSend && (len(f.Data) > 0 || f.BlobID != "") {
 				return nil
 			}
 		}
 		for i := range files {
 			for _, old := range existing {
+				if old.MessageID != "" && !old.SizeUnverified && old.Size > 0 && SameFileSource(old, files[i]) {
+					// A completed original read measured these bytes; an upstream
+					// snapshot may still carry an earlier, smaller reported size.
+					files[i].Size = old.Size
+					files[i].SizeUnverified = false
+				}
 				if old.BlobID != "" && (SameFileSource(old, files[i]) || (old.RemoteID != "" && old.RemoteID == files[i].RemoteID && bytes.Equal(old.Key, files[i].Key))) {
 					files[i] = old
 					break
@@ -127,7 +133,22 @@ type AttachmentRecord struct {
 }
 
 func (s *Store) AttachmentBatch(ctx context.Context, after string, limit int) ([]AttachmentRecord, error) {
-	rows, err := s.DB.QueryContext(ctx, "SELECT m.id,m.conversation,a.payload FROM messages m JOIN message_attachments a ON a.message=m.id JOIN archive_conversations c ON c.conversation=m.conversation WHERE m.id>? ORDER BY m.id LIMIT ?", after, limit)
+	return s.attachmentRecords(ctx, "SELECT m.id,m.conversation,a.payload FROM messages m JOIN message_attachments a ON a.message=m.id JOIN archive_conversations c ON c.conversation=m.conversation WHERE m.id>? ORDER BY m.id LIMIT ?", after, limit)
+}
+func (s *Store) AttachmentRangeBatch(ctx context.Context, conv, from, to, after string, limit int) ([]AttachmentRecord, error) {
+	since, err := time.Parse(time.RFC3339Nano, from)
+	if err != nil {
+		return nil, err
+	}
+	until, err := time.Parse(time.RFC3339Nano, to)
+	if err != nil {
+		return nil, err
+	}
+	const stamp = "2006-01-02T15:04:05.000000000Z"
+	return s.attachmentRecords(ctx, `SELECT m.id,m.conversation,a.payload FROM messages m JOIN message_attachments a ON a.message=m.id JOIN archive_conversations c ON c.conversation=m.conversation WHERE m.conversation=? AND m.at>=? AND m.at<=? AND m.id>? ORDER BY m.id LIMIT ?`, conv, since.UTC().Format(stamp), until.UTC().Format(stamp), after, limit)
+}
+func (s *Store) attachmentRecords(ctx context.Context, query string, args ...any) ([]AttachmentRecord, error) {
+	rows, err := s.DB.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -148,7 +169,7 @@ func (s *Store) AttachmentBatch(ctx context.Context, after string, limit int) ([
 	return out, rows.Err()
 }
 func SameFileSource(a, b media.File) bool {
-	return a.ID == b.ID && a.RemoteID == b.RemoteID && bytes.Equal(a.Key, b.Key) && bytes.Equal(a.Data, b.Data)
+	return a.ID == b.ID && a.RemoteID == b.RemoteID && bytes.Equal(a.Key, b.Key) && bytes.Equal(a.Data, b.Data) && a.MessageID == b.MessageID && a.ActionID == b.ActionID && a.ConversationID == b.ConversationID && a.Timestamp == b.Timestamp && bytes.Equal(a.PreviewData, b.PreviewData)
 }
 
 // UpdateArchivedFile uses compare-and-replace so a concurrent source update or
@@ -170,6 +191,11 @@ func (s *Store) UpdateArchivedFile(ctx context.Context, message string, expected
 	found := false
 	for i := range files {
 		if SameFileSource(files[i], expected) {
+			// A foreground measurement must not discard an original that the
+			// archive committed concurrently from the same exact source.
+			if files[i].BlobID != "" && updated.BlobID == "" && SameFileSource(updated, expected) {
+				updated = files[i]
+			}
 			files[i] = updated
 			found = true
 			break

@@ -13,7 +13,7 @@ Selected stack: Go service, SQLite/local WAL, libgm adapter, React/TypeScript we
 - Dashboard state/readiness polling runs independently of settings, activity and conversation discovery, with a separate nonoverlap guard for each refresh lane. Slow startup discovery cannot hold login busy or prevent the paused controls from becoming available when transport readiness changes.
 - Dashboard Enable/Pause actions apply the state returned by the pause endpoint immediately, independently of conversation refresh. A revision check prevents state polls started before or during the action from overwriting the confirmed response. Failed mutations retain the previously displayed state and show the error.
 - Android: API-backed server screen, Keystore-encrypted connection, dispatch guards. Its existing local engine remains independent and unavailable in server mode.
-- Google startup account snapshots (`AccountChange.IsFake` in libgm) are informational and do not invalidate verified readiness. Actual account changes, logout, phone/data loss and active-session warnings still pause automation and require recovery. Diagnostics distinguish those event categories without recording account data.
+- Google startup account snapshots (`AccountChange.IsFake` in libgm) are informational and do not invalidate verified readiness. Actual account changes, logout and active-session warnings still pause automation and require owner recovery. Temporary phone/data loss blocks readiness and triggers verified reconnection without changing the owner Live/Pause choice. Diagnostics distinguish those event categories without recording account data.
 - Google receive callbacks filter unused events and historical incoming messages before the bounded queue. Queue overflow immediately blocks readiness and wakes the consumer to pause automation, invalidate cached identities and discard command input across the gap. Draining restores queue availability, advances the freshness cutoff and emits sanitized `event_queue_overflow`/`event_queue_drained` diagnostics; it never reenables automation or clears a connection/account failure. Such failures latch independently even if their events are dropped by a full queue. Historical outgoing status events remain eligible for transaction reconciliation.
 
 ## Processing
@@ -97,6 +97,8 @@ original endpoint and key even when collection policy changes after submission.
 Recent reconciliation and deep backfill retain independent encrypted retry times,
 failure counters and sanitized errors. A recent failure ends that conversation's
 current tick; subsequent ticks can run either lane when its own backoff permits.
+Inbox history advertises a change cursor only for persisted archives; conversations
+without an archive keep polling snapshots for new messages.
 Archive UI polling uses the change feed after the initial snapshot, and page reads
 and change-feed reads serialize so an older snapshot cannot resurrect deleted rows
 or overwrite an already-applied edit.
@@ -124,3 +126,84 @@ only after limits or committed blob usage changes. Locally submitted originals
 remain authoritative across exact transaction/alias echoes even after inline bytes
 are normalized into blobs and phone-side part IDs change. Received attachments
 with changed remote sources still invalidate their old blob references.
+
+Google inline image bytes are preview-only. Original reads request full-size media
+using the exact upstream message/action IDs, then await the matching update or
+read back that exact part. Historical media updates can satisfy an outstanding
+read without entering command routing. Requests are bounded, coalesced and
+cancelled with their callers. Pending originals report unknown size rather than
+the inline preview size. Legacy imported previews are repaired under current
+consent and exact identity checks, while locally submitted originals are preserved.
+
+## Automatic viewed-section reconciliation
+
+The owner dashboard shows local history immediately. A debounced viewport range,
+with nearby messages for overlap, requests an independent durable refresh lane
+when collection is allowed. It renews while visible and on return to the page;
+no explicit refresh button is required. The owner-only `POST
+/api/v1/inbox/conversations/{id}/refresh` accepts RFC3339 `since` and optional
+`until` bounds. `archive_refresh` advertises support. Google can start at the
+view's upper bound; pages continue to the lower bound to repair gaps as well as
+previously stored text, receipt and attachment metadata. Absence from a returned
+page never deletes local history or proves that Google history is complete.
+
+Refresh cursor/state/backoff and focus timestamps are encrypted in the existing
+archive record, independently of deep-import progress. Superseding a range bumps
+the generation so old reads cannot publish. Consent revisions, exact participant
+checks, group exclusion and per-message change watermarks still guard commits.
+An active section gets the first history turn, followed by one round-robin
+background conversation. Recent reconciliation continues; completed old-history
+scans are revisited daily within existing date/retention limits, while cancelled
+deep imports remain cancelled. Owner-visible states distinguish saved data,
+checking, retrying and when the available section was last checked.
+
+Original-file sweeps prioritize the recently viewed time range. Every third turn
+is reserved for ordinary background work; one bounded file attempt per turn lets
+view changes and revocation take effect between reads. Focus expires after two
+minutes without renewal. Current file policy, encrypted streaming publication,
+source comparison and consent checks apply to both priorities. The UI's change
+feed updates file state and previews when originals are saved.
+
+
+## Verified phone reconnection
+
+Temporary listen/ping/phone-readiness failures latch transport unavailability independently of the receive queue. A single recovery worker checks the existing paired client with a 20-second deadline, retries with exponential backoff and jitter (capped at five minutes), and re-arms a missing receive stream after repeated failures. Recovery hints expedite checks but do not establish readiness. Successful recovery requires a responding phone, a connected stream and a saved encrypted session; a generation check prevents a stale success from overriding a newer failure. Authentication, account change, session conflict, fatal stream and storage errors remain blocked for owner intervention.
+
+Connection interruption cancels queued, generating and approval work without changing the persisted owner Live/Pause choice. Generation/upload contexts are cancelled; submitted/uncertain intents retain their evidence and are never replayed. Readiness gates every send while offline. Recovery clears cached identities and advances the command freshness cutoff, so only new post-verification commands can execute. Receipts still reconcile during the gap. Explicit owner pause remains authoritative, and process startup still pauses. API v1 adds sanitized connection_state and connection_retry_at fields; the dashboard distinguishes reconnecting from owner-action failures and explains automatic resumption when Live.
+
+
+## Sync scheduling, progress and capture checks
+
+Explicit older-history requests carry an encrypted requested time and advance one
+bounded page before routine discovery on each worker turn. Multiple explicit jobs
+rotate by last attempt. Visible-section reads keep their own checkpoint; ordinary
+recent and deep background reconciliation still get a turn. Cancellation and
+changed requests invalidate in-flight work through the existing generation check.
+Existing date-limited pending requests receive the same priority on upgrade. Daily maintenance is identified as automatic rather than a new owner request.
+
+Older-history progress records pages and messages checked, newly saved messages,
+updated messages, oldest scanned timestamp and last progress time. Recent and
+visible-section reads do not inflate these per-import counters. The date form
+loads the saved request and polling preserves unsaved date edits. The dashboard
+shows collection scope and retention, recent-check time, independent viewed-section
+status and older-import waiting/retry/completion states. Available pages checked
+never means guaranteed complete Google history. Originals remain a separate job.
+
+Capture failures aggregate bounded metadata in memory without blocking the receive
+callback on SQL or phone RPCs. A capture worker flushes conversation, approximate
+time bounds and a fixed reason into encrypted capture-gap settings. Pending metadata
+is visible immediately; persisted checkpoints survive process restarts. A sudden
+process termination before the asynchronous flush can lose that pending metadata.
+Exceeding the metadata capacity preserves an explicit unknown-scope record rather
+than claiming a known repair range. No bodies, media keys or upstream error text are
+retained in these records. Owner state includes sanitized ranges and statuses;
+client credentials never receive them.
+
+A separate repair cursor checks one eligible gap page per history turn with bounded
+calls and backoff. Current collection consent, exact individual identity, retention,
+message change watermarks and request generations are rechecked before storing any
+page. Rechecking never routes old commands, alters Live/Pause or replays sends.
+Concurrent newer failures invalidate an older repair's completion checkpoint.
+Successful repair reports only that the available range was rechecked, and clears
+the active warning for that range; unavailable history can still contain gaps.
+Unknown scope is explicitly unverified and cannot be automatically declared repaired.

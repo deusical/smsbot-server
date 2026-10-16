@@ -70,6 +70,7 @@ func (l Limits) RequestBytes() int64 {
 
 // Info is the only attachment representation returned in message lists.
 type Info struct {
+	PreviewOnly  bool   `json:"preview_only,omitempty"`
 	ArchiveState string `json:"archive_state,omitempty"`
 	ArchiveError string `json:"archive_error,omitempty"`
 	ID           string `json:"id"`
@@ -81,17 +82,24 @@ type Info struct {
 // File is stored only inside encrypted payloads. Remote keys never reach clients.
 type File struct {
 	Info
-	BlobID       string `json:"blob_id,omitempty"`
-	Digest       string `json:"digest,omitempty"`
-	RetryAt      string `json:"retry_at,omitempty"`
-	RetryPolicy  string `json:"retry_policy,omitempty"`
-	Failures     int    `json:"failures,omitempty"`
-	Data         []byte `json:"data,omitempty"`
-	RemoteID     string `json:"remote_id,omitempty"`
-	Key          []byte `json:"key,omitempty"`
-	ThumbnailID  string `json:"thumbnail_id,omitempty"`
-	ThumbnailKey []byte `json:"thumbnail_key,omitempty"`
-	ReadLimit    int64  `json:"-"`
+	// Google inline media can be a tiny preview, never an original.
+	PreviewData    []byte `json:"preview_data,omitempty"`
+	MessageID      string `json:"upstream_message_id,omitempty"`
+	ActionID       string `json:"upstream_action_id,omitempty"`
+	ConversationID string `json:"upstream_conversation_id,omitempty"`
+	Timestamp      int64  `json:"upstream_timestamp,omitempty"`
+	SizeUnverified bool   `json:"size_unverified,omitempty"`
+	BlobID         string `json:"blob_id,omitempty"`
+	Digest         string `json:"digest,omitempty"`
+	RetryAt        string `json:"retry_at,omitempty"`
+	RetryPolicy    string `json:"retry_policy,omitempty"`
+	Failures       int    `json:"failures,omitempty"`
+	Data           []byte `json:"data,omitempty"`
+	RemoteID       string `json:"remote_id,omitempty"`
+	Key            []byte `json:"key,omitempty"`
+	ThumbnailID    string `json:"thumbnail_id,omitempty"`
+	ThumbnailKey   []byte `json:"thumbnail_key,omitempty"`
+	ReadLimit      int64  `json:"-"`
 }
 
 // Upload deliberately has no remote reference or key fields.

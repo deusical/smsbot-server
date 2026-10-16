@@ -3,7 +3,7 @@ import type { Attachment } from "./api";
 import { Icon } from "./Icon";
 
 export function fileSize(size: number) {
-  return size >= 1024 * 1024
+  return size <= 0 ? "Size unknown" : size >= 1024 * 1024
     ? `${(size / 1024 / 1024).toFixed(1)} MB`
     : `${Math.ceil(size / 1024)} KB`;
 }
@@ -119,7 +119,7 @@ export function MessageAttachment({
         <span>
           <strong>{attachment.name}</strong>
           <small>
-            {attachment.archive_state ? `Original: ${attachment.archive_state.replaceAll("_", " ")} · ` : "Original: pending · "}{fileSize(attachment.size)} · {attachment.mime}
+            {attachment.preview_only ? "Thumbnail preview ? " : ""}{attachment.archive_state ? `Original: ${attachment.archive_state.replaceAll("_", " ")} · ` : "Original: pending · "}{fileSize(attachment.size)} · {attachment.mime}
           </small>
         </span>
         <button

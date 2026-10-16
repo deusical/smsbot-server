@@ -43,6 +43,8 @@ type Transport interface {
 	Ready() bool
 }
 
+var ErrUnavailable = errors.New("phone connection unavailable")
+
 var ErrUnknown = errors.New("submission outcome unknown")
 var ErrNotSubmitted = errors.New("transport did not submit")
 

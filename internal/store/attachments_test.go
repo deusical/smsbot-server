@@ -2,6 +2,7 @@ package store
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"smsbot-server/internal/media"
 	"strings"
@@ -77,5 +78,67 @@ func TestAttachmentMigrationFromVersionThree(t *testing.T) {
 	p, err := s.MessagePage("synthetic-chat", "", "", 50)
 	if version != 5 || err != nil || len(p.Messages) != 1 || p.Messages[0].Text != "Synthetic existing text" {
 		t.Fatal("migration lost existing message", err)
+	}
+}
+
+func TestReimportReplacesLegacyInlinePreview(t *testing.T) {
+	s := inboxStore(t)
+	old := media.File{Info: media.Info{ID: "part-0", MIME: "image/jpeg", Size: 8}, Data: []byte("preview")}
+	if err := s.SaveObservedFiles("synthetic-chat", "synthetic-message", "", "outgoing", "", "phone", "", time.Now(), []media.File{old}); err != nil {
+		t.Fatal(err)
+	}
+	corrected := media.File{Info: media.Info{ID: "part-0", MIME: "image/jpeg", Size: 100000}, RemoteID: "synthetic-original", Key: make([]byte, 32), MessageID: "synthetic-message", ActionID: "synthetic-action"}
+	if err := s.SaveObservedFiles("synthetic-chat", "synthetic-message", "", "outgoing", "", "phone", "", time.Now(), []media.File{corrected}); err != nil {
+		t.Fatal(err)
+	}
+	f, err := s.Attachment("synthetic-chat", Hash("synthetic-chat\x00synthetic-message"), "part-0")
+	if err != nil || len(f.Data) != 0 || f.RemoteID != "synthetic-original" {
+		t.Fatal("legacy preview blocked repaired import", err)
+	}
+}
+
+func TestMeasuredOriginalSizeSurvivesUpstreamRefresh(t *testing.T) {
+	s := inboxStore(t)
+	file := media.File{Info: media.Info{ID: "part-0", MIME: "image/jpeg", Size: 32000}, RemoteID: "synthetic-original", MessageID: "synthetic-message", ActionID: "synthetic-action"}
+	save := func(f media.File) {
+		t.Helper()
+		if err := s.SaveObservedFiles("chat", "message", "", "incoming", "", "phone", "", time.Now(), []media.File{f}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	save(file)
+	file.Size = 25000
+	file.SizeUnverified = true
+	save(file)
+	measured, err := s.Attachment("chat", Hash("chat\x00message"), "part-0")
+	if err != nil || measured.Size != 32000 || measured.SizeUnverified {
+		t.Fatal("upstream size replaced measured original", err)
+	}
+}
+
+func TestForegroundSizeMeasurementPreservesConcurrentArchivedOriginal(t *testing.T) {
+	s := inboxStore(t)
+	source := media.File{Info: media.Info{ID: "part-0", MIME: "image/jpeg", Size: 25000}, RemoteID: "synthetic-original", MessageID: "synthetic-message", SizeUnverified: true}
+	if err := s.SaveObservedFiles("chat", "message", "", "incoming", "", "phone", "", time.Now(), []media.File{source}); err != nil {
+		t.Fatal(err)
+	}
+	id := Hash("chat\x00message")
+	archived := source
+	archived.BlobID = "synthetic-saved-blob"
+	archived.ArchiveState = "saved"
+	archived.Size = 32000
+	archived.SizeUnverified = false
+	if err := s.UpdateArchivedFile(context.Background(), id, source, archived); err != nil {
+		t.Fatal(err)
+	}
+	measured := source
+	measured.Size = 32000
+	measured.SizeUnverified = false
+	if err := s.UpdateArchivedFile(context.Background(), id, source, measured); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := s.Attachment("chat", id, "part-0")
+	if err != nil || saved.BlobID != archived.BlobID || saved.ArchiveState != "saved" || saved.Size != 32000 {
+		t.Fatal("foreground measurement discarded archived original", err)
 	}
 }
