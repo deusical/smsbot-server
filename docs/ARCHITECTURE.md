@@ -207,3 +207,12 @@ Concurrent newer failures invalidate an older repair's completion checkpoint.
 Successful repair reports only that the available range was rechecked, and clears
 the active warning for that range; unavailable history can still contain gaps.
 Unknown scope is explicitly unverified and cannot be automatically declared repaired.
+
+
+Routine archive-scope and conversation-sync explanations can be hidden with close
+buttons and reopened from compact controls. Two boolean display preferences survive
+navigation/reload in tab session storage (memory fallback when storage is blocked);
+no conversation identifiers, messages, API state or credentials are stored there.
+Hidden panels stay mounted so polling, automatic checks and date drafts continue.
+Errors remain visible outside the hidden details with a review action. Display
+controls never call sync cancellation, change collection consent or affect sending.

@@ -1,8 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
+import { Icon } from "./Icon";
+import { useInfoPanel } from "./infoPanels";
 
 type Archive = { conversation: { id: string }; state: string; imported: number; since: string; last_sync: string; oldest: string; requested_at?: string; request_source?: string; checked?: number; pages?: number; updated?: number; scanned_through?: string; last_progress_at?: string; retry_at?: string; error?: string; recent_error?: string; recent_retry_at?: string; refresh_state?: string; refresh_checked_at?: string; refresh_error?: string; refresh_since?: string; refresh_until?: string };
 export function HistorySync({ id, ready, range, automatic = false }: { id: string; ready: boolean; range?: {since: string; until: string}; automatic?: boolean }) {
+  const [shown, setShown] = useInfoPanel("sync-details");
   const [record, setRecord] = useState<Archive | null>(null);
   const [since, setSince] = useState("");
   const [dateEdited, setDateEdited] = useState(false);
@@ -71,7 +74,17 @@ export function HistorySync({ id, ready, range, automatic = false }: { id: strin
   }
   const matchesView = !range || (!!record && Date.parse(record.refresh_since ?? "") <= Date.parse(range.since) && (!range.until || Date.parse(record.refresh_until ?? "") >= Date.parse(range.until)));
   const viewRecord = matchesView ? record : null;
+  const problem = error || automaticError ||
+    (viewRecord?.refresh_error ? "Checking this section failed; retrying automatically." : "") ||
+    (record?.error || record?.recent_error || record?.state === "retrying" ? "A history check failed; retrying automatically while access remains enabled." : "");
   return <div className="sync-status">
+    <div className="sync-info-toolbar">
+      <button type="button" className="ghost" aria-expanded={shown} onClick={() => setShown(!shown)}>{shown ? "Sync details" : "Show sync details"}</button>
+      {!shown && <small role="status">{problem ? "Needs attention" : !ready ? "Waiting for connection or access" : record ? `Import ${importLabel(record.state)}` : "Checking messages"}</small>}
+      {shown && <button type="button" className="icon ghost notice-close" aria-label="Hide sync details" title="Hide these details; syncing continues" onClick={() => setShown(false)}><Icon name="x" size={16} /></button>}
+    </div>
+    {!shown && problem && <p role="alert" className="inline-alert">{problem}<button type="button" className="ghost" onClick={() => setShown(true)}>Review sync issue</button></p>}
+    <div hidden={!shown}>
     {automatic && <p className="inline-note" role="status">{
       !ready ? "Showing saved messages. Phone updates are waiting for a connection and enabled conversation access." :
       automaticError ? automaticError :
@@ -96,7 +109,7 @@ export function HistorySync({ id, ready, range, automatic = false }: { id: strin
     </div>}
 
     {error && <p role="alert">{error}</p>}
-  </details></div>;
+  </details></div></div>;
 }
 
 function importLabel(state: string): string {

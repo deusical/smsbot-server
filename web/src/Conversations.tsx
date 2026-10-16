@@ -9,6 +9,7 @@ import {
 import { ConversationHistory } from "./ConversationHistory";
 import { Icon } from "./Icon";
 import { Avatar, Segmented, Switch } from "./ui";
+import { useInfoPanel } from "./infoPanels";
 
 type Filter = "all" | "enrolled" | "available";
 export function ConversationsPage({
@@ -36,6 +37,7 @@ export function ConversationsPage({
   onLoadMore: () => void;
   onResume: () => void;
 }) {
+  const [archiveInfoShown, setArchiveInfoShown] = useInfoPanel("archive-scope");
   const [search, setSearch] = useState(""),
     [filter, setFilter] = useState<Filter>("all");
   const visible = conversations.filter(
@@ -94,9 +96,10 @@ export function ConversationsPage({
             ]}
           />
         </div>
-        {inbox && <p className="inline-note" role="status" aria-label="Background archive scope">
-          Background archive: {inbox.enabled ? `${inbox.scope === "all" ? "all individual conversations" : `${inbox.conversations.length} selected individual conversations`}; all available history by default; ${inbox.archive_retention_days ? `keep ${inbox.archive_retention_days} days` : "keep indefinitely"}. Imports can override the start date. Background work continues with this tab closed.` : "collection stopped; saved history stays readable."}
-        </p>}
+        {inbox && (archiveInfoShown ? <div className="inline-note archive-scope" role="status" aria-label="Background archive scope">
+          <span>Background archive: {inbox.enabled ? `${inbox.scope === "all" ? "all individual conversations" : `${inbox.conversations.length} selected individual conversations`}; all available history by default; ${inbox.archive_retention_days ? `keep ${inbox.archive_retention_days} days` : "keep indefinitely"}. Imports can override the start date. Background work continues with this tab closed.` : "collection stopped; saved history stays readable."}</span>
+          <button type="button" className="icon ghost notice-close" aria-label="Hide archive info" title="Hide this explanation; archiving continues" onClick={() => setArchiveInfoShown(false)}><Icon name="x" size={16} /></button>
+        </div> : <button type="button" className="ghost info-reopen" onClick={() => setArchiveInfoShown(true)}>Show archive info</button>)}
         {inbox?.enabled && state?.inbox_capture_gap && <div role="status" className="inline-note warn capture-summary">
           {state.inbox_capture_gap_unknown || !state.inbox_capture_gaps ? "A possible capture gap has unknown scope. The server cannot confirm which conversations or dates were affected." : `${state.inbox_capture_gaps.filter(g => g.state !== "checked_available").length} conversations have capture checks pending. This does not confirm missing messages. Open an affected conversation for its time range and repair status.`}
           {(state.inbox_capture_gaps ?? []).filter(g => g.state !== "checked_available" && conversations.some(c => c.id === g.conversation)).map(g => <button type="button" className="ghost" key={g.conversation} onClick={() => onSelect(g.conversation)}>Check {conversations.find(c => c.id === g.conversation)?.label}</button>)}

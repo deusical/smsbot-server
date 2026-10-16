@@ -2600,3 +2600,9 @@ label {
 .capture-summary > button { margin-left: 0; }
 .older { position: static; translate: none; flex: none; align-self: center; margin: 6px; }
 .older ~ .messages { padding-top: 16px; }
+
+.sync-info-toolbar { display: flex; align-items: center; gap: 8px; padding: 4px 12px; }
+.sync-info-toolbar small { color: var(--muted); font-size: 12px; }
+.notice-close { flex: none; margin-left: auto; }
+.archive-scope { align-items: flex-start; }
+.info-reopen { flex: none; align-self: flex-start; margin: 4px 14px; font-size: 12px; }
