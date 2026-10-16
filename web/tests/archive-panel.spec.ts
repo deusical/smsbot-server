@@ -1,0 +1,101 @@
+import {test, expect, type Page} from "@playwright/test";
+import {readFileSync} from "node:fs";
+async function prepare(page: Page, fullInbox = true) {
+  let archiveReads=0, mutations=0, checks=0;
+  const record={conversation:{id:"demo-chat"},state:"running",since:"2026-07-16T07:00:00Z",imported:0,oldest:"",last_sync:"2026-10-16T12:00:00Z",error:""};
+  await page.route("**/api/v1/inbox/settings",async route=>{const response=await route.fetch();await route.fulfill({json:{...await response.json(),enabled:fullInbox,scope:"all",archive_retention_days:0}});});
+  await page.route("**/api/v1/inbox/conversations",route=>route.fulfill({json:{conversations:[{id:"demo-chat",participant_id:"demo-peer",label:"Demo conversation",protocol:"RCS",writable:true,archived:fullInbox,enrolled:!fullInbox}],next_cursor:""}}));
+  await page.route("**/api/v1/inbox/archive",route=>{archiveReads++;return route.fulfill({json:fullInbox?[record]:[]});});
+  await page.route("**/api/v1/inbox/conversations/demo-chat/refresh",route=>{checks++;return route.fulfill({json:record});});
+  await page.route("**/api/v1/inbox/conversations/demo-chat/sync",route=>{mutations++;const body=route.request().postDataJSON();record.since=body.since;record.state=body.cancel?"cancelled":"queued";return route.fulfill({json:record});});
+  await page.route("**/api/v1/inbox/conversations/demo-chat/history?*",route=>route.fulfill({json:{messages:[{id:"synthetic-notice-message",direction:"incoming",text:"Synthetic saved message",attachments:[{id:"synthetic-file",name:"synthetic.pdf",mime:"application/pdf",size:100,archive_state:"pending"}],at:"2026-10-16T12:00:00Z"}],next_cursor:""}}));
+  const descriptor=JSON.parse(readFileSync(".test-state/connection.json","utf8"));
+  await page.goto("/");await page.getByLabel("Owner credential").fill(readFileSync(descriptor.owner,"utf8"));await page.getByRole("button",{name:"Sign in",exact:true}).click();
+  const openThread=async()=>{
+    await page.getByRole("button",{name:"Conversations",exact:true}).click();
+    await page.locator(".conversation").filter({hasText:"Demo conversation"}).getByRole("button",{name:/Demo conversation/}).click();
+  };
+  await openThread();
+  return {record,openThread,reads:()=>archiveReads,checks:()=>checks,mutations:()=>mutations};
+}
+test("conversation stays clear while automatic checks continue and Archive owns controls and failures",async({page})=>{
+  const app=await prepare(page);
+  await expect(page.getByText("Synthetic saved message",{exact:true})).toBeVisible();
+  await expect(page.getByRole("status",{name:"Background archive scope"})).toHaveCount(0);
+  await expect(page.getByText("Sync details",{exact:true})).toHaveCount(0);
+  await expect(page.getByRole("button",{name:"Archive all available history",exact:true})).toHaveCount(0);
+  await expect.poll(app.checks).toBeGreaterThan(0);
+  expect(app.reads()).toBe(0);
+  await expect(page.locator(".attachment-info")).not.toContainText("Original:");
+  await expect(page.locator(".attachment-info")).not.toContainText("pending");
+  await page.getByRole("button",{name:"Archive",exact:true}).click();
+  await expect(page.getByRole("status",{name:"Background archive scope"})).toBeVisible();
+  await expect(page.getByRole("status",{name:"Import progress"})).toContainText("Limited to messages from");
+  await expect(page.getByLabel("History from",{exact:true})).toBeHidden();
+  await page.getByRole("button",{name:"Archive all available history",exact:true}).click();
+  await expect(page.getByRole("status",{name:"Import progress"})).toContainText("All available history requested");
+  expect(app.record.since).toBe("");expect(app.mutations()).toBe(1);
+  app.record.error="history_fetch_failed";app.record.state="retrying";
+  await expect(page.getByRole("alert")).toContainText("A history check failed");
+  const before=app.reads();await expect.poll(app.reads).toBeGreaterThan(before);
+  await page.getByRole("button",{name:"Cancel history import",exact:true}).click();
+  await expect(page.getByRole("status",{name:"Import progress"})).toContainText("Import cancelled");
+  await page.screenshot({path:".test-state/archive-panel-desktop.png",fullPage:true});
+  await app.openThread();
+  await expect(page.getByText("A history check failed",{exact:false})).toHaveCount(0);
+  await expect(page.getByText("Synthetic saved message",{exact:true})).toBeVisible();
+  await page.screenshot({path:".test-state/conversation-clean-desktop.png"});
+});
+test("Archive stays usable on phones and retention drafts survive navigation",async({page})=>{
+  await page.setViewportSize({width:390,height:844});
+  const app=await prepare(page);
+  await page.getByRole("button",{name:"Back to conversations",exact:true}).click();
+  await page.getByRole("button",{name:"Archive",exact:true}).click();
+  await expect(page.getByRole("heading",{name:"Background archive",exact:true})).toBeVisible();
+  await page.getByLabel("Keep archived messages for (days)").fill("90");
+  await page.getByRole("button",{name:"Settings",exact:true}).click();
+  await page.getByRole("button",{name:"Archive",exact:true}).click();
+  await expect(page.getByLabel("Keep archived messages for (days)")).toHaveValue("90");
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBeTruthy();
+  await page.screenshot({path:".test-state/archive-panel-mobile.png",fullPage:true});
+  await app.openThread();
+  await expect(page.getByRole("status",{name:"Import progress"})).toHaveCount(0);
+  await expect(page.getByText("Synthetic saved message",{exact:true})).toBeVisible();
+  const box=await page.locator(".messages").boundingBox();expect(box?.height).toBeGreaterThan(200);
+  await page.screenshot({path:".test-state/conversation-clean-mobile.png"});
+  expect(app.mutations()).toBe(0);
+});
+
+test("Archive includes saved conversations beyond the discovered inbox page and resets per-conversation drafts",async({page})=>{
+  const app=await prepare(page);
+  const older={...app.record,conversation:{id:"synthetic-older-chat",participant_id:"synthetic-older-peer",label:"Older saved conversation",protocol:"RCS",writable:true,archived:true},since:"",state:"available_pages_exhausted"};
+  await page.route("**/api/v1/inbox/archive",route=>route.fulfill({json:[app.record,older]}));
+  await page.getByRole("button",{name:"Archive",exact:true}).click();
+  await expect(page.getByLabel("Archive overview")).toContainText("2 conversations tracked");
+  await expect(page.getByLabel("Archive export conversations").locator("option")).toContainText(["All archived conversations","Demo conversation","Older saved conversation"]);
+  await page.getByText("Advanced import options",{exact:true}).click();
+  await page.getByLabel("History from",{exact:true}).fill("2026-06-01");
+  await page.getByLabel("Archive conversation",{exact:true}).selectOption("synthetic-older-chat");
+  await page.getByText("Advanced import options",{exact:true}).click();
+  await expect(page.getByLabel("History from",{exact:true})).toHaveValue("");
+  await expect(page.getByRole("status",{name:"Import progress"})).toContainText("All available pages checked");
+  await page.getByLabel("Archive conversation",{exact:true}).selectOption("demo-chat");
+  await page.getByText("Advanced import options",{exact:true}).click();
+  await expect(page.getByLabel("History from",{exact:true})).toHaveValue("2026-07-16");
+});
+test("enrolled text-history import remains available in Archive with collection stopped",async({page})=>{
+  const app=await prepare(page,false);
+  let calls=0;
+  await page.route("**/api/v1/conversations/demo-chat/history/import",route=>{
+    expect(route.request().postDataJSON().cursor).toBe(calls===0?"":"synthetic-next");
+    calls++;return route.fulfill({json:{imported:2,next_cursor:calls===1?"synthetic-next":""}});
+  });
+  await expect(page.getByRole("button",{name:"Import phone history",exact:true})).toHaveCount(0);
+  await page.getByRole("button",{name:"Archive",exact:true}).click();
+  await page.getByRole("button",{name:"Import phone history",exact:true}).click();
+  await expect(page.getByText("2 messages saved from this phone page.",{exact:false})).toBeVisible();
+  await page.getByRole("button",{name:"Import phone history",exact:true}).click();
+  await expect(page.getByText("All available phone pages checked.",{exact:true})).toBeVisible();
+  await expect(page.getByRole("button",{name:"Import phone history",exact:true})).toBeDisabled();
+  expect(calls).toBe(2);expect(app.mutations()).toBe(0);
+});

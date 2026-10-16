@@ -1,4 +1,5 @@
 const paths: Record<string, string> = {
+  archive: "M3 4h18v5H3V4Zm2 5v12h14V9M9 13h6",
   home: "M3 10.5 12 3l9 7.5M5 9v12h14V9M9 21v-8h6v8",
   conversations:
     "M21 11.5a8.5 8.5 0 0 1-8.5 8.5H4l-1 1 1-5.5A8.5 8.5 0 1 1 21 11.5Z",

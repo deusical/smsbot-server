@@ -11,7 +11,6 @@ import {
   type Settings as BotSettings,
   type State,
 } from "./api";
-import { ArchiveSettings } from "./ArchiveSettings";
 import { Confirmation } from "./Confirmation";
 import { GenerationEditor } from "./Generation";
 import { Icon } from "./Icon";
@@ -92,7 +91,7 @@ export function SettingsPage({
           <InboxSection {...shared} conversations={conversations} />
         )}
         {section === "devices" && <DevicesSection {...shared} state={state} />}
-        {section === "backup" && <><BackupSection {...shared} />{state?.capabilities.includes("archive_backup")&&<ArchiveSettings conversations={conversations}/>}</>}
+        {section === "backup" && <BackupSection {...shared} />}
       </div>
     </div>
   );
@@ -615,9 +614,6 @@ function InboxSection({
           />
         </Group>
       )}
-      {draft && <Group title="History archive retention" description="Archive history is independent of bot job retention. Zero keeps archived messages forever.">
-        <label>Keep archived messages for (days)<input type="number" min={0} max={3650} value={draft.archive_retention_days ?? 0} onChange={(e) => workspace.editInbox({archive_retention_days: Number(e.target.value)})} /></label>
-      </Group>}
       {draft && (
         <Group
           title="Attachment limits"

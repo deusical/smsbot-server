@@ -158,8 +158,7 @@ test("archive exports select readable format, download and delete the package",a
  try{
   await emit(page,"export-ui-message","Synthetic readable export message");
   await page.reload();
-  await page.getByRole("button",{name:"Settings",exact:true}).click();
-  await page.getByRole("button",{name:"Import & export",exact:true}).click();
+  await page.getByRole("button",{name:"Archive",exact:true}).click();
   await expect(page.getByRole("heading",{name:"Original file archive",exact:true})).toBeVisible();
   await page.getByLabel("Archive export format").selectOption("plaintext");
   await page.getByRole("button",{name:"Start message export",exact:true}).click();

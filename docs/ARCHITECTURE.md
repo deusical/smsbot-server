@@ -59,8 +59,8 @@ Attachment expiry is enforced with a keyed read-only timestamp check; previews a
 
 The owner inbox now uses a separate `internal/history` read-job service. Enabling
 collection starts resumable available-history ingestion and periodic recent
-reconciliation, independently of bot replies and global sending pause. The thread's
-History sync panel can request all available history or an RFC3339-backed date
+reconciliation, independently of bot replies and global sending pause. The Archive
+panel can request all available history or an RFC3339-backed date
 cutoff, cancel a backfill, and show saved counts, state and last successful sync.
 Stopping collection preserves the owner-readable local archive; it does not grant
 legacy clients access. Groups remain excluded and fetching/sending rechecks exact
@@ -209,13 +209,17 @@ the active warning for that range; unavailable history can still contain gaps.
 Unknown scope is explicitly unverified and cannot be automatically declared repaired.
 
 
-Routine archive-scope and conversation-sync explanations can be hidden with close
-buttons and reopened from compact controls. Two boolean display preferences survive
-navigation/reload in tab session storage (memory fallback when storage is blocked);
-no conversation identifiers, messages, API state or credentials are stored there.
-Hidden panels stay mounted so polling, automatic checks and date drafts continue.
-Errors remain visible outside the hidden details with a review action. Display
-controls never call sync cancellation, change collection consent or affect sending.
+Archive operations live in the dedicated owner Archive page. It polls the complete
+archive job list independently of paginated conversation discovery and shows scope,
+per-conversation progress, capture checks, original-file policy, exports and shared
+workspace retention settings. The primary action requests all available history;
+date-limited imports remain an explicit advanced option. Mutation epochs reject
+stale progress reads, and changing conversations cannot reuse another date draft.
+Conversation pages contain no archive diagnostics or controls. A separate headless
+hook preserves debounced/coalesced viewport reconciliation, hidden-tab handling,
+return-to-page checks and retries independently of archive UI mounting. Message
+pagination and attachment viewing remain in Conversations. Collection consent,
+participant checks, command freshness and Live/Pause semantics are unchanged.
 
 ## CI execution
 

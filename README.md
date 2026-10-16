@@ -144,8 +144,8 @@ See [feature parity](docs/PARITY.md), [recovery](docs/BACKUP.md), [API contract]
 
 The owner inbox now uses a separate `internal/history` read-job service. Enabling
 collection starts resumable available-history ingestion and periodic recent
-reconciliation, independently of bot replies and global sending pause. The thread's
-History sync panel can request all available history or an RFC3339-backed date
+reconciliation, independently of bot replies and global sending pause. The Archive
+panel can request all available history or an RFC3339-backed date
 cutoff, cancel a backfill, and show saved counts, state and last successful sync.
 Stopping collection preserves the owner-readable local archive; it does not grant
 legacy clients access. Groups remain excluded and fetching/sending rechecks exact
@@ -186,3 +186,14 @@ Completed checks say available range rechecked; they do not establish completene
 Unknown-scope failures remain explicitly unverified. Gap records are encrypted and
 owner-only. Attachments continue downloading separately. Live Google gap-repair and
 manual-import priority acceptance remain pending; automated checks use offline data.
+
+
+### Archive panel
+
+Use **Archive** in the main navigation for collection scope, all tracked conversation
+imports, capture checks, retention, original-file limits and message exports.
+**Archive all available history** removes a conversation's import date limit;
+optional date limits live under **Advanced import options**. Importing and viewing
+history never runs old commands. Collection access remains in Settings > Messages
+& privacy. Conversations show messages, search and compose without archive status
+or controls; viewed sections still reconcile automatically in the background.

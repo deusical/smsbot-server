@@ -34,8 +34,8 @@ Initialization reuses an existing protected key only for a new state database; i
 
 The owner inbox now uses a separate `internal/history` read-job service. Enabling
 collection starts resumable available-history ingestion and periodic recent
-reconciliation, independently of bot replies and global sending pause. The thread's
-History sync panel can request all available history or an RFC3339-backed date
+reconciliation, independently of bot replies and global sending pause. The Archive
+panel can request all available history or an RFC3339-backed date
 cutoff, cancel a backfill, and show saved counts, state and last successful sync.
 Stopping collection preserves the owner-readable local archive; it does not grant
 legacy clients access. Groups remain excluded and fetching/sending rechecks exact
@@ -62,7 +62,7 @@ sync/edit acceptance is pending; automated coverage uses offline fixtures.
 
 ## Original files and streaming message archives
 
-Settings > Import & export contains **Original file archive** and **Message history
+The Archive page contains **Original file archive** and **Message history
 export**. Original preservation defaults to enabled for conversations with collection
 consent, with a 10 GiB disk quota and no per-file application cap. This is independent
 of bot replies, sending pause and viewing/upload limits. Set either limit to zero for

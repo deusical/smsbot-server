@@ -119,7 +119,7 @@ export function MessageAttachment({
         <span>
           <strong>{attachment.name}</strong>
           <small>
-            {attachment.preview_only ? "Thumbnail preview ? " : ""}{attachment.archive_state ? `Original: ${attachment.archive_state.replaceAll("_", " ")} · ` : "Original: pending · "}{fileSize(attachment.size)} · {attachment.mime}
+            {attachment.preview_only ? "Thumbnail preview ? " : ""}{fileSize(attachment.size)} · {attachment.mime}
           </small>
         </span>
         <button

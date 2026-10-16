@@ -82,7 +82,7 @@ test("view changes coalesce behind a pending refresh and offline history stays r
   try {
     await open(page);
     await expect(page.getByText("Synthetic viewed message 199", { exact: true })).toBeVisible();
-    await expect(page.getByText(/Phone updates are waiting/)).toBeVisible();
+    await expect(page.getByText(/Phone updates are waiting/)).toHaveCount(0);
     expect(ranges).toHaveLength(0);
     ready = true;
     await expect.poll(() => ranges.length, { timeout: 10000 }).toBe(1);
@@ -101,7 +101,8 @@ test("view changes coalesce behind a pending refresh and offline history stays r
     await expect.poll(() => ranges.length).toBe(3);
     failRefresh = true;
     await page.locator(".messages").evaluate(el => { el.scrollTop = el.scrollHeight; });
-    await expect(page.getByText("Could not check this section. Saved messages remain available; retrying automatically.", { exact: true })).toBeVisible();
+    await expect.poll(() => ranges.length).toBeGreaterThan(3);
+    await expect(page.getByText("Could not check this section. Saved messages remain available; retrying automatically.", { exact: true })).toHaveCount(0);
     await expect(page.getByText("Synthetic viewed message 199", { exact: true })).toBeVisible();
   } finally { release(); await cleanup(); }
 });

@@ -1,6 +1,5 @@
-import { CaptureChecks } from "./CaptureChecks";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { HistorySync } from "./HistorySync";
+import { useViewedHistoryRefresh } from "./useViewedHistoryRefresh";
 import {
   useEffect,
   useLayoutEffect,
@@ -118,14 +117,15 @@ export function ConversationHistory({
     [error, setError] = useState(""),
     [sendError, setSendError] = useState(""),
     [sending, setSending] = useState(false),
-    [loading, setLoading] = useState(false),
-    [notice, setNotice] = useState("");
+    [loading, setLoading] = useState(false);
   const changeCursor = useRef<number | null>(null);
   const changesBusy = useRef(false);
   const changesDone = useRef<Promise<void> | null>(null);
   const messagesRef = useRef<Message[]>([]);
   messagesRef.current = messages;
   const [viewRange, setViewRange] = useState<{since: string; until: string} | null>(null);
+  useViewedHistoryRefresh(conversation.id, !!state?.transport_ready && inboxAllows(inbox, conversation),
+    !!state?.capabilities.includes("archive_refresh") && (!!inbox?.enabled || !!conversation.archived), viewRange ?? undefined);
   const openedAt = useRef(new Date().toISOString());
   const rangeFrame = useRef(0);
   function updateViewedRange() {
@@ -186,11 +186,6 @@ export function ConversationHistory({
       );
       setImportFinished(
         !result.next_cursor || result.next_cursor === importCursor,
-      );
-      setNotice(
-        result.imported > 0
-          ? `Saved ${result.imported} additional message${result.imported === 1 ? "" : "s"} from this phone page. Old commands never run.`
-          : "Phone page checked; no additional messages were saved. Existing saved messages may have been refreshed.",
       );
       const first = messagesRef.current[0];
       const before = first
@@ -352,7 +347,7 @@ export function ConversationHistory({
       if (cursor) await load(cursor, true);
       else if (inbox?.load_older && !importFinished) {
         const imported = await importPage();
-        setOlderNotice(imported ? "Loaded older messages from your phone." : "No additional messages were saved. Check history sync progress.");
+        setOlderNotice(imported ? "Loaded older messages from your phone." : "No additional messages are available yet.");
       }
     } finally {
       loadingOlder.current = false;
@@ -367,7 +362,6 @@ export function ConversationHistory({
     changeCursor.current = null;
     setCursor("");
     setError("");
-    setNotice("");
     void load();
     return () => {
       request.current++;
@@ -405,7 +399,7 @@ export function ConversationHistory({
         : !conversation.writable
           ? "This conversation can’t receive replies."
           : archiveReadOnly
-            ? "Sync is off. This archive is read-only."
+            ? "Sending is disabled for this conversation."
           : !(conversation.enrolled || inbox?.enabled)
             ? "Turn on bot replies to message this conversation."
             : "";
@@ -506,34 +500,9 @@ export function ConversationHistory({
           >
             <Icon name="search" size={18} />
           </button>
-          {!inbox?.enabled && !conversation.archived &&
-            state?.capabilities.includes("history_import") && (
-              <button
-                type="button"
-                className="icon ghost"
-                title={
-                  importFinished
-                    ? "All available phone history imported"
-                    : "Import older messages from your phone"
-                }
-                aria-label={
-                  importFinished
-                    ? "All available phone history imported"
-                    : "Import phone history"
-                }
-                disabled={
-                  busy || loading || importFinished || !state.transport_ready
-                }
-                onClick={() => void importPage()}
-              >
-                <Icon name="history" size={18} />
-              </button>
-            )}
           {enrollControl}
         </div>
       </header>
-      {state?.capabilities.includes("archive_history") && (inbox?.enabled || conversation.archived) && <HistorySync key={conversation.id} id={conversation.id} ready={!!state?.transport_ready && inboxAllows(inbox, conversation)} range={viewRange ?? undefined} automatic={!!state.capabilities.includes("archive_refresh")} />}
-      <CaptureChecks gaps={(state?.inbox_capture_gaps ?? []).filter(g => g.conversation === conversation.id)} ready={!!state?.transport_ready && inboxAllows(inbox, conversation)} />
       {searchOpen && (
         <label className="search thread-search">
           <Icon name="search" size={16} />
@@ -556,19 +525,6 @@ export function ConversationHistory({
       {error && (
         <p role="alert" className="inline-alert">
           {error}
-        </p>
-      )}
-      {notice && (
-        <p role="status" className="inline-note">
-          {notice}
-          <button
-            type="button"
-            className="icon ghost"
-            aria-label="Dismiss"
-            onClick={() => setNotice("")}
-          >
-            <Icon name="x" size={14} />
-          </button>
         </p>
       )}
       {showOlder && (

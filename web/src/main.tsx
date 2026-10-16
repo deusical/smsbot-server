@@ -11,6 +11,7 @@ import {
 import { ActivityFeed, ActivityPage } from "./Activity";
 import { CommandsPage } from "./Commands";
 import { Confirmation } from "./Confirmation";
+import { ArchivePage } from "./ArchivePage";
 import { ConversationsPage } from "./Conversations";
 import { Icon } from "./Icon";
 import { SettingsPage } from "./Settings";
@@ -23,6 +24,7 @@ const pages = [
   "Conversations",
   "Commands",
   "Activity",
+  "Archive",
   "Settings",
 ] as const;
 type Page = (typeof pages)[number];
@@ -496,6 +498,7 @@ function App() {
             act={act}
           />
         )}
+        {page === "Archive" && <ArchivePage conversations={conversations} inbox={inbox} state={state} workspace={workspace} />}
         {page === "Settings" && (
           <SettingsPage
             workspace={workspace}
