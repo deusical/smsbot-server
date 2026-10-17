@@ -210,13 +210,6 @@ function App() {
           });
           setDiscoveryPartial(!!discovered.partial);
           listFetched.current = { revision: s.conversations_revision ?? "", at: Date.now() };
-        } else {
-          const rows = await api<Conversation[]>("/conversations");
-          if (session !== sessionRevision.current) return;
-          setConversations(rows);
-          setConversationCursor("");
-          paginatedConversations.current = false;
-          setDiscoveryPartial(false);
         }
         setError("");
       } else

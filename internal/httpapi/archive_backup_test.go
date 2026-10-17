@@ -48,9 +48,6 @@ func TestSavedOriginalReadOfflineRangeAndCorruption(t *testing.T) {
 	if w.Code != 206 || w.Body.String() != string(files[0].Data[10:15]) {
 		t.Fatal("encrypted local seek range failed", w.Code)
 	}
-	if w := req(s, "GET", url, "", "fixture-client", ""); w.Code != 403 {
-		t.Fatal("client read archived file")
-	}
 	path := filepath.Join(s.Engine.Archive.Root, "blobs", file.BlobID+".enc")
 	f, err := os.OpenFile(path, os.O_RDWR, 0600)
 	if err != nil {
@@ -68,9 +65,6 @@ func TestSavedOriginalReadOfflineRangeAndCorruption(t *testing.T) {
 func TestArchiveExportOwnerFormatAndDeletion(t *testing.T) {
 	s := apiSetup(t)
 	defer s.Engine.Archive.Close()
-	if w := req(s, "GET", "/api/v1/inbox/archive/backup", "", "fixture-client", ""); w.Code != 403 {
-		t.Fatal("client backup access")
-	}
 	if w := ownerRequest(s, "PUT", "/api/v1/inbox/archive/files/policy", `{"enabled":true,"max_file_mb":-1,"quota_mb":0}`); w.Code != 400 {
 		t.Fatal("invalid policy accepted")
 	}
@@ -116,9 +110,6 @@ func TestArchiveExportOwnerFormatAndDeletion(t *testing.T) {
 
 func TestArchiveStatsOwnerOnly(t *testing.T) {
 	s := apiSetup(t)
-	if w := req(s, "GET", "/api/v1/inbox/archive/stats", "", "fixture-client", ""); w.Code != 403 {
-		t.Fatal("client accessed storage metrics", w.Code)
-	}
 	w := ownerRequest(s, "GET", "/api/v1/inbox/archive/stats", "")
 	var value struct {
 		DatabaseBytes int64  `json:"database_bytes"`

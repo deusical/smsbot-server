@@ -1,15 +1,72 @@
 # Security and privacy
 
-This is a development milestone. Do not expose its loopback listener publicly. Optional direct TLS/private-origin hosting, offline backup/restore and retention are implemented. Personal deployment and independent security review remain separate acceptance steps.
+SmsBot is experimental software that holds powerful credentials. Read this before you
+pair a real account.
 
-The service pins Go 1.27.2 and golang.org/x/net v0.60.0 after the initial dependency scan found patched security issues. Run security-check.ps1 against the current vulnerability database before promotion. The module-level OpenPGP advisory is tracked: the service does not import the affected packages and must not add them.
+## What you are trusting it with
 
-Google cookies are broad account credentials, not narrowly scoped bot permissions. Pair locally; never paste them into agent conversations or browser dashboard fields. No cookie strings, personal content or raw upstream errors are logged. libgm logging is discarded. Setup accepts bounded stdin and parses copied cURL; it never executes it.
+- **Google session cookies.** Pairing imports cookies from a Messages for web session.
+  They are broad account credentials, not narrowly scoped bot permissions. Anyone who
+  controls the host (or a backup of its state plus the master key) can act as that
+  session until it is revoked in your Google account.
+- **Your messages.** With collection on, the service keeps the text and files of the
+  conversations you enable, until retention removes them.
+- **The owner credential.** One long random value, shown only in the file created at
+  initialization. Whoever holds it can use the dashboard.
 
-AES-GCM binds ciphertext to a scope (job/message/session). Master keys live outside the database directory; Windows wraps them with CurrentUser DPAPI, Linux requires mode 0600 or stricter. DPAPI state cannot simply be copied to a different Windows identity or Linux host. Credentials are hashed in SQLite; Android credentials are Keystore-encrypted on the client.
+## How it is protected
 
-Keep the owner credential file local and protected. Browser sessions expire after 12 hours unless the owner chooses "Keep me signed in", which lasts until sign-out; **Sign out everywhere** (Settings > Devices) revokes every browser session; Android credentials remain until revoked. This milestone has no owner-credential rotation UI. Client credentials cannot administer credentials, provider keys/configuration or owner inbox preferences/APIs; additional private inbox text is filtered from their legacy message/history APIs. Compatible endpoint settings and keys are owner-only, encrypted, and never returned with a key; cleartext HTTP is accepted only for loopback endpoints. Messages/settings remain sensitive to someone controlling the host or authenticated owner.
+- **Encryption at rest.** Message bodies, queued plans, attachment payloads, pairing
+  sessions and settings are sealed with AES-GCM bound to a scope (job, message,
+  session). The master key lives outside the database directory. Windows wraps it with
+  the current user's DPAPI; Linux requires a key file with mode 0600 or stricter. A state
+  directory copied without its key cannot be read, and DPAPI-protected keys do not move
+  between Windows accounts or to Linux.
+- **No secrets in logs.** Cookies, message bodies, contacts and raw upstream errors are
+  never logged; libgm logging is discarded. Pairing reads bounded input from stdin and
+  parses a copied cURL request without ever executing it.
+- **Owner only.** There is a single owner and no other credential type. Sign-in uses
+  HttpOnly, SameSite=Strict cookies (12 hours, or until sign-out with **Keep me signed
+  in**, renewed while in use). State-changing requests need the exact `Origin`; the exact
+  `Host` is enforced to stop DNS rebinding; API responses are `no-store`; the content
+  security policy blocks remote scripts and framing. Bearer credentials are not
+  accepted. **Sign out everywhere** (Settings > Devices) revokes every session.
+- **Hosting.** Loopback by default. A non-loopback bind requires direct TLS and an exact
+  HTTPS origin; a private HTTPS proxy in front of loopback is supported. Forwarded
+  headers never decide trust or origin. See [Hosting](HOSTING.md).
+- **Participant rules.** Enrollment and collection use protocol participant IDs, not
+  names. Groups, stale or historical data, outgoing echoes and incomplete attachments
+  never run commands, and file-bearing messages never run commands even through a
+  caption.
+- **Files.** Previews and downloads recheck consent and exact conversation identity.
+  Only allowlisted image, audio and video types render inline; other files download
+  with a sandbox policy.
+- **AI providers.** Used only when a command selects a model and is invoked. Prompts and
+  any context you opted in go to OpenRouter or the compatible endpoint you configured;
+  cleartext HTTP is allowed only for loopback endpoints. Keys are write-only and never
+  returned. Configure only endpoints you trust.
+- **Sending safety.** Intent is persisted before submission; an uncertain submission is
+  never retried automatically; pause cannot retract what was already submitted.
 
-Enrollments use protocol participant IDs, not names or manually associated phone numbers. Groups, stale/historical data, outgoing echoes and incomplete attachments are excluded from command routing. Opt-in owner inbox capture can display fresh outgoing messages, attachments and explicitly fetched historical messages without routing them. File-bearing messages never enter command routing, including their captions. File bytes, names, upstream references and decryption keys are encrypted at rest. Downloads recheck current consent and exact conversation identity; remote keys never reach clients. Active documents download with nosniff and sandbox headers; only allowlisted image/audio/video types render inline. Pause cannot retract already-submitted messages. Unknown submission is never retried automatically.
+## What it does not protect against
 
-Fixture tests use isolated directories and cannot create a Google connection. Live AI uses OpenRouter or an owner-configured OpenAI-compatible endpoint only when selected by the model and explicitly invoked; the fixture provider cannot make HTTP requests. Compatible endpoint URLs are owner-supplied destinations, so configure only trusted services. Tests/screenshot fixtures contain synthetic data only. Do not publish private state directories, keys, cookies, credentials or real screenshots.
+- Someone who controls the host account or can read both the state and the key.
+- Google changing or blocking the unofficial client, or revoking the session.
+- Mistakes you configure: an over-broad command, a public origin, a shared owner file.
+- Anything outside the offline test suite: live behavior is only partly verified, see
+  [Known limitations](LIMITATIONS.md). There has been no independent security audit.
+
+## Operating advice
+
+Run it on a private host, behind Tailscale or similar, as a dedicated non-root user.
+Keep the state and key directories private and on local storage, back them up with
+[the offline tools](BACKUP.md), and never paste cookies, owner credentials or message
+content into issues, chat tools or screenshots. Check dependencies before you build
+(`security-check.ps1` runs `govulncheck` and `npm audit`). The service must not import
+`golang.org/x/crypto/openpgp`, which has an open advisory with no fix.
+
+## Reporting a vulnerability
+
+Please report security problems privately through GitHub's "Report a vulnerability"
+(Security tab) rather than a public issue, and do not include real credentials or
+message content. Expect a best-effort response; this is a personal project.

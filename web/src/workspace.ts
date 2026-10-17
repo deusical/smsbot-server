@@ -146,7 +146,7 @@ export function useWorkspace(
     setInboxDraft(inboxSaved);
     setSaveError("");
   }
-  /** Picks up changes made elsewhere (another session or the Android app). */
+  /** Picks up changes made elsewhere (for example another browser session). */
   function reload() {
     setLoads((n) => n + 1);
   }

@@ -13,7 +13,7 @@ async function login(page: Page) {
     page.getByRole("heading", { name: "Home", exact: true }),
   ).toBeVisible();
 }
-test("authenticated command journey and credential revocation", async ({
+test("authenticated command journey and sign-out", async ({
   page,
 }) => {
   await login(page);
@@ -38,22 +38,6 @@ test("authenticated command journey and credential revocation", async ({
   await page.getByRole("button", { name: "Activity", exact: true }).click();
   await expect(page.locator(".feed-row").first()).toContainText("Submitted");
   await page.getByRole("button", { name: "Settings", exact: true }).click();
-  await page.getByRole("button", { name: "Devices", exact: true }).click();
-  await page.getByRole("button", { name: "Add device" }).click();
-  await expect(page.getByLabel("New device credential")).toBeVisible();
-  const token = await page.getByLabel("New device credential").inputValue();
-  const before = await page.request.get("/api/v1/state", {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  expect(before.status()).toBe(200);
-  await page
-    .getByRole("button", { name: "Revoke", exact: true })
-    .last()
-    .click();
-  const after = await page.request.get("/api/v1/state", {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  expect(after.status()).toBe(401);
   await page.getByRole("button", { name: "Sign out", exact: true }).click();
   await expect(page.getByLabel("Owner credential")).toBeVisible();
   expect(await page.evaluate(() => localStorage.length)).toBe(0);
@@ -106,9 +90,11 @@ test("actual fixture AI activity exposes flat telemetry and omitted zero token f
   const state = (await (
     await page.request.get("/api/v1/state")
   ).json()) as State;
-  const conversations = (await (
-    await page.request.get("/api/v1/conversations")
-  ).json()) as Conversation[];
+  const conversations = (
+    (await (
+      await page.request.get("/api/v1/inbox/conversations")
+    ).json()) as { conversations: Conversation[] }
+  ).conversations;
   const target = conversations.find((c) => c.id === "demo-chat")!;
   try {
     expect(

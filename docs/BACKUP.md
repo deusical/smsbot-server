@@ -4,7 +4,7 @@ The inbox is locally retained history, not a claim of complete Google Messages h
 
 Retention accepts zero (disabled) or 1–3650 days. Expiry removes old message records and clears old terminal job plans. Durable incoming IDs and uncertain outbound transaction evidence remain, preventing expired messages or backups from enabling automatic replay. Active queued, processing, approval and submitting plans are not expired mid-operation. SQLite expiry is logical deletion; it does not promise forensic erasure of filesystem snapshots or old backups.
 
-Backup and restore are offline operations: stop the service and hold its exclusive state-directory lock. The backup is authenticated AES-GCM ciphertext sealed under the existing vault key and the `backup` scope. It includes enrollment, message and attachment ciphertext, job evidence, the provider usage ledger and explicitly allowed configuration settings. Usage is retained so recovery does not reset budget accounting. Provider keys, owner/client credentials, browser sessions, opt-in memory and Google pairing/cookies are excluded. Backups contain sensitive enrolled identities and encrypted message payloads; keep them private outside the repository.
+Backup and restore are offline operations: stop the service and hold its exclusive state-directory lock. The backup is authenticated AES-GCM ciphertext sealed under the existing vault key and the `backup` scope. It includes enrollment, message and attachment ciphertext, job evidence, the provider usage ledger and explicitly allowed configuration settings. Usage is retained so recovery does not reset budget accounting. Provider keys, owner credentials, browser sessions, opt-in memory and Google pairing/cookies are excluded. Backups contain sensitive enrolled identities and encrypted message payloads; keep them private outside the repository.
 
 Restore requires a fresh initialized database with no enrollment, jobs or messages and the same vault key. Local destination credentials remain local. It rejects unsupported backup versions, newer database schemas, tampering and invalid message ciphertext, and commits atomically. The restored bot starts paused. Queued/generating/processing/approval work is cancelled, interrupted submitting work becomes `unknown_submission`, and every saved plan is removed. Restore does not submit messages or authorize retry of uncertain sends. Review enrollment and supply excluded credentials locally before enabling.
 
@@ -28,36 +28,6 @@ The output file must be new. For restore, choose a fresh state directory, use th
 ```
 
 Initialization reuses an existing protected key only for a new state database; it does not replace that key. A running state directory is locked against backup, restore and cookie updates. Reconfigure the excluded provider/Google credentials locally afterward.
-
-
-## Local history synchronization
-
-The owner inbox now uses a separate `internal/history` read-job service. Enabling
-collection starts resumable available-history ingestion and periodic recent
-reconciliation, independently of bot replies and global sending pause. The Archive
-panel can request all available history or an RFC3339-backed date
-cutoff, cancel a backfill, and show saved counts, state and last successful sync.
-Stopping collection preserves the owner-readable local archive; it does not grant
-legacy clients access. Groups remain excluded and fetching/sending rechecks exact
-participant identity. Local text pages and search work while the phone is offline.
-
-Archive retention is separate from the bot's job retention: zero keeps archived
-messages indefinitely, otherwise the archive policy expires them. Already expired
-messages must be recovered from available upstream history. Schema v5 adds encrypted
-verified archive identities/checkpoints, encrypted observed content revisions, a
-local change feed and a conversation/time index. Existing service backups include
-these records but restore jobs cancelled, without collection consent. Historical
-commands and restored messages never execute. Previously observed revisions can be
-read through the owner API; upstream intermediate edits are not guaranteed. Recent
-reconciliation overlaps by 30 minutes and pages back to the prior successful sync;
-older ranges can be rescanned explicitly. No arbitrary old-edit detection guarantee
-is made without a covering scan or update event.
-
-The UI preloads local pages near the top and virtualizes long loaded histories.
-A local change cursor refreshes edits and new rows beyond the newest 50-message
-page. Original files are preserved by the separate archive service; encrypted streaming
-backups and readable exports include saved originals and explicit missing counts. Live Google
-sync/edit acceptance is pending; automated coverage uses offline fixtures.
 
 
 ## Original files and streaming message archives
@@ -122,3 +92,5 @@ use fresh state. Restore does not bring over pairing, providers, credentials, se
 jobs or collection consent. Archives are stopped and sending is paused. Review and
 enable collection locally if desired. Existing Windows DPAPI identity limitations
 still apply; encrypted archives are not a portable key-transfer mechanism.
+
+How the local archive stays current is described in [DESIGN_NOTES.md](DESIGN_NOTES.md#local-history-synchronization).

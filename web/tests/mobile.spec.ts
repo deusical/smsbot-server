@@ -98,9 +98,9 @@ test.describe("phone layout", () => {
   }) => {
     await login(page);
     const origin = new URL(page.url()).origin;
-    const rows: Conversation[] = await (
-      await page.request.get("/api/v1/conversations")
-    ).json();
+    const rows: Conversation[] = (
+      await (await page.request.get("/api/v1/inbox/conversations")).json()
+    ).conversations;
     const demo = rows.find((c) => c.id === "demo-chat")!;
     if (!demo.enrolled)
       await page.request.post("/api/v1/enrollment", {

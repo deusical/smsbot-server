@@ -13,11 +13,6 @@ import (
 
 func TestInboxOwnerOnlyAndLegacyVisibility(t *testing.T) {
 	s := apiSetup(t)
-	for _, path := range []string{"/api/v1/inbox/settings", "/api/v1/inbox/conversations", "/api/v1/inbox/conversations/demo-chat/history"} {
-		if w := req(s, "GET", path, "", "fixture-client", ""); w.Code != 403 {
-			t.Fatal("client inbox access", w.Code)
-		}
-	}
 	cfg, _ := s.Engine.InboxSettings()
 	cfg.Enabled = true
 	s.Engine.SetInboxSettings(context.Background(), cfg)
@@ -114,9 +109,6 @@ func TestViewedRefreshOwnerConsentAndRangeValidation(t *testing.T) {
 	s := apiSetup(t)
 	path := "/api/v1/inbox/conversations/demo-chat/refresh"
 	body := `{"since":"2026-01-01T00:00:00Z","until":"2026-01-02T00:00:00Z"}`
-	if w := req(s, "POST", path, body, "fixture-client", "http://localhost:8787"); w.Code != 403 {
-		t.Fatal("client requested private sync", w.Code)
-	}
 	if w := ownerRequest(s, "POST", path, body); w.Code != 409 {
 		t.Fatal("sync enabled without consent", w.Code)
 	}

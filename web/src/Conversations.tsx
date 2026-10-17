@@ -190,9 +190,6 @@ export function ConversationsPage({
                         {c.enrolled && <span className="on-tag">Bot on</span>}
                       </>
                     )}
-                    {!c.group && (c.preview || typing.has(c.id)) && c.enrolled && (
-                      <span className="on-tag">Bot on</span>
-                    )}
                   </small>
                 </span>
                 <span className="conversation-meta">

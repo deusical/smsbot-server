@@ -34,7 +34,10 @@ try {
         if ($LASTEXITCODE -ne 0) { throw 'Go vet failed' }
     }
     $buildArguments = @('build', '-trimpath')
-    if (-not $DebugSymbols) { $buildArguments += '-ldflags=-s -w' }
+    $stamp = (& git describe --tags --always --dirty 2>$null)
+    if (-not $stamp) { $stamp = 'dev' }
+    if ($DebugSymbols) { $buildArguments += "-ldflags=-X main.version=$stamp" }
+    else { $buildArguments += "-ldflags=-s -w -X main.version=$stamp" }
     $buildArguments += @('-o', 'bin/smsbot.exe', './cmd/smsbot')
     & go @buildArguments
     if ($LASTEXITCODE -ne 0) { throw 'Build failed' }

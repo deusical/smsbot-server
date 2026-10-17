@@ -3,7 +3,6 @@ import {
   api,
   defaultAttachmentLimits,
   ApiError,
-  type Client,
   type CompatibleProviderStatus,
   type Configuration,
   type Conversation,
@@ -681,15 +680,6 @@ function DevicesSection({
   notify,
   state,
 }: SectionProps & { state: State | null }) {
-  const [clients, setClients] = useState<Client[]>([]),
-    [label, setLabel] = useState(""),
-    [created, setCreated] = useState<Client | null>(null),
-    [loadError, setLoadError] = useState("");
-  useEffect(() => {
-    api<Client[]>("/clients")
-      .then(setClients)
-      .catch(() => setLoadError("Couldn’t load devices."));
-  }, []);
   return (
     <>
       <Group
@@ -725,106 +715,6 @@ function DevicesSection({
           <Icon name="logout" size={16} />
           Sign out everywhere
         </button>
-      </Group>
-      <Group
-        title="Android app"
-        description="Connect the SmsBot Android app to this server. Devices can pause and control the bot, but can’t manage keys or other devices."
-      >
-        <form
-          className="inline-form"
-          onSubmit={(e) => {
-            e.preventDefault();
-            void act(async () => {
-              const client = await api<Client>("/clients", "POST", {
-                label: label.trim() || "Android phone",
-              });
-              setCreated(client);
-              setLabel("");
-              setClients(await api<Client[]>("/clients"));
-            }, false);
-          }}
-        >
-          <Field label="Device name">
-            <input
-              maxLength={80}
-              placeholder="Android phone"
-              value={label}
-              onChange={(e) => setLabel(e.target.value)}
-            />
-          </Field>
-          <button className="primary" disabled={busy}>
-            <Icon name="plus" size={16} />
-            Add device
-          </button>
-        </form>
-        {created && (
-          <div className="credential">
-            <div>
-              <strong>Copy this into the Android app now</strong>
-              <small>It won’t be shown again.</small>
-            </div>
-            <div className="credential-row">
-              <input
-                aria-label="New device credential"
-                readOnly
-                type="password"
-                value={created.token ?? ""}
-              />
-              <button
-                type="button"
-                className="primary"
-                onClick={() =>
-                  void navigator.clipboard
-                    .writeText(created.token ?? "")
-                    .then(() => notify("Credential copied."))
-                    .catch(() =>
-                      notify(
-                        "Clipboard unavailable. Select the field and copy it.",
-                      ),
-                    )
-                }
-              >
-                <Icon name="copy" size={15} />
-                Copy
-              </button>
-              <button
-                type="button"
-                className="icon ghost"
-                aria-label="Hide credential"
-                onClick={() => setCreated(null)}
-              >
-                <Icon name="x" size={16} />
-              </button>
-            </div>
-          </div>
-        )}
-        {loadError && <p className="inline-alert">{loadError}</p>}
-        <ul className="device-list">
-          {clients.map((c) => (
-            <li key={c.id}>
-              <span className="device-icon">
-                <Icon name="phone" size={17} />
-              </span>
-              <strong>{c.label}</strong>
-              <button
-                type="button"
-                className="ghost small danger"
-                disabled={busy}
-                onClick={() =>
-                  void act(async () => {
-                    await api(`/clients/${c.id}`, "DELETE");
-                    setClients(await api<Client[]>("/clients"));
-                    if (created?.id === c.id) setCreated(null);
-                    notify(`${c.label} disconnected.`);
-                  }, false)
-                }
-              >
-                Revoke
-              </button>
-            </li>
-          ))}
-          {!clients.length && <li className="muted">No devices connected.</li>}
-        </ul>
       </Group>
     </>
   );
@@ -879,7 +769,7 @@ function BackupSection({ workspace, busy, act, notify }: SectionProps) {
           <Icon name="refresh" />
           <strong>Import recipe</strong>
           <small>
-            Replaces commands and settings. Android command packs are added.
+            Replaces commands and settings with a recipe file you exported earlier.
           </small>
           <input
             type="file"

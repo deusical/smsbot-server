@@ -63,9 +63,6 @@ func TestAttachmentOwnerAccessDownloadHeadersAndRevocation(t *testing.T) {
 	}
 	p, _ := s.Engine.InboxPage(context.Background(), "demo-chat", "", "", 50)
 	url := "/api/v1/inbox/conversations/demo-chat/messages/" + p.Messages[0].ID + "/attachments/" + files[0].ID + "?inline=1"
-	if w := req(s, "GET", url, "", "fixture-client", ""); w.Code != 403 {
-		t.Fatal("client file access permitted", w.Code)
-	}
 	if w := req(s, "GET", url, "", "", ""); w.Code != 401 {
 		t.Fatal("anonymous file access permitted", w.Code)
 	}

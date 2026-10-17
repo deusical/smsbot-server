@@ -60,7 +60,7 @@ test("large loaded archive bounds rendered rows",async({page})=>{
 
 test("enrolled archived conversation composes with collection stopped",async({page})=>{
  const previous=await setup(page);
- const before=await(await page.request.get("/api/v1/conversations")).json();
+ const before=(await(await page.request.get("/api/v1/inbox/conversations")).json()).conversations;
  const wasEnrolled=before.find((c:{id:string,enrolled:boolean})=>c.id==="demo-chat")?.enrolled;
  try{
   await emit(page,"archive-stopped-compose","Synthetic archived text");
@@ -84,7 +84,7 @@ test("enrolled archived conversation composes with collection stopped",async({pa
 
 test("lost inbox acknowledgement keeps its route and key after collection stops",async({page})=>{
  const previous=await setup(page);
- const before=await(await page.request.get("/api/v1/conversations")).json();
+ const before=(await(await page.request.get("/api/v1/inbox/conversations")).json()).conversations;
  const wasEnrolled=before.find((c:{id:string,enrolled:boolean})=>c.id==="demo-chat")?.enrolled;
  let legacyCalls=0;const keys:string[]=[];
  await page.route("**/api/v1/conversations/demo-chat/compose",route=>{legacyCalls++;return route.continue()});

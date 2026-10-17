@@ -21,7 +21,7 @@ func apiSetup(t *testing.T) *Server {
 	}
 	t.Cleanup(func() { s.DB.Close() })
 	s.AddCredential("fixture-owner", "test", "owner", 0)
-	s.AddCredential("fixture-client", "test", "client", 0)
+	s.AddCredential("fixture-client", "test", "session", 0)
 	return New(bot.New(s, transport.NewFixture()), "http://localhost:8787", true)
 }
 func req(s *Server, method, path, body, token, origin string) *httptest.ResponseRecorder {
@@ -30,7 +30,10 @@ func req(s *Server, method, path, body, token, origin string) *httptest.Response
 		r.Header.Set("Content-Type", "application/json")
 	}
 	if token != "" {
-		r.Header.Set("Authorization", "Bearer "+token)
+		r.AddCookie(&http.Cookie{Name: "smsbot_session", Value: token})
+	}
+	if origin == "" && method != "GET" {
+		origin = "http://localhost:8787"
 	}
 	if origin != "" {
 		r.Header.Set("Origin", origin)
@@ -57,10 +60,12 @@ func TestAuthAndHost(t *testing.T) {
 		t.Fatal("cross origin accepted")
 	}
 }
-func TestClientCannotGrantCredentials(t *testing.T) {
+func TestClientCredentialEndpointsAreGone(t *testing.T) {
 	s := apiSetup(t)
-	if w := req(s, "POST", "/api/v1/clients", `{"label":"test"}`, "fixture-client", ""); w.Code != 403 {
-		t.Fatal(w.Code)
+	for _, c := range []struct{ method, path string }{{"POST", "/api/v1/clients"}, {"GET", "/api/v1/clients"}, {"DELETE", "/api/v1/clients/x"}, {"GET", "/api/v1/conversations"}} {
+		if w := req(s, c.method, c.path, "", "fixture-client", ""); w.Code < 400 {
+			t.Fatal(c.method, c.path, w.Code)
+		}
 	}
 }
 
@@ -129,9 +134,6 @@ func TestRememberedLoginNeverExpiresAndRevokesEverywhere(t *testing.T) {
 	if w := get(short); w.Code != 200 || len(w.Result().Cookies()) != 0 {
 		t.Fatal(w.Code, w.Result().Cookies())
 	}
-	if w := req(s, "POST", "/api/v1/sessions/revoke", "", "fixture-client", ""); w.Code != 403 {
-		t.Fatal("client revoked owner sessions", w.Code)
-	}
 	// Signing out from a remembered session must not also renew its cookie.
 	r := httptest.NewRequest("POST", s.Origin+"/api/v1/sessions/revoke", nil)
 	r.AddCookie(long)
@@ -160,18 +162,26 @@ func TestInstallableAppShellHeaders(t *testing.T) {
 	}
 }
 
-func TestRevokedBearerDoesNotFallBackToOwnerCookie(t *testing.T) {
+func TestBearerCredentialsAreNeverHonoured(t *testing.T) {
 	s := apiSetup(t)
 	w := req(s, "POST", "/api/v1/login", `{"token":"fixture-owner"}`, "", s.Origin)
 	cookie := w.Result().Cookies()[0]
-	s.Engine.Store.Revoke(store.Hash("fixture-client"))
+	// A bearer header alone never authenticates, even with a known credential value.
 	r := httptest.NewRequest("GET", s.Origin+"/api/v1/state", nil)
-	r.AddCookie(cookie)
 	r.Header.Set("Authorization", "Bearer fixture-client")
 	w = httptest.NewRecorder()
 	s.ServeHTTP(w, r)
 	if w.Code != 401 {
-		t.Fatal("revoked client inherited owner session")
+		t.Fatal("bearer header authenticated", w.Code)
+	}
+	// And it does not interfere with a valid browser session.
+	r = httptest.NewRequest("GET", s.Origin+"/api/v1/state", nil)
+	r.AddCookie(cookie)
+	r.Header.Set("Authorization", "Bearer anything")
+	w = httptest.NewRecorder()
+	s.ServeHTTP(w, r)
+	if w.Code != 200 {
+		t.Fatal("bearer header broke the session", w.Code)
 	}
 }
 func TestEnrollmentValidation(t *testing.T) {

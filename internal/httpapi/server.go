@@ -42,14 +42,9 @@ func New(e *bot.Engine, origin string, fixture bool) *Server {
 	s.mux.HandleFunc("POST /api/v1/sessions/revoke", s.protected(s.revokeSessions))
 	s.mux.HandleFunc("GET /api/v1/state", s.protected(s.state))
 	s.mux.HandleFunc("POST /api/v1/pause", s.protected(s.pause))
-	s.mux.HandleFunc("GET /api/v1/conversations", s.protected(s.conversations))
 	s.mux.HandleFunc("POST /api/v1/enrollment", s.protected(s.enroll))
 	s.mux.HandleFunc("DELETE /api/v1/enrollment/{id}", s.protected(s.unenroll))
 	s.mux.HandleFunc("GET /api/v1/activity", s.protected(s.activity))
-	s.mux.HandleFunc("GET /api/v1/conversations/{id}/messages", s.protected(s.messages))
-	s.mux.HandleFunc("POST /api/v1/clients", s.protected(s.client))
-	s.mux.HandleFunc("DELETE /api/v1/clients/{id}", s.protected(s.revoke))
-	s.mux.HandleFunc("GET /api/v1/clients", s.protected(s.clients))
 	s.mux.HandleFunc("POST /api/v1/fixture/incoming", s.protected(s.incoming))
 	s.mux.HandleFunc("POST /api/v1/fixture/typing", s.protected(s.fixtureTyping))
 	sub, _ := fs.Sub(assets, "assets")
@@ -127,37 +122,25 @@ func (s *Server) decode(w http.ResponseWriter, r *http.Request, v any) bool {
 }
 func (s *Server) protected(fn http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-		isClient := r.Header.Get("Authorization") != "" && s.Engine.Store.Credential(token, "client")
-		if r.Header.Get("Authorization") != "" && !isClient {
+		// Only owner browser sessions are accepted; bearer credentials are never honoured.
+		c, e := r.Cookie("smsbot_session")
+		if e != nil {
 			s.bad(w, 401, "authentication_required")
 			return
 		}
-		if !isClient {
-			c, e := r.Cookie("smsbot_session")
-			if e != nil {
-				s.bad(w, 401, "authentication_required")
-				return
-			}
-			expires, ok := s.Engine.Store.SessionExpiry(c.Value)
-			if !ok {
-				s.bad(w, 401, "authentication_required")
-				return
-			}
-			// Remembered sessions never expire server-side; renew the cookie on
-			// reads so the browser's own cap (about 400 days) slides while it is
-			// in use. Writes such as sign-out must not race a renewal.
-			if expires == 0 && r.Method == "GET" {
-				s.sessionCookie(w, c.Value, rememberedCookieAge)
-			}
-			if r.Method != "GET" && r.Header.Get("Origin") != s.Origin {
-				s.bad(w, 403, "origin_required")
-				return
-			}
+		expires, ok := s.Engine.Store.SessionExpiry(c.Value)
+		if !ok {
+			s.bad(w, 401, "authentication_required")
+			return
 		}
-		// Client credentials can control the bot, but cannot grant/revoke other credentials.
-		if isClient && (strings.HasPrefix(r.URL.Path, "/api/v1/clients") || strings.HasPrefix(r.URL.Path, "/api/v1/sessions/") || strings.HasPrefix(r.URL.Path, "/api/v1/inbox/") || r.URL.Path == "/api/v1/provider-key" || r.URL.Path == "/api/v1/compatible-provider" || r.URL.Path == "/api/v1/models/refresh-compatible") {
-			s.bad(w, 403, "owner_required")
+		// Remembered sessions never expire server-side; renew the cookie on
+		// reads so the browser's own cap (about 400 days) slides while it is
+		// in use. Writes such as sign-out must not race a renewal.
+		if expires == 0 && r.Method == "GET" {
+			s.sessionCookie(w, c.Value, rememberedCookieAge)
+		}
+		if r.Method != "GET" && r.Header.Get("Origin") != s.Origin {
+			s.bad(w, 403, "origin_required")
 			return
 		}
 		fn(w, r)
@@ -235,19 +218,17 @@ func (s *Server) state(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if r.Header.Get("Authorization") == "" {
-		gaps, unknown := s.Engine.CaptureGapStatus()
-		active := unknown
-		for _, g := range gaps {
-			if g.State != "checked_available" {
-				active = true
-			}
+	gaps, unknown := s.Engine.CaptureGapStatus()
+	active := unknown
+	for _, g := range gaps {
+		if g.State != "checked_available" {
+			active = true
 		}
-		value["inbox_capture_gap"] = active
-		value["conversations_revision"] = s.Engine.ConversationRevision()
-		value["inbox_capture_gaps"] = gaps
-		value["inbox_capture_gap_unknown"] = unknown
 	}
+	value["inbox_capture_gap"] = active
+	value["conversations_revision"] = s.Engine.ConversationRevision()
+	value["inbox_capture_gaps"] = gaps
+	value["inbox_capture_gap_unknown"] = unknown
 	s.json(w, 200, value)
 }
 func (s *Server) pause(w http.ResponseWriter, r *http.Request) {
@@ -270,17 +251,6 @@ func (s *Server) pause(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.state(w, r)
-}
-func (s *Server) conversations(w http.ResponseWriter, r *http.Request) {
-	list, e := s.Engine.Transport.Conversations(r.Context())
-	if e != nil {
-		s.bad(w, 503, "transport_unavailable")
-		return
-	}
-	for i := range list {
-		list[i].Enrolled = s.Engine.Store.Enrolled(list[i].ID, list[i].ParticipantID)
-	}
-	s.json(w, 200, list)
 }
 func (s *Server) enroll(w http.ResponseWriter, r *http.Request) {
 	var in struct {
@@ -321,71 +291,6 @@ func (s *Server) activity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.json(w, 200, jobs)
-}
-func (s *Server) messages(w http.ResponseWriter, r *http.Request) {
-	var exists int
-	if e := s.Engine.Store.DB.QueryRow("SELECT count(*) FROM enrollment WHERE conversation=?", r.PathValue("id")).Scan(&exists); e != nil {
-		s.bad(w, 500, "storage_error")
-		return
-	}
-	if exists == 0 {
-		s.bad(w, 403, "enrollment_required")
-		return
-	}
-	list, e := s.Engine.Store.Messages(r.PathValue("id"))
-	if e != nil {
-		s.bad(w, 500, "storage_error")
-		return
-	}
-	s.json(w, 200, list)
-}
-func (s *Server) client(w http.ResponseWriter, r *http.Request) {
-	var in struct {
-		Label string `json:"label"`
-	}
-	if !s.decode(w, r, &in) {
-		return
-	}
-	label := strings.TrimSpace(in.Label)
-	if label == "" || len(label) > 80 {
-		s.bad(w, 400, "invalid_label")
-		return
-	}
-	token := store.ID() + store.ID()
-	if e := s.Engine.Store.AddCredential(token, label, "client", 0); e != nil {
-		s.bad(w, 500, "storage_error")
-		return
-	}
-	s.json(w, 201, map[string]string{"id": store.Hash(token), "token": token, "label": label})
-}
-func (s *Server) revoke(w http.ResponseWriter, r *http.Request) {
-	if e := s.Engine.Store.Revoke(r.PathValue("id")); e != nil {
-		s.bad(w, 500, "storage_error")
-		return
-	}
-	s.json(w, 200, map[string]bool{"revoked": true})
-}
-func (s *Server) clients(w http.ResponseWriter, r *http.Request) {
-	rows, e := s.Engine.Store.DB.Query("SELECT hash,label FROM credentials WHERE kind='client'")
-	if e != nil {
-		s.bad(w, 500, "storage_error")
-		return
-	}
-	defer rows.Close()
-	out := []map[string]string{}
-	for rows.Next() {
-		var id, label string
-		if e = rows.Scan(&id, &label); e != nil {
-			s.bad(w, 500, "storage_error")
-			return
-		}
-		out = append(out, map[string]string{"id": id, "label": label})
-	}
-	if rows.Err() != nil {
-		s.bad(w, 500, "storage_error")
-		return
-	}
-	s.json(w, 200, out)
 }
 func (s *Server) incoming(w http.ResponseWriter, r *http.Request) {
 	if !s.Fixture {

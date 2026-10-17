@@ -254,19 +254,22 @@ test("history search and pagination preserve messages, compose sends on Enter", 
 }) => {
   await setup(page);
   let compose: unknown;
-  await page.route("**/api/v1/conversations", (route) =>
+  await page.route("**/api/v1/inbox/conversations", (route) =>
     route.fulfill({
-      json: [
-        {
-          id: "fixture-thread",
-          participant_id: "fixture-person",
-          label: "Synthetic thread",
-          protocol: "fixture",
-          group: false,
-          writable: true,
-          enrolled: true,
-        },
-      ],
+      json: {
+        conversations: [
+          {
+            id: "fixture-thread",
+            participant_id: "fixture-person",
+            label: "Synthetic thread",
+            protocol: "fixture",
+            group: false,
+            writable: true,
+            enrolled: true,
+          },
+        ],
+        next_cursor: "",
+      },
     }),
   );
   await page.route("**/api/v1/state", (route) =>
@@ -277,7 +280,7 @@ test("history search and pagination preserve messages, compose sends on Enter", 
         transport_ready: true,
         transport: "fixture",
         fixture: true,
-        capabilities: [],
+        capabilities: ["archive_history"],
       },
     }),
   );

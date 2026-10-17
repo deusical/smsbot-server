@@ -1,8 +1,8 @@
 # Private hosting and phone access
 
-The default listener is `127.0.0.1:8787` over HTTP for local development. The installable phone app and Android release clients require HTTPS. A remote phone needs a trusted HTTPS certificate and network access to the host; it cannot connect to the host's loopback address directly.
+The default listener is `127.0.0.1:8787` over HTTP for local development. The installable phone app requires HTTPS. A remote phone needs a trusted HTTPS certificate and network access to the host; it cannot connect to the host's loopback address directly.
 
-For private access, run the service on loopback and put an authenticated private HTTPS proxy in front of it. Set `--origin=https://YOUR_PRIVATE_HOST` to the exact browser/Android URL origin, including a nondefault port if used. The proxy must preserve that exact Host header when forwarding to `127.0.0.1:8787`. Browser mutations must send the same Origin. The service ignores Forwarded/X-Forwarded-* headers and never uses them to decide host, origin or authentication. Keep the backend loopback-only and limit the proxy's users to the owner’s intended devices. Application login and revocable Android credentials remain required.
+For private access, run the service on loopback and put an authenticated private HTTPS proxy in front of it. Set `--origin=https://YOUR_PRIVATE_HOST` to the exact browser URL origin, including a nondefault port if used. The proxy must preserve that exact Host header when forwarding to `127.0.0.1:8787`. Browser mutations must send the same Origin. The service ignores Forwarded/X-Forwarded-* headers and never uses them to decide host, origin or authentication. Keep the backend loopback-only and limit the proxy's users to the owner’s intended devices. The owner login remains required.
 
 ## Tailscale on an always-on host
 
@@ -25,7 +25,7 @@ The installed app caches only the dashboard's static files so it opens instantly
 
 ## Direct TLS
 
-Supply both `--tls-cert` and `--tls-key`. A nonloopback listener requires direct TLS and an explicit HTTPS origin. Certificates must cover the origin hostname and chain to a CA trusted by the phone/browser. Do not disable Android certificate validation. Protect the private key and allow only intended private-network sources in the host firewall.
+Supply both `--tls-cert` and `--tls-key`. A nonloopback listener requires direct TLS and an explicit HTTPS origin. Certificates must cover the origin hostname and chain to a CA trusted by the phone/browser. Protect the private key and allow only intended private-network sources in the host firewall.
 
 ```sh
 smsbot --data=/srv/smsbot/state --key=/srv/smsbot-vault/master.key \
