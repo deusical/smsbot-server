@@ -106,6 +106,8 @@ export function ConversationHistory({
     setFiles(next);
     setSendError("");
   }
+  const [away, setAway] = useState(false),
+    [dragging, setDragging] = useState(false);
   const [hasNew, setHasNew] = useState(false),
     [olderNotice, setOlderNotice] = useState("");
   const [messages, setMessages] = useState<Message[]>([]),
@@ -118,6 +120,8 @@ export function ConversationHistory({
     [sendError, setSendError] = useState(""),
     [sending, setSending] = useState(false),
     [loading, setLoading] = useState(false);
+  const canAttach =
+    !!inbox?.enabled && !!state?.capabilities.includes("attachments") && !sending;
   const changeCursor = useRef<number | null>(null);
   const changesBusy = useRef(false);
   const changesDone = useRef<Promise<void> | null>(null);
@@ -544,8 +548,9 @@ export function ConversationHistory({
           scheduleViewedRange();
           const el = scroll.current;
           if (!el) return;
-          if (el.scrollHeight - el.scrollTop - el.clientHeight < 80)
-            setHasNew(false);
+          const fromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+          if (fromBottom < 80) setHasNew(false);
+          setAway(fromBottom > 400);
           const upwards = el.scrollTop < previousScrollTop.current;
           previousScrollTop.current = el.scrollTop;
           if (upwards && (inbox?.enabled || conversation.archived) && el.scrollTop < 250) void loadOlder();
@@ -649,6 +654,27 @@ export function ConversationHistory({
         })}
         </div>
       </div>
+      {away && !hasNew && (
+        <button
+          type="button"
+          className="jump-latest icon"
+          aria-label="Jump to latest"
+          title="Jump to latest"
+          onClick={() => {
+            const el = scroll.current;
+            if (el)
+              el.scrollTo({
+                top: el.scrollHeight,
+                behavior: window.matchMedia?.("(prefers-reduced-motion: reduce)")
+                  .matches
+                  ? "auto"
+                  : "smooth",
+              });
+          }}
+        >
+          <Icon name="arrowdown" size={18} />
+        </button>
+      )}
       {hasNew && (
         <button
           type="button"
@@ -711,7 +737,24 @@ export function ConversationHistory({
             ))}
           </div>
         )}
-        <div className="composer-box">
+        <div
+          className={"composer-box" + (dragging ? " dragging" : "")}
+          onDragOver={(e) => {
+            if (!canAttach || !e.dataTransfer.types.includes("Files")) return;
+            e.preventDefault();
+            setDragging(true);
+          }}
+          onDragLeave={(e) => {
+            if (!e.currentTarget.contains(e.relatedTarget as Node | null))
+              setDragging(false);
+          }}
+          onDrop={(e) => {
+            setDragging(false);
+            if (!canAttach || !e.dataTransfer.files.length) return;
+            e.preventDefault();
+            selectFiles(Array.from(e.dataTransfer.files));
+          }}
+        >
           {inbox?.enabled && state?.capabilities.includes("attachments") && (
             <>
               <input
@@ -740,6 +783,16 @@ export function ConversationHistory({
           )}
           <textarea
             ref={composer}
+            onPaste={(e) => {
+              // Pasted screenshots/images become attachments. Text pastes are untouched.
+              if (!canAttach) return;
+              const images = Array.from(e.clipboardData.files).filter((f) =>
+                f.type.startsWith("image/"),
+              );
+              if (!images.length) return;
+              e.preventDefault();
+              selectFiles(images.map(pastedName));
+            }}
             rows={1}
             maxLength={24000}
             aria-label="Message"
@@ -805,4 +858,15 @@ export function ConversationHistory({
       </form>
     </div>
   );
+}
+
+// Browsers name every pasted screenshot "image.png"; give each a distinct name.
+let pasteCounter = 0;
+function pastedName(file: File): File {
+  if (file.name && file.name !== "image.png") return file;
+  const now = new Date(),
+    pad = (n: number) => String(n).padStart(2, "0");
+  const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+  const extension = file.type.split("/")[1]?.replace("jpeg", "jpg").replace(/[^a-z0-9]/gi, "") || "png";
+  return new File([file], `image-${stamp}-${++pasteCounter}.${extension}`, { type: file.type, lastModified: file.lastModified });
 }

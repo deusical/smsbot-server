@@ -13,6 +13,7 @@ import { CommandsPage } from "./Commands";
 import { Confirmation } from "./Confirmation";
 import { ArchivePage } from "./ArchivePage";
 import { ConversationsPage } from "./Conversations";
+import { clearSeen } from "./conversationOrder";
 import { Icon } from "./Icon";
 import { SettingsPage } from "./Settings";
 import { Avatar, Switch } from "./ui";
@@ -130,6 +131,7 @@ function App() {
   }
   function clearSession() {
     sessionRevision.current++;
+    clearSeen();
     setSignedIn(false);
     setState(null);
     setJobs([]);

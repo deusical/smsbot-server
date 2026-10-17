@@ -258,3 +258,23 @@ func (s *Store) MessageChangedSince(conv, upstream, txn string, seq int64) (bool
 	err := s.DB.QueryRow("SELECT EXISTS(SELECT 1 FROM message_changes WHERE conversation=? AND seq>? AND (message=? OR message IN (SELECT message FROM message_alias WHERE alias=?) OR (?!='' AND message=?)))", conv, seq, alias, alias, txn, txn).Scan(&changed)
 	return changed, err
 }
+
+// LatestMessageTimes returns the newest saved message time per conversation so
+// the owner list can order conversations by recent activity without decrypting
+// message bodies.
+func (s *Store) LatestMessageTimes(ctx context.Context) (map[string]string, error) {
+	rows, err := s.DB.QueryContext(ctx, "SELECT conversation,MAX(at) FROM messages GROUP BY conversation")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var conv, at string
+		if err = rows.Scan(&conv, &at); err != nil {
+			return nil, err
+		}
+		out[conv] = at
+	}
+	return out, rows.Err()
+}

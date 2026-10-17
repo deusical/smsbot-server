@@ -1160,6 +1160,16 @@ components:
           type: boolean
         enrolled:
           type: boolean
+        last_message_at:
+          type: string
+          format: date-time
+          description: Newest message time (phone list or newest saved local message). Owner inbox listing only; optional.
+        unread:
+          type: boolean
+          description: Phone unread flag; optional display hint.
+        pinned:
+          type: boolean
+          description: Phone pinned flag; optional display hint.
     Job:
       type: object
       properties:

@@ -83,8 +83,10 @@ func (s *Server) inboxConversations(w http.ResponseWriter, r *http.Request) {
 	}
 	p.Conversations = eligible
 
+	latest, _ := s.Engine.Store.LatestMessageTimes(r.Context())
 	for i := range p.Conversations {
 		p.Conversations[i].Enrolled = s.Engine.Store.Enrolled(p.Conversations[i].ID, p.Conversations[i].ParticipantID)
+		p.Conversations[i].LastMessageAt = newestTime(p.Conversations[i].LastMessageAt, latest[p.Conversations[i].ID])
 	}
 	s.json(w, 200, p)
 }
@@ -217,4 +219,20 @@ func (s *Server) inboxAttachment(w http.ResponseWriter, r *http.Request) {
 	controller := http.NewResponseController(w)
 	_ = controller.SetWriteDeadline(time.Time{})
 	http.ServeContent(deadlineResponse{ResponseWriter: w, controller: controller}, r, info.Name, time.Time{}, content)
+}
+
+// newestTime returns the later of two RFC3339 timestamps, ignoring invalid input.
+// Saved local messages are fresher than the phone list, which is cached briefly.
+func newestTime(a, b string) string {
+	ta, errA := time.Parse(time.RFC3339Nano, a)
+	tb, errB := time.Parse(time.RFC3339Nano, b)
+	switch {
+	case errA != nil && errB != nil:
+		return ""
+	case errA != nil:
+		return tb.UTC().Format(time.RFC3339Nano)
+	case errB != nil || !tb.After(ta):
+		return ta.UTC().Format(time.RFC3339Nano)
+	}
+	return tb.UTC().Format(time.RFC3339Nano)
 }

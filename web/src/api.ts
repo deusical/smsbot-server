@@ -24,6 +24,9 @@ export type Conversation = {
   group: boolean;
   writable: boolean;
   enrolled: boolean;
+  last_message_at?: string;
+  unread?: boolean;
+  pinned?: boolean;
 };
 export type Job = {
   id: string;

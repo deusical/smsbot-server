@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   api,
   inboxAllows,
@@ -7,6 +7,7 @@ import {
   type State,
 } from "./api";
 import { ConversationHistory } from "./ConversationHistory";
+import { formatListTime, sortConversations, useSeen } from "./conversationOrder";
 import { Icon } from "./Icon";
 import { Avatar, Segmented, Switch } from "./ui";
 
@@ -38,7 +39,9 @@ export function ConversationsPage({
 }) {
   const [search, setSearch] = useState(""),
     [filter, setFilter] = useState<Filter>("all");
-  const visible = conversations.filter(
+  const searchBox = useRef<HTMLInputElement>(null);
+  const { markSeen, isUnread } = useSeen();
+  const visible = sortConversations(conversations).filter(
     (c) =>
       (filter === "all" ||
         (filter === "enrolled" && c.enrolled) ||
@@ -47,6 +50,42 @@ export function ConversationsPage({
   );
   const current = conversations.find((c) => c.id === selected);
   const open = (c: Conversation) => c.archived || c.enrolled || inboxAllows(inbox, c);
+  // An open conversation counts as read, including messages that arrive while it is open.
+  useEffect(() => markSeen(current), [current?.id, current?.last_message_at]);
+  // Keyboard shortcuts: Ctrl/Cmd+K focuses search; Alt+Up/Down switches conversation.
+  const shortcut = useRef<(event: KeyboardEvent) => void>(() => {});
+  shortcut.current = (event) => {
+    if (event.isComposing) return;
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+      event.preventDefault();
+      searchBox.current?.focus();
+      searchBox.current?.select();
+    } else if (
+      event.altKey &&
+      !event.ctrlKey &&
+      !event.metaKey &&
+      (event.key === "ArrowUp" || event.key === "ArrowDown")
+    ) {
+      // On macOS, Option+Up/Down moves the caret inside text fields; leave it alone there.
+      const target = event.target as HTMLElement | null;
+      const editing =
+        !!target &&
+        (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName));
+      if (editing && /Mac|iPhone|iPad/.test(navigator.platform)) return;
+      const choices = visible.filter(open);
+      if (!choices.length) return;
+      event.preventDefault();
+      const at = choices.findIndex((c) => c.id === selected);
+      const step = event.key === "ArrowDown" ? 1 : -1;
+      const next = at < 0 ? (step > 0 ? 0 : choices.length - 1) : at + step;
+      if (choices[next]) onSelect(choices[next].id);
+    }
+  };
+  useEffect(() => {
+    const handler = (event: KeyboardEvent) => shortcut.current(event);
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
   const toggle = (c: Conversation) =>
     act(() =>
       c.enrolled
@@ -72,11 +111,19 @@ export function ConversationsPage({
           <label className="search">
             <Icon name="search" size={16} />
             <input
+              ref={searchBox}
               aria-label="Search conversations"
+              aria-keyshortcuts="Control+K Meta+K"
               type="search"
-              placeholder="Search"
+              placeholder="Search (Ctrl+K)"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") {
+                  setSearch("");
+                  e.currentTarget.blur();
+                }
+              }}
             />
           </label>
           <Segmented
@@ -101,7 +148,8 @@ export function ConversationsPage({
               className={
                 "conversation" +
                 (selected === c.id ? " selected" : "") +
-                (c.enrolled ? " enrolled" : "")
+                (c.enrolled ? " enrolled" : "") +
+                (isUnread(c) ? " unread" : "")
               }
             >
               <button
@@ -119,7 +167,11 @@ export function ConversationsPage({
               >
                 <Avatar label={c.label} />
                 <span className="conversation-text">
-                  <strong>{c.label}</strong>
+                  <strong>
+                    {c.label}
+                    {isUnread(c) && <span className="sr-only"> (unread)</span>}
+                    {c.pinned && <span className="sr-only"> (pinned)</span>}
+                  </strong>
                   <small>
                     {c.group ? (
                       "Group, not supported"
@@ -130,6 +182,17 @@ export function ConversationsPage({
                       </>
                     )}
                   </small>
+                </span>
+                <span className="conversation-meta">
+                  {c.last_message_at && (
+                    <time dateTime={c.last_message_at}>
+                      {formatListTime(c.last_message_at)}
+                    </time>
+                  )}
+                  <span className="conversation-flags" aria-hidden="true">
+                    {c.pinned && <Icon name="pin" size={13} />}
+                    {isUnread(c) && <span className="unread-dot" />}
+                  </span>
                 </span>
               </button>
               {enrollSwitch(c, true)}

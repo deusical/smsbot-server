@@ -38,6 +38,8 @@ const paths: Record<string, string> = {
   refresh: "M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7",
   more: "M5 12h.01M12 12h.01M19 12h.01",
   user: "M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm-8 9a8 8 0 0 1 16 0",
+  pin: "M9 3h6l-1 6 3 3H7l3-3-1-6Zm3 9v9",
+  arrowdown: "M12 5v14m-6-6 6 6 6-6",
   history: "M3 12a9 9 0 1 0 3-6.7L3 8m0-5v5h5m4-1v5l3 2",
 };
 export function Icon({

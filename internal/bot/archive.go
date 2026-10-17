@@ -248,6 +248,8 @@ func (e *Engine) ArchiveConversations() ([]transport.Conversation, error) {
 		c := a.Conversation
 		c.Enrolled = e.Store.Enrolled(c.ID, c.ParticipantID)
 		c.Archived = true
+		// Ordering hints are volatile phone state, not part of the saved identity.
+		c.LastMessageAt, c.Unread, c.Pinned = "", false, false
 		out = append(out, c)
 	}
 	return out, nil

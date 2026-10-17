@@ -17,6 +17,11 @@ type Conversation struct {
 	Group         bool   `json:"group"`
 	Writable      bool   `json:"writable"`
 	Enrolled      bool   `json:"enrolled"`
+	// LastMessageAt (RFC3339), Unread and Pinned mirror the phone list for ordering.
+	// They are volatile display hints and never part of identity checks.
+	LastMessageAt string `json:"last_message_at,omitempty"`
+	Unread        bool   `json:"unread,omitempty"`
+	Pinned        bool   `json:"pinned,omitempty"`
 }
 type Incoming struct {
 	Attachments    []media.File `json:"-"`
@@ -59,7 +64,7 @@ type Fixture struct {
 func NewFixture() *Fixture     { return &Fixture{Online: true, Sent: map[string]string{}} }
 func (f *Fixture) Ready() bool { f.mu.Lock(); defer f.mu.Unlock(); return f.Online }
 func (f *Fixture) Conversations(context.Context) ([]Conversation, error) {
-	return []Conversation{{ID: "demo-chat", ParticipantID: "demo-peer", Label: "Demo conversation", Protocol: "RCS", Writable: true}, {ID: "demo-sms", ParticipantID: "demo-sms-peer", Label: "SMS example", Protocol: "SMS", Writable: true}, {ID: "demo-group", Label: "Group example", Protocol: "RCS", Group: true, Writable: false}}, nil
+	return []Conversation{{ID: "demo-chat", ParticipantID: "demo-peer", Label: "Demo conversation", Protocol: "RCS", Writable: true}, {ID: "demo-sms", ParticipantID: "demo-sms-peer", Label: "SMS example", Protocol: "SMS", Writable: true, Pinned: true}, {ID: "demo-group", Label: "Group example", Protocol: "RCS", Group: true, Writable: false}}, nil
 }
 func (f *Fixture) Send(ctx context.Context, conv, txn, text string) (Receipt, error) {
 	f.mu.Lock()

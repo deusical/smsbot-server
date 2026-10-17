@@ -4,6 +4,7 @@ import {ArchiveSettings} from "./ArchiveSettings";
 import {CaptureChecks} from "./CaptureChecks";
 import {HistorySync, importLabel, stateTone, type Archive} from "./HistorySync";
 import {Icon} from "./Icon";
+import {sortConversations} from "./conversationOrder";
 import {Avatar, Field, Group, Notice, StatusPill} from "./ui";
 import type {Workspace} from "./workspace";
 type StorageStats = {original_bytes:number;original_files:number;database_bytes:number;export_bytes:number;temporary_bytes:number;total_bytes:number;messages:number;quota_bytes:number;measured_at:string};
@@ -55,7 +56,7 @@ export function ArchivePage({conversations, inbox, state, workspace}: {conversat
   },[supported,reload]);
   const known = new Map(rows.map(row => [row.conversation.id,{...row.conversation, archived:true}]));
   for (const conversation of conversations) known.set(conversation.id,{...conversation,archived:known.has(conversation.id) || !!conversation.archived});
-  const choices=[...known.values()].filter(item=>item.archived || inboxAllows(inbox,item));
+  const choices=sortConversations([...known.values()]).filter(item=>item.archived || inboxAllows(inbox,item));
   const conversation=choices.find(item=>item.id===selected) ?? choices.find(item=>item.id===rows[0]?.conversation.id) ?? choices[0];
   const current:Archive | undefined=conversation && (rows.find(row=>row.conversation.id===conversation.id) ?? {conversation,state:"not_started",imported:0,since:"",last_sync:"",oldest:""});
   const filtered=choices.filter(item=>(item.label || "Saved conversation").toLocaleLowerCase().includes(query.toLocaleLowerCase()));

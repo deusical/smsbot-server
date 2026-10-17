@@ -305,7 +305,7 @@ func (g *Google) LookupConversation(ctx context.Context, id string) (Conversatio
 	if label == "" {
 		label = "Individual conversation"
 	}
-	return Conversation{ID: id, ParticipantID: peer(c), Label: label, Protocol: c.GetType().String(), Group: c.GetIsGroupChat(), Writable: eligible(c)}, nil
+	return withListState(Conversation{ID: id, ParticipantID: peer(c), Label: label, Protocol: c.GetType().String(), Group: c.GetIsGroupChat(), Writable: eligible(c)}, c), nil
 }
 func (g *Google) Conversations(ctx context.Context) ([]Conversation, error) {
 	g.listMu.Lock()
@@ -336,7 +336,7 @@ func (g *Google) Conversations(ctx context.Context) ([]Conversation, error) {
 		if label == "" {
 			label = "Individual conversation"
 		}
-		out = append(out, Conversation{ID: c.GetConversationID(), ParticipantID: peer(c), Label: label, Protocol: c.GetType().String(), Group: c.GetIsGroupChat(), Writable: eligible(c)})
+		out = append(out, withListState(Conversation{ID: c.GetConversationID(), ParticipantID: peer(c), Label: label, Protocol: c.GetType().String(), Group: c.GetIsGroupChat(), Writable: eligible(c)}, c))
 	}
 	// Publish identities only after the entire refresh succeeds.
 	g.mu.Lock()
@@ -616,4 +616,21 @@ func (g *Google) Run(ctx context.Context, incoming func(Incoming), pause func(),
 			}
 		}
 	}
+}
+
+// withListState copies the phone's ordering hints. The library reports the last
+// message time in microseconds; smaller values are treated as milliseconds.
+func withListState(out Conversation, c *gmproto.Conversation) Conversation {
+	out.Unread = c.GetUnread()
+	out.Pinned = c.GetPinned()
+	if ts := c.GetLastMessageTimestamp(); ts > 0 {
+		var t time.Time
+		if ts > 1e14 {
+			t = time.UnixMicro(ts)
+		} else {
+			t = time.UnixMilli(ts)
+		}
+		out.LastMessageAt = t.UTC().Format(time.RFC3339)
+	}
+	return out
 }
