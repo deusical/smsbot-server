@@ -23,6 +23,9 @@ First public beta. Experimental; see [Known limitations](docs/LIMITATIONS.md).
 - `smsbot --version`; gofmt check in CI.
 
 ### Changed
+- Visible message actions are prefetched in memory so RCS menus open with the
+  correct actions immediately. Early clicks show loading or retry instead of a
+  partial menu.
 - The API accepts owner browser sessions only.
 - Documentation rewritten: README, getting started, user guide, architecture, security
   and known limitations. Detailed design notes moved to `docs/DESIGN_NOTES.md`.

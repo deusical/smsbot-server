@@ -774,7 +774,7 @@ ${current}` : p.text));
                     </span>
                   )}
                 </small>
-                {state?.capabilities.includes("message_actions") && <MessageActions message={m} conversation={conversation.id} label={conversation.label} writable={inboxAllows(inbox,conversation) && !archiveReadOnly} onReply={m=>{setReplyTarget(m);composer.current?.focus();}} onChanged={refreshNow}/>}
+                {state?.capabilities.includes("message_actions") && <MessageActions message={m} conversation={conversation.id} label={conversation.label} writable={inboxAllows(inbox,conversation) && !archiveReadOnly} eligibilityKey={JSON.stringify([conversation.participant_id,conversation.protocol,state?.paused,state?.transport_ready,inbox?.revision])} onReply={m=>{setReplyTarget(m);composer.current?.focus();}} onChanged={refreshNow}/>}
               </div>
             </div>
           );

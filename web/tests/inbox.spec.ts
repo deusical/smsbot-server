@@ -337,7 +337,7 @@ test("file-only sends retain selected files after lost acknowledgement and queue
     await expect(
       page.locator(".bubble.outgoing").filter({ hasText: name }),
     ).toHaveCount(1);
-    expect(ids).toHaveLength(2);
+    await expect.poll(() => ids.length).toBe(2);
     expect(ids[0]).toBe(ids[1]);
   } finally {
     await configure(page, false);

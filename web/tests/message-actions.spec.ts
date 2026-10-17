@@ -1,7 +1,7 @@
 import {test, expect, type Page} from "@playwright/test";
 import {readFileSync} from "node:fs";
 
-async function prepare(page: Page, protocol = "RCS") {
+async function prepare(page: Page, protocol = "RCS", actionGate?: Promise<void>) {
   const at = new Date().toISOString();
   const world = {compose: [] as Record<string, unknown>[], reactions: [] as Record<string, unknown>[], actionState: "queued", capabilities: {reply: protocol === "RCS", react: protocol === "RCS", edit: false, version: "synthetic-version", edit_reason: "editing_unavailable_in_companion_transport"}};
   await page.route("**/api/v1/state", async route => {const response = await route.fetch();if(!response.ok())return route.fulfill({response});await route.fulfill({json: {...await response.json(), paused: false, transport_ready: true}});});
@@ -9,7 +9,7 @@ async function prepare(page: Page, protocol = "RCS") {
   await page.route("**/api/v1/inbox/conversations", route => route.fulfill({json: {conversations: [{id: "synthetic-actions", participant_id: "synthetic-peer", label: "Avery Quinn", protocol, writable: true, archived: true}], next_cursor: ""}}));
   await page.route("**/api/v1/inbox/conversations/*/history?*", route => route.fulfill({json: {messages: [{id: "original", text: "Are we still on for lunch?", direction: "incoming", at, protocol, reactions: [{emoji: "👍", count: 1, mine: true}]}, {id: "reply", text: "Yes, see you at noon.", direction: "outgoing", at, protocol, status: "read", quote: {id: "original", text: "Are we still on for lunch?", direction: "incoming", available: true}}], next_cursor: "", change_cursor: 0}}));
   await page.route("**/api/v1/inbox/conversations/*/changes?*", route => route.fulfill({json: {messages: [], cursor: 0, more: false}}));
-  await page.route("**/api/v1/inbox/conversations/*/messages/*/actions", route => route.fulfill({json: world.capabilities}));
+  await page.route("**/api/v1/inbox/conversations/*/messages/*/actions", async route => {await actionGate;await route.fulfill({json: world.capabilities});});
   await page.route("**/api/v1/inbox/conversations/*/messages/*/reactions", route => {world.reactions.push(route.request().postDataJSON());return route.fulfill({status: 202, json: {id: "synthetic-reaction"}});});
   await page.route("**/api/v1/inbox/conversations/*/actions/*", route => route.fulfill({json: {id: "synthetic-reaction", state: world.actionState}}));
   await page.route("**/api/v1/inbox/conversations/*/compose", route => {world.compose.push(route.request().postDataJSON());return route.fulfill({status: 202, json: {id: "synthetic-compose"}});});
@@ -22,6 +22,66 @@ async function prepare(page: Page, protocol = "RCS") {
   return world;
 }
 const original = (page: Page) => page.locator('[data-message-id="original"]');
+
+test("visible actions prefetch once and open immediately from memory", async ({page}) => {
+  const requests: string[] = [];
+  page.on("request", request => {if (request.url().endsWith("/messages/original/actions")) requests.push(request.url());});
+  await prepare(page);
+  const trigger = original(page).getByRole("button", {name: "Message actions", exact: true});
+  await expect(trigger).toHaveAttribute("aria-busy", "false");
+  expect(requests).toHaveLength(1);
+  // A cold request after this point would fail: opening must use prefetched data.
+  await page.route("**/messages/original/actions", route => route.fulfill({status: 503}));
+  for (let i = 0; i < 2; i++) {
+    await trigger.click();
+    const contents = await page.getByRole("dialog", {name: "Message actions", exact: true}).evaluate(node => ({reply: node.textContent?.includes("Reply"), loading: node.textContent?.includes("Loading actions")}));
+    expect(contents).toEqual({reply: true, loading: false});
+    await page.keyboard.press("Escape");
+  }
+  expect(requests).toHaveLength(1);
+});
+
+test("early click waits for the existing prefetch without showing partial actions", async ({page}) => {
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => {release = resolve;});
+  let requests = 0;
+  page.on("request", request => {if (request.url().endsWith("/messages/original/actions")) requests++;});
+  await prepare(page, "RCS", gate);
+  await expect.poll(() => requests).toBe(1);
+  await original(page).getByRole("button", {name: "Message actions", exact: true}).click();
+  const menu = page.getByRole("dialog", {name: "Message actions", exact: true});
+  await expect(menu.getByRole("status")).toHaveText("Loading actions...");
+  await expect(menu.getByRole("button", {name: "Copy text", exact: true})).toHaveCount(0);
+  await expect(menu.getByRole("button", {name: "Details", exact: true})).toHaveCount(0);
+  expect(requests).toBe(1);
+  release();
+  await expect(menu.getByRole("button", {name: "Reply", exact: true})).toBeVisible();
+  expect(requests).toBe(1);
+});
+
+test("failed capabilities show an explicit retry instead of SMS actions", async ({page}) => {
+  await page.route("**/messages/original/actions", route => route.fulfill({status: 503}));
+  await prepare(page);
+  // The last registered matching route wins, so replace the helper route.
+  await page.route("**/messages/original/actions", route => route.fulfill({status: 503}));
+  await page.reload();
+  await page.getByRole("button", {name: "Conversations", exact: true}).click();
+  await page.locator(".conversation").filter({hasText: "Avery Quinn"}).getByRole("button", {name: /Avery Quinn/}).click();
+  await original(page).getByRole("button", {name: "Message actions", exact: true}).click();
+  const menu = page.getByRole("dialog", {name: "Message actions", exact: true});
+  await expect(menu.getByRole("alert")).toContainText("unavailable");
+  await expect(menu.getByRole("button", {name: "Details", exact: true})).toHaveCount(0);
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => {release = resolve;});
+  await page.route("**/messages/original/actions", async route => {await gate;await route.fulfill({json: {reply: true, react: true, edit: false, version: "retry-version"}});});
+  await menu.getByRole("button", {name: "Try again", exact: true}).focus();
+  await page.keyboard.press("Enter");
+  await expect(menu.getByRole("status")).toHaveText("Loading actions...");
+  await page.keyboard.press("Tab");
+  await expect(menu.getByRole("button", {name: "Close message actions", exact: true})).toBeFocused();
+  release();
+  await expect(menu.getByRole("button", {name: "Reply", exact: true})).toBeVisible();
+});
 
 test("RCS menu, quoted reply, cancel, details and focus", async ({page}) => {
   const world = await prepare(page);

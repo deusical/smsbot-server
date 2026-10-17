@@ -197,7 +197,6 @@ test("unauthenticated API does not disclose state", async ({ request }) => {
 test("slow conversation refresh does not overlap and failure is specific", async ({
   page,
 }) => {
-  await login(page);
   let fail = true;
   let active = 0;
   let maximum = 0;
@@ -219,6 +218,8 @@ test("slow conversation refresh does not overlap and failure is specific", async
       active--;
     }
   });
+  // Intercept the initial fetch before login can populate the list cache.
+  await login(page);
   await expect(page.getByRole("alert")).toContainText(
     "Could not refresh conversations.",
     { timeout: 12000 },
