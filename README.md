@@ -70,6 +70,7 @@ HTTPS address such as Tailscale, and updating cookies without pairing again.
 | [API](api/openapi.yaml) | OpenAPI contract for the owner API |
 | [Changelog](CHANGELOG.md) | Release notes |
 | [Contributing](CONTRIBUTING.md) | Development workflow and checks |
+| [Third-party notices](THIRD_PARTY_NOTICES.md) | Licenses of bundled dependencies |
 
 ## Develop and test
 
@@ -87,4 +88,5 @@ contacts Google, carriers or AI providers. Pass `-SkipInstall -SkipChecks` to
 
 AGPL-3.0-or-later, see [LICENSE](LICENSE). The Google adapter uses
 [mautrix/gmessages libgm](https://github.com/mautrix/gmessages/tree/main/pkg/libgm);
-its license and notices must be preserved.
+its license and the notices for every other bundled dependency are in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and must be preserved.

@@ -22,5 +22,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
     && groupadd --gid 10001 smsbot && useradd --uid 10001 --gid 10001 --no-create-home smsbot \
     && mkdir -p /var/lib/smsbot /var/lib/smsbot-vault && chown smsbot:smsbot /var/lib/smsbot /var/lib/smsbot-vault
 COPY --from=build /smsbot /usr/local/bin/smsbot
+COPY LICENSE THIRD_PARTY_NOTICES.md /usr/share/doc/smsbot/
 USER 10001:10001
 ENTRYPOINT ["/usr/local/bin/smsbot"]
