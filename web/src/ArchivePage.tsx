@@ -75,12 +75,7 @@ export function ArchivePage({conversations, inbox, state, workspace}: {conversat
       <p role="status" aria-label="Background archive scope" className="archive-scope">{scope}</p>
       {error && <Notice tone="bad" role="alert">{error}</Notice>}
       {state?.inbox_capture_gap_unknown && <Notice tone="bad" role="alert">A possible capture gap has unknown scope. The server cannot confirm which conversations or dates were affected.</Notice>}
-      {supported ? <div className="metric-strip archive-summary" aria-label="Archive overview">
-        {metric("Storage used", statsValue(stats ? formatBytes(stats.total_bytes) : ""), statsError ? "Measurement unavailable; retrying" : stats ? "Originals, database and exports" : statsSupported ? "Measuring local storage..." : "Update server for storage metrics", statsPending, "storage-stat")}
-        {metric("Saved messages", statsValue(stats ? stats.messages.toLocaleString() : ""), "In archived conversations", statsPending)}
-        {metric("Original files", statsValue(stats ? stats.original_files.toLocaleString() : ""), stats ? `${formatBytes(stats.original_bytes)} / ${stats.quota_bytes ? formatBytes(stats.quota_bytes) : "unlimited"}` : "Preserved locally", statsPending)}
-        {metric("Conversations tracked", loaded ? String(rows.length) : "Loading", loaded ? `${active} ${active === 1 ? "import active" : "imports active"}` : "Waiting for archive index", !loaded)}
-      </div> : <Notice>History archiving is not supported by this server.</Notice>}
+      {!supported && <Notice>History archiving is not supported by this server.</Notice>}
       {stats && <details className="archive-storage"><summary>Storage breakdown{statsError ? " (last successful measurement)" : ""}</summary><dl>
         <div><dt>Original files</dt><dd>{formatBytes(stats.original_bytes)}</dd></div>
         <div><dt>Shared service database, including journal</dt><dd>{formatBytes(stats.database_bytes)}</dd></div>
@@ -90,6 +85,12 @@ export function ArchivePage({conversations, inbox, state, workspace}: {conversat
       </dl><p className="muted">Measured {new Date(stats.measured_at).toLocaleTimeString()}; refreshes every 15 seconds. The database also contains service settings and bot activity. File counts describe stored originals, not download completion.</p></details>}
       <p className="muted hint-line">{loaded ? <>{checked} {checked === 1 ? "history scan checked" : "history scans checked"} all available pages. Google may not expose every message or original file.</> : "Loading conversation totals..."}</p>
     </Group>
+    {supported && <div className="metric-strip archive-summary" aria-label="Archive overview">
+      {metric("Storage used", statsValue(stats ? formatBytes(stats.total_bytes) : ""), statsError ? "Measurement unavailable; retrying" : stats ? "Originals, database and exports" : statsSupported ? "Measuring local storage..." : "Update server for storage metrics", statsPending, "storage-stat")}
+      {metric("Saved messages", statsValue(stats ? stats.messages.toLocaleString() : ""), "In archived conversations", statsPending)}
+      {metric("Original files", statsValue(stats ? stats.original_files.toLocaleString() : ""), stats ? `${formatBytes(stats.original_bytes)} / ${stats.quota_bytes ? formatBytes(stats.quota_bytes) : "unlimited"}` : "Preserved locally", statsPending)}
+      {metric("Conversations tracked", loaded ? String(rows.length) : "Loading", loaded ? `${active} ${active === 1 ? "import active" : "imports active"}` : "Waiting for archive index", !loaded)}
+    </div>}
     {supported && <Group title="Conversation history" description="Pick a conversation to archive it, re-scan available history or watch progress.">
       {!loaded && !error && <div className="empty small" role="status"><p>{slow ? "Archive index is taking longer than usual. Requests time out and retry automatically." : "Loading archive progress..."}</p></div>}
       {(error || (!loaded && slow)) && <div><button type="button" onClick={()=>setReload(value=>value+1)}>Retry archive loading</button></div>}
@@ -99,7 +100,7 @@ export function ArchivePage({conversations, inbox, state, workspace}: {conversat
         <ul className="archive-jobs command-list" aria-label="Archive jobs">{filtered.map(item => {
           const itemState = rows.find(row=>row.conversation.id===item.id)?.state ?? "not_started";
           const label = item.label || "Saved conversation";
-          return <li key={item.id} className={current?.conversation.id === item.id ? "selected" : ""}><button type="button" className="ghost" disabled={busy} aria-label={`Select ${label}`} aria-pressed={current?.conversation.id === item.id} onClick={() => setSelected(item.id)}><Avatar label={item.label || "?"} /><span className="archive-row-text"><span className="archive-conversation-name">{label}</span><small className="archive-state">{importLabel(itemState)}</small></span><span className={"state-dot tone-" + stateTone(itemState)} aria-hidden="true" /></button></li>;
+          return <li key={item.id} className={(current?.conversation.id === item.id ? "selected" : "") + " tone-" + stateTone(itemState)}><button type="button" className="ghost" disabled={busy} aria-label={`Select ${label}`} aria-pressed={current?.conversation.id === item.id} onClick={() => setSelected(item.id)}><Avatar label={item.label || "?"} /><span className="conversation-text"><strong className="archive-conversation-name">{label}</strong><small>{importLabel(itemState)}</small></span><span className="state-dot" aria-hidden="true" /></button></li>;
         })}</ul>
         {!filtered.length && <p className="muted">No matching conversations.</p>}
       </div>{current && conversation && <div className="archive-detail"><h3 title={conversation.label}>{conversation.label || "Saved conversation"}</h3>
