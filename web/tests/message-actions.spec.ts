@@ -132,7 +132,49 @@ test("mobile actions use a bottom sheet inside the viewport", async ({page}) => 
   await page.setViewportSize({width: 390, height: 844});await prepare(page);
   await original(page).getByRole("button", {name: "Message actions", exact: true}).click();
   const panel = page.getByRole("dialog", {name: "Message actions", exact: true});await expect(panel).toBeVisible();
-  const rect = await panel.boundingBox();expect(rect).not.toBeNull();expect(rect!.x).toBe(0);expect(rect!.y + rect!.height).toBeLessThanOrEqual(845);
+  // The sheet slides up; judge its resting position.
+  await expect.poll(async () => {const box = await panel.boundingBox();return box ? box.y + box.height : Infinity;}).toBeLessThanOrEqual(845);
+  const rect = await panel.boundingBox();expect(rect).not.toBeNull();expect(rect!.x).toBe(0);
   await page.screenshot({path: "test-results/message-actions-mobile.png"});
   await page.keyboard.press("Escape");await expect(panel).toHaveCount(0);
+});
+
+type Box = {x: number; y: number; width: number; height: number};
+const overlaps = (a: Box, b: Box) => !(a.x + a.width <= b.x || b.x + b.width <= a.x || a.y + a.height <= b.y || b.y + b.height <= a.y);
+
+for (const id of ["original", "reply"]) {
+  test(`the menu opens beside the ${id} message instead of covering it`, async ({page}) => {
+    await page.setViewportSize({width: 1280, height: 800});await prepare(page);
+    const bubble = page.locator(`[data-message-id="${id}"]`);
+    await bubble.hover();await bubble.getByRole("button", {name: "Message actions", exact: true}).click();
+    const panel = page.getByRole("dialog", {name: "Message actions", exact: true});await expect(panel.getByRole("button", {name: "Reply", exact: true})).toBeVisible();
+    const [menu, message] = [await panel.boundingBox(), await bubble.boundingBox()];
+    expect(menu).not.toBeNull();expect(message).not.toBeNull();
+    expect(overlaps(menu!, message!)).toBe(false);
+    expect(menu!.x).toBeGreaterThanOrEqual(0);expect(menu!.y).toBeGreaterThanOrEqual(0);
+    expect(menu!.x + menu!.width).toBeLessThanOrEqual(1280);expect(menu!.y + menu!.height).toBeLessThanOrEqual(800);
+  });
+}
+
+test("a single reaction shows no count and the details view can go back", async ({page}) => {
+  await prepare(page);
+  await expect(original(page).locator(".reaction-chip")).toHaveText("👍");
+  await original(page).hover();await original(page).getByRole("button", {name: "Message actions", exact: true}).click();
+  await page.getByRole("dialog", {name: "Message actions", exact: true}).getByRole("button", {name: "Details", exact: true}).click();
+  await expect(page.getByRole("dialog", {name: "Message details"})).toBeVisible();
+  await page.getByRole("button", {name: "Back to actions", exact: true}).click();
+  await expect(page.getByRole("dialog", {name: "Message actions", exact: true}).getByRole("button", {name: "Reply", exact: true})).toBeVisible();
+});
+
+test("touch: tapping the message opens the bottom sheet", async ({browser}) => {
+  const context = await browser.newContext({baseURL: "http://127.0.0.1:8788", serviceWorkers: "block", viewport: {width: 390, height: 844}, hasTouch: true, isMobile: true});
+  try {
+    const page = await context.newPage();await prepare(page);
+    await original(page).locator("p").tap();
+    const panel = page.getByRole("dialog", {name: "Message actions", exact: true});await expect(panel.getByRole("button", {name: "Reply", exact: true})).toBeVisible();
+    const [sheet, message] = [await panel.boundingBox(), await original(page).boundingBox()];
+    expect(sheet).not.toBeNull();expect(message).not.toBeNull();
+    // The message is scrolled clear of the sheet, so it stays visible as context.
+    expect(message!.y + message!.height).toBeLessThanOrEqual(sheet!.y);
+  } finally {await context.close();}
 });

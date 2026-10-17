@@ -23,6 +23,11 @@ First public beta. Experimental; see [Known limitations](docs/LIMITATIONS.md).
 - `smsbot --version`; gofmt check in CI.
 
 ### Changed
+- Conversation polish: the message menu opens beside the message (never over it) and
+  drops its title bar, reactions become a compact pill on the bubble's edge, messages
+  from one sender group into runs, quoted replies are easier to read, and on phones a
+  tap opens the menu with the message scrolled clear of the sheet. The phone
+  navigation shows "Chats" so the label is no longer cut off.
 - Visible message actions are prefetched in memory so RCS menus open with the
   correct actions immediately. Early clicks show loading or retry instead of a
   partial menu.

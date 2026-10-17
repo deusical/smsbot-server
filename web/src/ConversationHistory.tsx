@@ -723,6 +723,10 @@ ${current}` : p.text));
           const index = row?.index ?? messages.indexOf(m);
           const divider = index === 0 || day !== dayLabel(messages[index - 1].at);
           const at = new Date(m.at);
+          // Consecutive messages from the same sender read as one run: tighter
+          // spacing, with the small inner corner continuing down the run.
+          const joins = (a: Message | undefined, b: Message) => !!a && a.direction === b.direction && (a.origin ?? "") === (b.origin ?? "") && dayLabel(a.at) === dayLabel(b.at) && Math.abs(Date.parse(b.at) - Date.parse(a.at)) < 10 * 60000;
+          const joinedPrev = joins(messages[index - 1], m);
           return (
             <div key={m.id} data-message-index={index} data-index={row?.index} ref={row ? virtualizer.measureElement : undefined} style={row ? {position: "absolute", top: 0, left: 0, width: "100%", transform: `translateY(${row.start}px)`} : undefined} className="message-group">
               {divider && (
@@ -735,6 +739,7 @@ ${current}` : p.text));
                 className={
                   "bubble " +
                   m.direction + (highlighted===m.id?" message-highlight":"") +
+                  (joinedPrev ? " joined" : " run-start") + (m.reactions?.length ? " has-reactions" : "") +
                   (m.direction === "outgoing"
                     ? " from-" + (m.origin ?? "bot")
                     : "")

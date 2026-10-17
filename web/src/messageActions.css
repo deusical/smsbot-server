@@ -1,45 +1,89 @@
 .bubble { position: relative; }
-.message-options { position: absolute; top: 0; right: -34px; width: 30px; height: 30px; opacity: 0; }
-.bubble.outgoing .message-options { right: auto; left: -34px; }
-.bubble:hover .message-options, .bubble:focus-within .message-options { opacity: 1; }
-.message-highlight { outline: 2px solid var(--signal); outline-offset: 4px; }
-.message-quote { display: flex; flex-direction: column; gap: 3px; width: 100%; min-width: 0; margin: 0 0 8px; padding: 6px 10px; border: 0; border-left: 2px solid var(--violet); border-radius: 0 6px 6px 0; background: var(--violet-soft); text-align: left; align-items: flex-start; font-size: 12px; line-height: 1.4; white-space: normal; overflow-wrap: anywhere; }
-.message-quote strong { font-size: 11px; color: var(--muted); font-weight: 500; }
-.message-quote:disabled { opacity: 1; cursor: default; color: var(--muted); }
-.reply-composer-preview { display: flex; gap: 12px; align-items: center; padding: 9px 12px; margin-bottom: 8px; border-left: 2px solid var(--violet); border-radius: 0 var(--r-control) var(--r-control) 0; background: var(--violet-soft); }
-.reply-composer-preview > div { display: grid; gap: 3px; min-width: 0; flex: 1; }
-.reply-composer-preview strong { font-size: 12px; font-weight: 500; }
-.reply-composer-preview span { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.reaction-chips { display: flex; gap: 4px; flex-wrap: wrap; margin: 7px 0 2px; }
-.reaction-chip { display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px; min-height: 28px; border-radius: 20px; background: var(--surface); border: 1px solid var(--line); font-size: 15px; }
-.reaction-chip span { color: var(--muted); font-size: 11px; }
-.reaction-chip.mine { border-color: var(--signal); background: var(--signal-soft); }
-.reaction-progress { font-size: 11px; color: var(--muted); max-width: 260px; margin-top: 6px; }
+.bubble.has-reactions { margin-bottom: 16px; padding-bottom: 15px; }
+
+/* Trigger: a small round button beside the bubble, centred on it. The pseudo-element
+   bridges the gap so the hover state survives the move from bubble to button. */
+.message-options { position: absolute; z-index: 2; top: 50%; right: -36px; translate: 0 -50%; width: 28px; height: 28px; padding: 0; border-radius: 50%; color: var(--muted); opacity: 0; transition: opacity 0.12s, background 0.15s, color 0.15s; }
+.bubble.outgoing .message-options { right: auto; left: -36px; }
+.bubble::after { content: ""; position: absolute; top: 0; bottom: 0; right: -40px; width: 40px; }
+.bubble.outgoing::after { right: auto; left: -40px; }
+.bubble:hover .message-options, .bubble:focus-within .message-options, .message-options[aria-expanded="true"] { opacity: 1; }
+.message-options:hover:not(:disabled) { background: var(--raised); color: var(--text); }
+.bubble:has(.message-options[aria-expanded="true"]) { box-shadow: 0 0 0 2px color-mix(in srgb, var(--signal) 55%, transparent); }
+.message-highlight { outline: 2px solid var(--signal); outline-offset: 3px; }
+
+/* Quoted message, inside a bubble and above the composer. */
+.message-quote { display: flex; flex-direction: column; gap: 1px; width: 100%; min-width: 0; height: auto; margin: 0 0 6px; padding: 5px 10px 6px; border: 0; border-left: 3px solid var(--violet); border-radius: 4px 10px 10px 4px; background: color-mix(in srgb, var(--text) 7%, transparent); text-align: left; align-items: flex-start; justify-content: flex-start; font-size: 12.5px; font-weight: 400; line-height: 1.4; white-space: normal; overflow-wrap: anywhere; }
+button.message-quote:hover:not(:disabled) { background: color-mix(in srgb, var(--text) 12%, transparent); border-color: transparent; border-left-color: var(--violet); }
+.message-quote strong { font-size: 11.5px; color: var(--violet); font-weight: 600; }
+.message-quote span { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; color: var(--muted); }
+.message-quote:disabled { opacity: 1; cursor: default; }
+.reply-composer-preview { display: flex; gap: 10px; align-items: center; padding: 8px 8px 8px 12px; margin-bottom: 8px; border-left: 3px solid var(--violet); border-radius: 4px var(--r-control) var(--r-control) 4px; background: var(--violet-soft); }
+.reply-composer-preview > div { display: grid; gap: 1px; min-width: 0; flex: 1; }
+.reply-composer-preview strong { font-size: 12px; font-weight: 600; color: var(--violet); }
+.reply-composer-preview span { color: var(--muted); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Reactions: one compact pill that overlaps the bubble's lower edge. */
+.reaction-chips { position: absolute; bottom: -13px; right: 12px; display: inline-flex; padding: 1px; border: 1px solid var(--line); border-radius: 99px; background: var(--surface); box-shadow: 0 0 0 2px var(--surface), 0 2px 6px rgb(0 0 0 / 0.18); z-index: 1; }
+.bubble.outgoing .reaction-chips { right: auto; left: 12px; }
+.reaction-chip { display: inline-flex; align-items: center; gap: 3px; height: 22px; min-width: 24px; padding: 0 6px; border: 0; border-radius: 99px; background: transparent; font-size: 14px; line-height: 1; transition: background 0.15s; }
+.reaction-chip span { color: var(--muted); font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.reaction-chip:hover:not(:disabled) { background: var(--hover); }
+.reaction-chip.mine { background: var(--signal-soft); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--signal) 55%, transparent); }
+.reaction-chip.mine span { color: var(--signal); }
+.reaction-progress { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; max-width: 260px; margin-top: 6px; padding-top: 5px; border-top: 1px solid color-mix(in srgb, var(--text) 10%, transparent); font-size: 11.5px; color: var(--muted); }
+.reaction-progress button { height: 24px; padding: 0 8px; font-size: 11.5px; }
+
+/* Menu */
 .message-action-overlay { position: fixed; inset: 0; z-index: 110; background: transparent; }
-.message-action-panel { position: fixed; width: 300px; max-width: calc(100vw - 24px); max-height: calc(100dvh - 24px); overflow-y: auto; padding: 10px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-panel); box-shadow: var(--shadow-pop); }
-.message-action-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 4px 7px; }
-.message-action-heading strong { font-size: 12px; font-weight: 500; color: var(--muted); }
-.message-action-heading .icon { width: 30px; height: 30px; }
-.message-action-item { display: flex; align-items: center; justify-content: flex-start; gap: 12px; width: 100%; min-height: 42px; border: 0; background: transparent; text-align: left; padding: 10px; }
-.message-action-item:hover { background: var(--hover); }
-.reaction-picker { display: flex; justify-content: space-between; gap: 2px; border-bottom: 1px solid var(--line); padding: 4px 0 12px; margin-bottom: 4px; }
-.reaction-picker button, .emoji-grid button { border: 1px solid transparent; border-radius: 50%; width: 36px; height: 36px; padding: 4px; background: var(--raised); font-size: 20px; display: inline-flex; align-items: center; justify-content: center; }
-.reaction-picker button[aria-pressed="true"] { border-color: var(--signal); background: var(--signal-soft); }
-.emoji-picker-expanded { padding: 6px 0 12px; border-bottom: 1px solid var(--line); }
-.emoji-grid { display: grid; grid-template-columns: repeat(6,1fr); gap: 6px; margin-bottom: 10px; }
-.emoji-picker-expanded label { display: grid; font-size: 12px; color: var(--muted); gap: 5px; margin: 8px 0; }
-.emoji-picker-expanded input { width: 100%; }
-.message-details { display: grid; grid-template-columns: 70px 1fr; gap: 10px; padding: 4px 8px; font-size: 12px; }
+.message-action-panel { position: fixed; width: 252px; max-width: calc(100vw - 24px); max-height: calc(100dvh - 24px); overflow-y: auto; padding: 6px; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 14px; box-shadow: var(--shadow-pop); transform-origin: top left; animation: action-pop 0.14s var(--ease); }
+.message-action-panel.up { transform-origin: bottom left; }
+.message-action-panel.right { transform-origin: top right; }
+.message-action-panel.up.right { transform-origin: bottom right; }
+@keyframes action-pop { from { opacity: 0; scale: 0.96; } }
+/* Closing is Escape or a click outside. The button stays for keyboards and assistive
+   technology as a visually hidden control (a 1px box overlays nothing, and screen
+   reader activation still works); it appears when focused and in the details view. */
+button.message-action-close { position: absolute; top: 6px; right: 6px; width: 1px; height: 1px; padding: 0; overflow: hidden; border: 0; opacity: 0; z-index: 1; }
+button.message-action-close svg { display: none; }
+button.message-action-close:focus-visible, .message-action-panel.details button.message-action-close { width: 28px; height: 28px; border: 1px solid transparent; opacity: 1; background: var(--raised); }
+button.message-action-close:focus-visible svg, .message-action-panel.details button.message-action-close svg { display: block; }
+.message-action-heading { display: flex; align-items: center; gap: 4px; padding: 0 34px 6px 0; }
+.message-action-heading strong { font-size: 13px; font-weight: 600; }
+.message-action-heading .icon { width: 30px; height: 30px; color: var(--muted); }
+.message-action-panel > .hint { padding: 8px 10px; font-size: 12.5px; }
+.message-action-item { display: flex; align-items: center; justify-content: flex-start; gap: 11px; width: 100%; height: auto; min-height: 38px; padding: 8px 10px; border: 0; border-radius: 9px; background: transparent; text-align: left; font-size: 13.5px; font-weight: 500; }
+.message-action-item svg { color: var(--muted); flex: none; }
+.message-action-item:hover:not(:disabled) { background: var(--hover); }
+.message-action-item:hover:not(:disabled) svg { color: var(--text); }
+.reaction-picker { display: flex; justify-content: space-between; gap: 1px; padding: 3px; margin-bottom: 6px; border-radius: 99px; background: var(--raised); }
+.reaction-picker button, .emoji-grid button { display: inline-flex; align-items: center; justify-content: center; width: 33px; height: 33px; padding: 0; border: 0; border-radius: 50%; background: transparent; font-size: 19px; line-height: 1; transition: transform 0.12s var(--ease), background 0.15s; }
+.reaction-picker button:hover:not(:disabled), .emoji-grid button:hover:not(:disabled) { background: var(--hover); transform: scale(1.18); }
+.reaction-picker button[aria-pressed="true"] { background: var(--signal-soft); box-shadow: inset 0 0 0 1.5px var(--signal); }
+.reaction-picker button svg { color: var(--muted); }
+.emoji-picker-expanded { padding: 2px 4px 8px; margin-bottom: 6px; border-bottom: 1px solid var(--line); }
+.emoji-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 2px; margin-bottom: 8px; justify-items: center; }
+.emoji-custom { display: flex; align-items: flex-end; gap: 6px; }
+.emoji-custom label { display: grid; flex: 1; min-width: 0; font-size: 12px; color: var(--muted); gap: 4px; }
+.emoji-custom input { width: 100%; }
+.emoji-custom button { height: 38px; }
+.message-details { display: grid; grid-template-columns: 64px 1fr; gap: 8px 10px; margin: 0; padding: 6px 10px 8px; font-size: 12.5px; }
 .message-details dt { color: var(--muted); }
 .message-details dd { margin: 0; overflow-wrap: anywhere; }
-@media (hover: none) { .message-options { opacity: 1; } }
+
+/* Touch: the whole bubble opens the menu, so the trigger button stays out of sight. */
+@media (hover: none) { .message-options { opacity: 0; } }
 @media (max-width: 820px) {
- .message-action-overlay { background: rgb(5 3 10 / 0.35); }
- .message-action-panel { top: auto !important; left: 0 !important; bottom: 0; width: 100%; max-width: none; padding: 16px 16px calc(16px + env(safe-area-inset-bottom)); border-radius: 18px 18px 0 0; }
- .message-action-panel::before { content: ""; display: block; width: 36px; height: 4px; margin: -4px auto 10px; border-radius: 4px; background: var(--line-strong); }
- .message-action-item { min-height: 48px; }
- .reaction-picker button, .emoji-grid button { width: 40px; height: 40px; }
- .reaction-picker { padding-bottom: 14px; }
- .message-options { opacity: 1; }
- .reaction-chip { min-height: 36px; }
+ .message-action-overlay { background: rgb(5 3 10 / 0.45); animation: sheet-fade 0.18s var(--ease); }
+ .message-action-panel { top: auto !important; left: 0 !important; bottom: 0; width: 100%; max-width: none; padding: 20px 14px calc(14px + env(safe-area-inset-bottom)); border: 0; border-top: 1px solid var(--line-strong); border-radius: 20px 20px 0 0; transform-origin: bottom center; animation: sheet-up 0.22s var(--ease); }
+ .message-action-panel::before { content: ""; position: absolute; top: 8px; left: 50%; width: 36px; height: 4px; margin-left: -18px; border-radius: 4px; background: var(--line-strong); }
+ .message-action-heading { padding-top: 2px; }
+ .message-action-item { min-height: 48px; font-size: 15px; }
+ .reaction-picker { justify-content: space-around; padding: 5px; }
+ .reaction-picker button, .emoji-grid button { width: 42px; height: 42px; font-size: 22px; }
+ .reaction-chip { height: 26px; min-width: 28px; }
+ .message-options { opacity: 0; }
+ .message-action-panel.right, .message-action-panel.up.right { transform-origin: bottom center; }
 }
+@keyframes sheet-up { from { translate: 0 24px; opacity: 0; } }
+@keyframes sheet-fade { from { opacity: 0; } }

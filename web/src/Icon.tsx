@@ -10,6 +10,7 @@ const paths: Record<string, string> = {
     "M4 6h10m4 0h2M4 12h4m4 0h8M4 18h12m4 0h0M16 4v4M10 10v4M18 16v4",
   arrow: "M5 12h14m-6-6 6 6-6 6",
   back: "M19 12H5m6-6-6 6 6 6",
+  reply: "M9 14 4 9l5-5M4 9h9a7 7 0 0 1 7 7v3",
   shield: "m12 3 8 3v6c0 5-8 9-8 9s-8-4-8-9V6l8-3Z",
   phone:
     "M8 2h8a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2Zm3 16h2",

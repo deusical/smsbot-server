@@ -386,10 +386,11 @@ function App() {
               key={p}
               className={page === p ? "selected" : ""}
               aria-current={page === p ? "page" : undefined}
+              aria-label={p}
               onClick={() => navigate(p)}
             >
               <Icon name={p.toLowerCase()} />
-              <span>{p}</span>
+              <span className="nav-label" data-short={p === "Conversations" ? "Chats" : undefined}>{p}</span>
               {p === "Activity" && reviewCount > 0 && (
                 <b aria-hidden="true" className="nav-count">
                   {reviewCount}
