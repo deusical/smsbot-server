@@ -2586,8 +2586,9 @@ label {
   margin-bottom: 8px;
 }
 .selected-attachment {
-  border: 1px solid currentColor;
+  border: 1px solid var(--line);
   border-radius: 10px;
+  background: var(--raised);
   max-width: 260px;
 }
 .selected-attachment img {
@@ -2769,3 +2770,40 @@ a.button:hover { background: var(--hover); border-color: var(--line-strong); }
 }
 .jump-latest:hover:not(:disabled) { background: var(--raised); border-color: var(--signal); }
 .composer-box.dragging { border-color: var(--signal); box-shadow: 0 0 0 3px var(--signal-soft); }
+
+/* ---------- selected image thumbnails, pending sends ---------- */
+.selected-attachment.has-thumb {
+  position: relative;
+  flex-direction: column;
+  align-items: stretch;
+  width: 132px;
+  padding: 6px;
+}
+.selected-attachment.has-thumb img {
+  width: 100%;
+  height: 92px;
+  border-radius: 8px;
+}
+.selected-attachment.has-thumb > button {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  border: 1px solid var(--line);
+}
+.selected-attachment.has-thumb strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bubble.pending { opacity: 0.8; }
+.bubble.pending .spinner { width: 11px; height: 11px; border-width: 2px; }
+.bubble.send-failed { outline: 1px solid var(--rose); }
+.pending-thumb { display: block; max-width: 220px; max-height: 180px; border-radius: 10px; margin-bottom: 6px; object-fit: cover; }
+.pending-file { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; margin: 0 6px 6px 0; }
+.pending-state { display: inline-flex; align-items: center; gap: 6px; }
+.pending-error { color: var(--rose); font-weight: 550; }
+.pending-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }

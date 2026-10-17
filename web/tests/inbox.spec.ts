@@ -326,20 +326,14 @@ test("file-only sends retain selected files after lost acknowledgement and queue
     await page
       .getByRole("button", { name: "Send message", exact: true })
       .click();
-    await expect(
-      page
-        .getByRole("alert")
-        .filter({ hasText: "Your text and files are kept" }),
-    ).toBeVisible();
-    await expect(
-      page.getByRole("button", { name: `Remove ${name}`, exact: true }),
-    ).toBeVisible();
-    await page
-      .getByRole("button", { name: "Send message", exact: true })
-      .click();
+    // The box and file chip clear at once; the pending bubble holds the message.
     await expect(
       page.getByRole("button", { name: `Remove ${name}`, exact: true }),
     ).toHaveCount(0);
+    await expect(
+      page.getByRole("alert").filter({ hasText: "did not confirm this message" }),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "Retry sending", exact: true }).click();
     await expect(
       page.locator(".bubble.outgoing").filter({ hasText: name }),
     ).toHaveCount(1);
@@ -393,12 +387,14 @@ test("owner captures ordinary text while paused and sends manually without autom
     await page
       .getByRole("button", { name: "Send message", exact: true })
       .click();
+    // The pending bubble appears at once and is replaced by the saved message.
     await expect(
       page.locator(".bubble.outgoing").filter({ hasText: reply }),
     ).toBeVisible();
     await expect(
-      page.locator(".bubble.outgoing").filter({ hasText: reply }),
-    ).toContainText("Sent from web");
+      page.locator(".bubble.outgoing:not(.pending)").filter({ hasText: reply }),
+    ).toContainText("Sent from web", { timeout: 15000 });
+    await expect(page.locator(".bubble.pending")).toHaveCount(0);
     await page.evaluate(() => window.scrollTo(0, 0));
     await page.screenshot({
       path: "../docs/images/server-conversation-inbox.png",
@@ -542,18 +538,11 @@ test("lost compose acknowledgement retries the same intent without a second repl
     await page
       .getByRole("button", { name: "Send message", exact: true })
       .click();
+    await expect(box).toHaveValue("");
     await expect(
-      page
-        .getByRole("alert")
-        .filter({ hasText: "Your text and files are kept" }),
+      page.getByRole("alert").filter({ hasText: "did not confirm this message" }),
     ).toBeVisible();
-    await expect(
-      page.getByRole("button", { name: "Send message", exact: true }),
-    ).toBeEnabled();
-    await expect(box).toHaveValue(message);
-    await page
-      .getByRole("button", { name: "Send message", exact: true })
-      .click();
+    await page.getByRole("button", { name: "Retry sending", exact: true }).click();
     await expect(box).toHaveValue("");
     expect(ids).toHaveLength(2);
     expect(ids[1]).toBe(ids[0]);

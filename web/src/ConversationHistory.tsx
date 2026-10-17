@@ -22,9 +22,20 @@ import { Icon } from "./Icon";
 import { Avatar } from "./ui";
 import {
   MessageAttachment,
+  PendingFile,
   SelectedAttachment,
   encodeFile,
 } from "./Attachments";
+import {
+  addPending,
+  enqueue,
+  getPending,
+  patchPending,
+  removePending,
+  usePending,
+  useSubmittedSignal,
+  type Pending,
+} from "./pendingSends";
 type Props = {
   conversation: Conversation;
   state: State | null;
@@ -75,9 +86,6 @@ export function ConversationHistory({
       bottom: boolean;
       prepend: boolean;
     } | null>(null),
-    sendKey = useRef(""),
-    sendRoute = useRef<"inbox" | "legacy" | null>(null),
-    sendIntentText = useRef(""),
     composer = useRef<HTMLTextAreaElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const [files, setFiles] = useState<File[]>([]);
@@ -118,10 +126,9 @@ export function ConversationHistory({
     [text, setText] = useState(""),
     [error, setError] = useState(""),
     [sendError, setSendError] = useState(""),
-    [sending, setSending] = useState(false),
     [loading, setLoading] = useState(false);
   const canAttach =
-    !!inbox?.enabled && !!state?.capabilities.includes("attachments") && !sending;
+    !!inbox?.enabled && !!state?.capabilities.includes("attachments");
   const changeCursor = useRef<number | null>(null);
   const changesBusy = useRef(false);
   const changesDone = useRef<Promise<void> | null>(null);
@@ -407,62 +414,77 @@ export function ConversationHistory({
           : !(conversation.enrolled || inbox?.enabled)
             ? "Turn on bot replies to message this conversation."
             : "";
-  const canSend = !archiveReadOnly && !blocked && !busy && !sending;
-  async function send() {
+  const canSend = !archiveReadOnly && !blocked && !busy;
+  const pending = usePending(conversation.id);
+  const readInbox = async () =>
+    state?.capabilities.includes("full_inbox")
+      ? await api<InboxSettings>("/inbox/settings")
+      : inbox;
+  // The draft clears on the next render; until then a second Enter or click would
+  // read the same text and enqueue a duplicate with a new key.
+  const draftTaken = useRef(false);
+  useEffect(() => {
+    draftTaken.current = false;
+  }, [text, files]);
+  function send() {
     const outgoing = text.trim();
-    if (!canSend || (!outgoing && files.length === 0)) return;
-    const intent = JSON.stringify([outgoing, attachmentRevision.current]);
-    // Reuse the idempotency key when retrying the same text after a lost response.
-    if (!sendKey.current || sendIntentText.current !== intent) {
-      sendKey.current = crypto.randomUUID();
-      sendRoute.current = null;
-      sendIntentText.current = intent;
-    }
-    const requestId = sendKey.current;
-    setSending(true);
+    if (!canSend || draftTaken.current || (!outgoing && files.length === 0)) return;
+    draftTaken.current = true;
+    // Clear the box at once; the pending bubble carries the message from here.
+    const item: Pending = {
+      key: crypto.randomUUID(),
+      text: outgoing,
+      files,
+      at: new Date().toISOString(),
+      route: null,
+      phase: "posting",
+    };
+    setText("");
+    setFiles([]);
+    attachmentRevision.current++;
     setSendError("");
-    try {
-      const attachments = await Promise.all(
-        files.map(async (f) => ({
-          name: f.name,
-          mime: f.type,
-          data: await encodeFile(f),
-        })),
-      );
-      // Archive reads can be ready before the permission poll catches up. Read
-      // current collection permission before selecting the write API/body.
-      const currentInbox = state?.capabilities.includes("full_inbox") ? await api<InboxSettings>("/inbox/settings") : inbox;
-      const useInbox = sendRoute.current ? sendRoute.current === "inbox" : inboxAllows(currentInbox, conversation);
-      // An uncertain prior submission must keep its original API and key even
-      // if collection permission changes before the owner retries.
-      sendRoute.current = useInbox ? "inbox" : "legacy";
-      const composeBase = `${useInbox ? "/inbox" : ""}/conversations/${encodeURIComponent(conversation.id)}`;
-      if (!useInbox && attachments.length) throw new ApiError(409,"inbox_access_disabled");
-      await api(
-        `${composeBase}/compose`,
-        "POST",
-        useInbox
-          ? { text: outgoing, request_id: requestId, attachments }
-          : { text: outgoing },
-      );
-      setText((current) => (current.trim() === outgoing ? "" : current));
-      setFiles([]);
-      attachmentRevision.current++;
-      sendKey.current = "";
-      sendRoute.current = null;
-      sendIntentText.current = "";
-      void load("", true, request.current, true);
-    } catch (e) {
-      setSendError(
-        e instanceof ApiError
-          ? `Message not confirmed: ${e.message.replaceAll("_", " ")}. Your text and files are kept.`
-          : "The server did not confirm this message. Your text and files are kept; send again to retry safely.",
-      );
-    } finally {
-      setSending(false);
-      composer.current?.focus();
-    }
+    addPending(conversation.id, item);
+    void enqueue(() => postPending(conversation, item.key, readInbox));
+    composer.current?.focus();
   }
+  function retryPending(p: Pending) {
+    patchPending(conversation.id, p.key, { phase: "posting", failure: undefined, error: undefined });
+    void enqueue(() => postPending(conversation, p.key, readInbox));
+  }
+  function editPending(p: Pending) {
+    removePending(conversation.id, p.key);
+    setText((current) => (current.trim() ? `${p.text}
+${current}` : p.text));
+    if (p.files.length) selectFiles(p.files);
+    composer.current?.focus();
+  }
+  function refreshNow() {
+    if (base.startsWith("/inbox") && state?.capabilities.includes("archive_history") && changeCursor.current !== null)
+      void refreshChanges();
+    else void load("", true, request.current, true);
+  }
+  // A send reaching the phone refreshes the open thread at once (see usePendingFollower).
+  const submittedSignal = useSubmittedSignal();
+  const seenSignal = useRef(submittedSignal);
+  useEffect(() => {
+    if (submittedSignal === seenSignal.current) return;
+    seenSignal.current = submittedSignal;
+    refreshNow();
+  }, [submittedSignal]);
+  // Drop a sent bubble as soon as the saved message with its transaction appears.
+  useEffect(() => {
+    for (const p of pending)
+      if (p.phase === "sent" && p.transaction && messages.some((m) => m.id === p.transaction))
+        removePending(conversation.id, p.key);
+  }, [messages, pending, conversation.id]);
+  const savedIds = new Set(messages.map((m) => m.id));
+  const pendingCount = pending.length,
+    previousPending = useRef(pendingCount);
+  useLayoutEffect(() => {
+    const el = scroll.current;
+    if (el && pendingCount > previousPending.current) el.scrollTop = el.scrollHeight;
+    previousPending.current = pendingCount;
+  }, [pendingCount]);
 
   const showOlder = (inbox?.enabled || conversation.archived)
     ? !!cursor || (!!inbox?.load_older && !importFinished)
@@ -646,13 +668,53 @@ export function ConversationHistory({
                     })}
                   </time>
                   {m.revision ? <span title="Previously observed content is retained in the encrypted archive">Edited</span> : null}
-                  {m.status && <span className="msg-status">{m.status}</span>}
+                  {m.status && (
+                    <span
+                      className="msg-status"
+                      title={m.status === "read" ? "Google reports this message was displayed" : undefined}
+                    >
+                      {statusLabel(m.status)}
+                    </span>
+                  )}
                 </small>
               </div>
             </div>
           );
         })}
         </div>
+        {pending.filter((p) => !(p.phase === "sent" && p.transaction && savedIds.has(p.transaction))).map((p) => (
+          <div key={p.key} className="message-group pending-send">
+            <div
+              className={"bubble outgoing from-web pending" + (p.phase === "failed" ? " send-failed" : "")}
+              data-pending={p.phase}
+            >
+              {p.files.map((file, index) => (
+                <PendingFile key={`${index}-${file.name}`} file={file} />
+              ))}
+              {p.text && <p>{p.text}</p>}
+              <small>
+                {p.phase === "failed" ? (
+                  <span className="pending-error" role="alert">{p.error}</span>
+                ) : (
+                  <span className="pending-state msg-status" role="status">
+                    {p.phase === "sent" ? "Sent" : (<><span className="spinner" aria-hidden="true" />Sending…</>)}
+                  </span>
+                )}
+              </small>
+              {p.phase === "failed" && (
+                <div className="pending-actions">
+                  {p.failure === "unconfirmed" && (
+                    <button type="button" className="small primary" disabled={!canSend} title={canSend ? undefined : "Sending is unavailable right now"} onClick={() => retryPending(p)}>Retry sending</button>
+                  )}
+                  {p.failure === "not_sent" && (
+                    <button type="button" className="small" onClick={() => editPending(p)}>Edit and resend</button>
+                  )}
+                  <button type="button" className="small ghost" onClick={() => removePending(conversation.id, p.key)}>Dismiss</button>
+                </div>
+              )}
+            </div>
+          </div>
+        ))}
       </div>
       {away && !hasNew && (
         <button
@@ -728,7 +790,7 @@ export function ConversationHistory({
               <SelectedAttachment
                 key={`${index}-${file.name}`}
                 file={file}
-                disabled={sending}
+                disabled={false}
                 remove={() => {
                   attachmentRevision.current++;
                   setFiles(files.filter((_, i) => i !== index));
@@ -763,7 +825,6 @@ export function ConversationHistory({
                 type="file"
                 multiple
                 aria-label="Choose files"
-                disabled={sending}
                 onChange={(event) => {
                   selectFiles(Array.from(event.target.files ?? []));
                   event.target.value = "";
@@ -774,7 +835,6 @@ export function ConversationHistory({
                 className="icon ghost"
                 aria-label="Attach files"
                 title="Attach files ? limits are configurable in Messages & privacy"
-                disabled={sending}
                 onClick={() => fileInput.current?.click()}
               >
                 <Icon name="attach" size={20} />
@@ -812,7 +872,7 @@ export function ConversationHistory({
                 !window.matchMedia?.("(pointer: coarse)")?.matches
               ) {
                 e.preventDefault();
-                send();
+                if (!e.repeat) send();
               }
             }}
           />
@@ -821,11 +881,7 @@ export function ConversationHistory({
             aria-label="Send message"
             disabled={!canSend || (!text.trim() && files.length === 0)}
           >
-            {sending ? (
-              <span className="spinner" />
-            ) : (
-              <Icon name="send" size={18} />
-            )}
+            <Icon name="send" size={18} />
           </button>
         </div>
         <div className="composer-meta">
@@ -869,4 +925,51 @@ function pastedName(file: File): File {
   const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
   const extension = file.type.split("/")[1]?.replace("jpeg", "jpg").replace(/[^a-z0-9]/gi, "") || "png";
   return new File([file], `image-${stamp}-${++pasteCounter}.${extension}`, { type: file.type, lastModified: file.lastModified });
+}
+
+const statusLabels: Record<string, string> = { submitted: "Sent", delivered: "Delivered", read: "Read" };
+const statusLabel = (status: string) => statusLabels[status] ?? status;
+
+// Posts one pending message. A retry reuses the same key and API route, so a lost
+// response can never create a second message.
+async function postPending(
+  conversation: Conversation,
+  key: string,
+  readInbox: () => Promise<InboxSettings | null | undefined>,
+) {
+  const item = getPending(conversation.id, key);
+  if (!item || item.phase !== "posting") return;
+  try {
+    const attachments = await Promise.all(
+      item.files.map(async (f) => ({ name: f.name, mime: f.type, data: await encodeFile(f) })),
+    );
+    // Archive reads can be ready before the permission poll catches up. Read
+    // current collection permission before selecting the write API/body.
+    const useInbox = item.route
+      ? item.route === "inbox"
+      : inboxAllows(await readInbox(), conversation);
+    patchPending(conversation.id, key, { route: useInbox ? "inbox" : "legacy" });
+    if (!useInbox && attachments.length) throw new ApiError(409, "inbox_access_disabled");
+    const composeBase = `${useInbox ? "/inbox" : ""}/conversations/${encodeURIComponent(conversation.id)}`;
+    const result = await api<{ id?: string }>(
+      `${composeBase}/compose`,
+      "POST",
+      useInbox ? { text: item.text, request_id: key, attachments } : { text: item.text },
+    );
+    patchPending(conversation.id, key, { phase: "queued", job: result?.id, queuedAt: Date.now() });
+  } catch (e) {
+    // The inbox route deduplicates by key, so retrying can never send twice. The
+    // legacy route has no key: only a definite server rejection is safe to retry.
+    const legacy = getPending(conversation.id, key)?.route === "legacy";
+    const safeRetry = !legacy || e instanceof ApiError;
+    patchPending(conversation.id, key, {
+      phase: "failed",
+      failure: safeRetry ? "unconfirmed" : "uncertain",
+      error: !safeRetry
+        ? "Not confirmed. Check your phone before sending this again."
+        : e instanceof ApiError
+          ? `Message not confirmed: ${e.message.replaceAll("_", " ")}. Retrying is safe and will not send twice.`
+          : "The server did not confirm this message. Retrying is safe and will not send twice.",
+    });
+  }
 }

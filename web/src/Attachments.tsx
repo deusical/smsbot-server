@@ -183,7 +183,7 @@ export function SelectedAttachment({
     return () => URL.revokeObjectURL(url);
   }, [file]);
   return (
-    <div className="selected-attachment">
+    <div className={"selected-attachment" + (preview ? " has-thumb" : "")}>
       {preview && <img src={preview} alt="" />}
       <span>
         <strong>{file.name}</strong>
@@ -199,5 +199,24 @@ export function SelectedAttachment({
         <Icon name="x" size={16} />
       </button>
     </div>
+  );
+}
+
+// A sent-but-not-yet-saved file inside a pending bubble: image thumbnail or a name chip.
+export function PendingFile({ file }: { file: File }) {
+  const [preview, setPreview] = useState("");
+  useEffect(() => {
+    if (!imageTypes.has(file.type)) return;
+    const url = URL.createObjectURL(file);
+    setPreview(url);
+    return () => URL.revokeObjectURL(url);
+  }, [file]);
+  return preview ? (
+    <img className="pending-thumb" src={preview} alt={file.name} />
+  ) : (
+    <span className="pending-file">
+      <Icon name="attach" size={14} />
+      {file.name}
+    </span>
   );
 }

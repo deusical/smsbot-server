@@ -14,6 +14,7 @@ import { Confirmation } from "./Confirmation";
 import { ArchivePage } from "./ArchivePage";
 import { ConversationsPage } from "./Conversations";
 import { clearSeen } from "./conversationOrder";
+import { clearPending, usePendingFollower } from "./pendingSends";
 import { Icon } from "./Icon";
 import { SettingsPage } from "./Settings";
 import { Avatar, Switch } from "./ui";
@@ -90,6 +91,7 @@ function App() {
     stateRevision = useRef(0),
     sessionRevision = useRef(0);
   const workspace = useWorkspace(signedIn, inbox, setInbox);
+  usePendingFollower(signedIn);
   const dirty = workspace.dirty;
   const notify = useCallback((text: string) => {
     const id = Date.now() + Math.random();
@@ -132,6 +134,7 @@ function App() {
   function clearSession() {
     sessionRevision.current++;
     clearSeen();
+    clearPending();
     setSignedIn(false);
     setState(null);
     setJobs([]);

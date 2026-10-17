@@ -99,11 +99,11 @@ test("lost inbox acknowledgement keeps its route and key after collection stops"
   await page.reload();await open(page);
   await page.getByLabel("Message",{exact:true}).fill("Synthetic pinned-route reply");
   await page.getByRole("button",{name:"Send message",exact:true}).click();
-  await expect(page.getByRole("alert").filter({hasText:"Your text and files are kept"})).toBeVisible();
+  await expect(page.getByLabel("Message",{exact:true})).toHaveValue("");
+  await expect(page.getByRole("alert").filter({hasText:"did not confirm this message"})).toBeVisible();
   const cfg=await(await page.request.get("/api/v1/inbox/settings")).json();
   await page.request.put("/api/v1/inbox/settings",{headers,data:{...cfg,enabled:false}});
-  await page.getByRole("button",{name:"Send message",exact:true}).click();
-  await expect(page.getByLabel("Message",{exact:true})).toHaveValue("");
+  await page.getByRole("button",{name:"Retry sending",exact:true}).click();
   expect(keys).toHaveLength(2);expect(keys[1]).toBe(keys[0]);expect(legacyCalls).toBe(0);
  }finally{
   const cfg=await(await page.request.get("/api/v1/inbox/settings")).json();
