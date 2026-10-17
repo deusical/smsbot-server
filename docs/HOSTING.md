@@ -23,6 +23,26 @@ Serve preserves the Host header, which the service checks exactly; if the dashbo
 
 The installed app caches only the dashboard's static files so it opens instantly and offline. API responses, which carry message text, are never cached. Signing out revokes the session on the server.
 
+## Deploying to a remote host
+
+To run a new version on an always-on Linux host reached over SSH (for example a machine on your tailnet), use `scripts/deploy-remote.ps1` from a Windows development machine. It deploys merged `main` only, so merge first.
+
+The host runs the service as a user systemd unit, `smsbot.service`, with the binary at `~/.local/lib/smsbot/smsbot` and state under `~/.local/share/smsbot`. The host needs `python3`, `curl` and `sha256sum`. Set that up once by hand, including the vault key and pairing, which are never deployed or read by the script. Use SSH key authentication and `Host` entries for the machine; no credential goes on a command line.
+
+```powershell
+.\scripts\deploy-remote.ps1 -Target USER@YOUR_HOST -OriginHost YOUR_HOST.YOUR_TAILNET.ts.net:PORT
+```
+
+`-OriginHost` is the host and port of the private HTTPS origin, which the service checks exactly. The script then:
+
+1. Refuses to continue unless the checkout is clean and exactly at `origin/main`. Pass `-SourceDir` to build from a separate clean worktree of `main`.
+2. Builds the dashboard and a stripped `linux/amd64` binary stamped with `git describe`, gzips it and records its SHA-256.
+3. Reads the installed binary's checksum on the host, then uploads the release and `scripts/remote-install.py` over `scp`.
+4. Runs the installer on the host. It verifies both checksums, stops the service, backs up the database (SQLite backup API, including the WAL) and the encrypted Google session to `~/.local/share/smsbot/backups/before-LABEL-STAMP`, keeps the old binary as `smsbot.before-LABEL-STAMP`, swaps the binary, starts the service and waits for `/healthz`. If anything fails it restores the previous binary and state and restarts.
+5. Checks that the dashboard assets the host serves are the ones just built.
+
+The service restarts **paused**, as every start does, and a schema migration may run. After a deploy, open the dashboard, check the connection and recent activity, and resume sending yourself. To roll back by hand, stop the unit, copy the retained `smsbot.before-*` binary over `smsbot` and, if the schema changed, restore the matching backup database (delete `smsbot.db-wal` and `smsbot.db-shm` first so newer WAL data is not replayed onto it), then start the unit. The scripts never read message bodies, contacts, the vault key or credentials.
+
 ## Direct TLS
 
 Supply both `--tls-cert` and `--tls-key`. A nonloopback listener requires direct TLS and an explicit HTTPS origin. Certificates must cover the origin hostname and chain to a CA trusted by the phone/browser. Protect the private key and allow only intended private-network sources in the host firewall.

@@ -22,6 +22,11 @@ First public beta. Experimental; see [Known limitations](docs/LIMITATIONS.md).
   repair, retention, original-file archive and exports.
 - `smsbot --version`; gofmt check in CI.
 
+### Added (operations)
+- `scripts/deploy-remote.ps1` and `scripts/remote-install.py`: checksum-verified,
+  rollback-capable deployment of merged `main` to a remote Linux host over SSH.
+  Documented in [Hosting](docs/HOSTING.md).
+
 ### Changed
 - Conversation polish: the message menu opens beside the message (never over it) and
   drops its title bar, reactions become a compact pill on the bubble's edge, messages
