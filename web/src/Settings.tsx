@@ -580,6 +580,14 @@ function InboxSection({
             />
           </div>
           <Switch
+            label="Mark messages read when I view them"
+            hint="While this tab is open and focused, a conversation you are looking at is marked read on your phone. The other person may see a read receipt if your phone sends them."
+            checked={draft.mark_read_when_viewed !== false}
+            onChange={(mark_read_when_viewed) =>
+              workspace.editInbox({ mark_read_when_viewed })
+            }
+          />
+          <Switch
             label="Automatic command replies"
             hint="Turn off to only reply by hand. Pausing the bot still stops all sending."
             checked={draft.automatic_replies}

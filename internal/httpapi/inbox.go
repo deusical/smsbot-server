@@ -19,6 +19,8 @@ func (s *Server) inboxRoutes() {
 	s.mux.HandleFunc("GET /api/v1/inbox/settings", s.protected(s.inboxSettings))
 	s.mux.HandleFunc("PUT /api/v1/inbox/settings", s.protected(s.saveInboxSettings))
 	s.mux.HandleFunc("GET /api/v1/inbox/conversations", s.protected(s.inboxConversations))
+	s.mux.HandleFunc("GET /api/v1/inbox/typing", s.protected(s.inboxTyping))
+	s.mux.HandleFunc("POST /api/v1/inbox/conversations/{id}/read", s.protected(s.inboxRead))
 	s.mux.HandleFunc("GET /api/v1/inbox/conversations/{id}/history", s.protected(s.inboxHistory))
 	s.mux.HandleFunc("POST /api/v1/inbox/conversations/{id}/history/import", s.protected(s.inboxImport))
 	s.mux.HandleFunc("POST /api/v1/inbox/conversations/{id}/compose", s.protected(s.inboxCompose))
@@ -84,9 +86,23 @@ func (s *Server) inboxConversations(w http.ResponseWriter, r *http.Request) {
 	p.Conversations = eligible
 
 	latest, _ := s.Engine.Store.LatestMessageTimes(r.Context())
+	settings, settingsErr := s.Engine.InboxSettings()
+	var previewIDs []string
+	for _, c := range p.Conversations {
+		if settingsErr == nil && (c.Archived || settings.Allows(c)) {
+			previewIDs = append(previewIDs, c.ID)
+		}
+	}
+	previews, _ := s.Engine.Store.LatestPreviews(r.Context(), previewIDs)
 	for i := range p.Conversations {
 		p.Conversations[i].Enrolled = s.Engine.Store.Enrolled(p.Conversations[i].ID, p.Conversations[i].ParticipantID)
 		p.Conversations[i].LastMessageAt = newestTime(p.Conversations[i].LastMessageAt, latest[p.Conversations[i].ID])
+		if v, ok := previews[p.Conversations[i].ID]; ok {
+			p.Conversations[i].Preview, p.Conversations[i].PreviewFromMe = v.Text, v.FromMe
+			if v.Text == "" && v.Attachment {
+				p.Conversations[i].Preview = "Attachment"
+			}
+		}
 	}
 	s.json(w, 200, p)
 }
@@ -235,4 +251,34 @@ func newestTime(a, b string) string {
 		return ta.UTC().Format(time.RFC3339Nano)
 	}
 	return tb.UTC().Format(time.RFC3339Nano)
+}
+
+func (s *Server) inboxTyping(w http.ResponseWriter, r *http.Request) {
+	s.json(w, 200, map[string]any{"conversations": s.Engine.TypingConversations()})
+}
+
+// inboxRead marks a viewed conversation read on the phone through the newest
+// message time the owner saw. It is idempotent and throttled per conversation.
+func (s *Server) inboxRead(w http.ResponseWriter, r *http.Request) {
+	var v struct {
+		Through string `json:"through"`
+	}
+	if !s.decode(w, r, &v) {
+		return
+	}
+	through, err := time.Parse(time.RFC3339Nano, v.Through)
+	if err != nil {
+		s.bad(w, 400, "invalid_time")
+		return
+	}
+	if err = s.Engine.MarkConversationRead(r.Context(), r.PathValue("id"), through); err != nil {
+		code := "read_unavailable"
+		switch err.Error() {
+		case "read_receipts_disabled", "inbox_access_disabled", "archive_identity_changed", "newer_message", "invalid_time", "ineligible_conversation", "conversation_identity_changed":
+			code = err.Error()
+		}
+		s.bad(w, 409, code)
+		return
+	}
+	s.json(w, 200, map[string]bool{"ok": true})
 }

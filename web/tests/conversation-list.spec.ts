@@ -2,7 +2,12 @@ import {test, expect, type Page} from "@playwright/test";
 import {readFileSync} from "node:fs";
 type Row = {id:string;label:string;last_message_at?:string;unread?:boolean;pinned?:boolean};
 async function prepare(page: Page, rows: Row[], messageCount = 3) {
-  const state = {rows};
+  const state = {rows, revision: 1};
+  await page.route("**/api/v1/state", async route => {
+    const response = await route.fetch();
+    if (!response.ok()) return route.fulfill({response});
+    await route.fulfill({json: {...await response.json(), conversations_revision: `test-${state.revision}`}});
+  });
   await page.route("**/api/v1/inbox/settings", async route => {
     const response = await route.fetch();
     await route.fulfill({json: {...await response.json(), enabled: true, scope: "all", archive_retention_days: 0}});
@@ -31,6 +36,7 @@ test("conversations order by recency with pinned first and reorder on new activi
   expect(await names(page)).toEqual(["Pinned chat", "Newest chat", "Middle chat", "Older chat"]);
   await expect(page.locator(".conversation").filter({hasText: "Pinned chat"}).locator(".conversation-flags svg")).toHaveCount(1);
   state.rows[0].last_message_at = iso(0);
+  state.revision++;
   await expect.poll(() => names(page), {timeout: 10000}).toEqual(["Pinned chat", "Older chat", "Newest chat", "Middle chat"]);
 });
 

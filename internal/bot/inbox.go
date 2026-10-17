@@ -25,6 +25,9 @@ type InboxSettings struct {
 	Conversations        []InboxBinding `json:"conversations"`
 	LoadOlder            bool           `json:"load_older"`
 	AutomaticReplies     bool           `json:"automatic_replies"`
+	// MarkRead is a pointer so settings saved before this option existed keep the
+	// default (on) instead of decoding to false.
+	MarkRead *bool `json:"mark_read_when_viewed,omitempty"`
 	Revision             int64          `json:"revision"`
 }
 

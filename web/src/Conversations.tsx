@@ -8,6 +8,7 @@ import {
 } from "./api";
 import { ConversationHistory } from "./ConversationHistory";
 import { formatListTime, sortConversations, useSeen } from "./conversationOrder";
+import { useTyping } from "./typing";
 import { Icon } from "./Icon";
 import { Avatar, Segmented, Switch } from "./ui";
 
@@ -41,6 +42,7 @@ export function ConversationsPage({
     [filter, setFilter] = useState<Filter>("all");
   const searchBox = useRef<HTMLInputElement>(null);
   const { markSeen, isUnread } = useSeen();
+  const typing = useTyping(!!state?.capabilities.includes("typing") && !!inbox?.enabled);
   const visible = sortConversations(conversations).filter(
     (c) =>
       (filter === "all" ||
@@ -175,11 +177,21 @@ export function ConversationsPage({
                   <small>
                     {c.group ? (
                       "Group, not supported"
+                    ) : typing.has(c.id) ? (
+                      <span className="typing-text">typing…</span>
+                    ) : c.preview ? (
+                      <span className="preview-text">
+                        {c.preview_from_me ? "You: " : ""}
+                        {c.preview}
+                      </span>
                     ) : (
                       <>
                         {c.protocol}
                         {c.enrolled && <span className="on-tag">Bot on</span>}
                       </>
+                    )}
+                    {!c.group && (c.preview || typing.has(c.id)) && c.enrolled && (
+                      <span className="on-tag">Bot on</span>
                     )}
                   </small>
                 </span>
@@ -239,6 +251,7 @@ export function ConversationsPage({
             busy={busy}
             act={act}
             enrollControl={enrollSwitch(current, false)}
+            typing={typing.has(current.id)}
             onBack={() => onSelect("")}
             onResume={onResume}
           />

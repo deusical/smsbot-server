@@ -19,6 +19,7 @@ import {
   type InboxSettings,
 } from "./api";
 import { Icon } from "./Icon";
+import { markSeen } from "./conversationOrder";
 import { Avatar } from "./ui";
 import {
   MessageAttachment,
@@ -43,6 +44,7 @@ type Props = {
   act: (fn: () => Promise<unknown>, refreshAfter?: boolean) => Promise<void>;
   inbox?: InboxSettings | null;
   enrollControl?: ReactNode;
+  typing?: boolean;
   onBack?: () => void;
   onResume?: () => void;
 };
@@ -75,6 +77,7 @@ export function ConversationHistory({
   act,
   inbox,
   enrollControl,
+  typing = false,
   onBack,
   onResume,
 }: Props) {
@@ -463,6 +466,65 @@ ${current}` : p.text));
       void refreshChanges();
     else void load("", true, request.current, true);
   }
+  // Mark the conversation read on the phone when the owner is actually looking at
+  // its newest message: tab visible and focused, scrolled to the bottom, and
+  // either the phone reports it unread or a new message arrived while open.
+  const [attention, setAttention] = useState(0);
+  useEffect(() => {
+    const bump = () => setAttention((n) => n + 1);
+    window.addEventListener("focus", bump);
+    window.addEventListener("blur", bump);
+    document.addEventListener("visibilitychange", bump);
+    return () => {
+      window.removeEventListener("focus", bump);
+      window.removeEventListener("blur", bump);
+      document.removeEventListener("visibilitychange", bump);
+    };
+  }, []);
+  const readBaseline = useRef<number | null>(null),
+    readThrough = useRef(0),
+    readTried = useRef(0);
+  const readEnabled =
+    !!state?.capabilities.includes("read_receipts") &&
+    !!inbox?.enabled &&
+    inbox.mark_read_when_viewed !== false &&
+    inboxAllows(inbox, conversation);
+  useEffect(() => {
+    readBaseline.current = null;
+    readThrough.current = 0;
+    readTried.current = 0;
+  }, [conversation.id]);
+  useEffect(() => {
+    if (loading || !messages.length) return;
+    let newest = 0,
+      newestIncoming = 0;
+    for (const m of messages) {
+      const at = Date.parse(m.at);
+      if (!Number.isFinite(at)) continue;
+      newest = Math.max(newest, at);
+      if (m.direction === "incoming") newestIncoming = Math.max(newestIncoming, at);
+    }
+    if (readBaseline.current === null) readBaseline.current = newestIncoming;
+    if (!readEnabled || away || !newest || newest <= readThrough.current) return;
+    if (document.visibilityState !== "visible" || !document.hasFocus()) return;
+    const arrivedWhileOpen = newestIncoming > (readBaseline.current ?? 0);
+    if (!conversation.unread && !arrivedWhileOpen) return;
+    if (Date.now() - readTried.current < 5000) return;
+    readTried.current = Date.now();
+    const through = newest;
+    const generation = request.current;
+    void api(`/inbox/conversations/${encodeURIComponent(conversation.id)}/read`, "POST", {
+      through: new Date(through).toISOString(),
+    })
+      .then(() => {
+        if (generation !== request.current) return;
+        readThrough.current = through;
+        markSeen(conversation);
+      })
+      .catch(() => {
+        /* a newer message or a transient failure; the next change retries */
+      });
+  }, [messages, away, attention, readEnabled, conversation.unread, conversation.id, loading]);
   // A send reaching the phone refreshes the open thread at once (see usePendingFollower).
   const submittedSignal = useSubmittedSignal();
   const seenSignal = useRef(submittedSignal);
@@ -509,8 +571,14 @@ ${current}` : p.text));
         <div className="thread-title">
           <h2>{conversation.label}</h2>
           <small>
-            {conversation.protocol}
-            {conversation.enrolled ? ", bot replies on" : ""}
+            {typing ? (
+              <span className="typing-text" role="status">typing…</span>
+            ) : (
+              <>
+                {conversation.protocol}
+                {conversation.enrolled ? ", bot replies on" : ""}
+              </>
+            )}
           </small>
         </div>
         <div className="thread-tools">
@@ -715,6 +783,11 @@ ${current}` : p.text));
             </div>
           </div>
         ))}
+        {typing && (
+          <div className="message-group typing-row" aria-hidden="true">
+            <div className="typing-bubble"><span /><span /><span /></div>
+          </div>
+        )}
       </div>
       {away && !hasNew && (
         <button

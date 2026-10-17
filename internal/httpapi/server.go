@@ -51,6 +51,7 @@ func New(e *bot.Engine, origin string, fixture bool) *Server {
 	s.mux.HandleFunc("DELETE /api/v1/clients/{id}", s.protected(s.revoke))
 	s.mux.HandleFunc("GET /api/v1/clients", s.protected(s.clients))
 	s.mux.HandleFunc("POST /api/v1/fixture/incoming", s.protected(s.incoming))
+	s.mux.HandleFunc("POST /api/v1/fixture/typing", s.protected(s.fixtureTyping))
 	sub, _ := fs.Sub(assets, "assets")
 	s.mux.Handle("/", http.FileServer(http.FS(sub)))
 	return s
@@ -225,7 +226,7 @@ func (s *Server) state(w http.ResponseWriter, r *http.Request) {
 		s.bad(w, 500, "storage_error")
 		return
 	}
-	value := map[string]any{"api_version": 1, "paused": p, "transport_ready": s.Engine.Transport.Ready(), "transport": map[bool]string{true: "fixture", false: "google_messages"}[s.Fixture], "fixture": s.Fixture, "capabilities": []string{"fixed_commands", "enrollment", "activity", "encrypted_inbox", "configuration", "models", "history", "history_import", "playground", "approvals", "manual_compose", "recipes", "ai_commands", "full_inbox", "attachments", "archive_history", "archive_refresh", "archive_files", "archive_backup", "archive_stats"}}
+	value := map[string]any{"api_version": 1, "paused": p, "transport_ready": s.Engine.Transport.Ready(), "transport": map[bool]string{true: "fixture", false: "google_messages"}[s.Fixture], "fixture": s.Fixture, "capabilities": []string{"fixed_commands", "enrollment", "activity", "encrypted_inbox", "configuration", "models", "history", "history_import", "playground", "approvals", "manual_compose", "recipes", "ai_commands", "full_inbox", "attachments", "archive_history", "archive_refresh", "archive_files", "archive_backup", "archive_stats", "conversation_sync", "read_receipts", "typing"}}
 	if reporter, ok := s.Engine.Transport.(transport.ConnectionReporter); ok {
 		connection := reporter.ConnectionStatus()
 		value["connection_state"] = connection.State
@@ -243,6 +244,7 @@ func (s *Server) state(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		value["inbox_capture_gap"] = active
+		value["conversations_revision"] = s.Engine.ConversationRevision()
 		value["inbox_capture_gaps"] = gaps
 		value["inbox_capture_gap_unknown"] = unknown
 	}
@@ -423,3 +425,20 @@ func (s *Server) incoming(w http.ResponseWriter, r *http.Request) {
 	s.json(w, 200, map[string]any{"accepted": accepted, "id": m.ID})
 }
 func Shutdown(ctx context.Context, h *http.Server) error { return h.Shutdown(ctx) }
+
+func (s *Server) fixtureTyping(w http.ResponseWriter, r *http.Request) {
+	fixture, ok := s.Engine.Transport.(*transport.Fixture)
+	if !s.Fixture || !ok {
+		s.bad(w, 404, "not_found")
+		return
+	}
+	var v struct {
+		ConversationID string `json:"conversation_id"`
+		Typing         bool   `json:"typing"`
+	}
+	if !s.decode(w, r, &v) {
+		return
+	}
+	fixture.SetTyping(v.ConversationID, v.Typing)
+	s.json(w, 200, map[string]bool{"ok": true})
+}

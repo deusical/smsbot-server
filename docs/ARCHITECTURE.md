@@ -288,3 +288,39 @@ reuses an identical in-flight job without resetting its cursor. A completed or
 cancelled job starts a fresh full scan. Re-ingested attachment references feed the
 existing original-file worker, subject to its enabled policy, quotas and retries;
 a finished message scan does not imply original-file download completion.
+
+
+## Instant send, conversation sync, previews and read receipts
+
+The dashboard clears the composer immediately and shows a pending bubble that
+follows the persisted job through queued, submitted and saved. Pending items are
+memory-only and cleared on sign-out. Each message has its own idempotency key; a
+lost response can be retried with the same key and API route, a definitively
+failed job can be edited and resent, and an uncertain submission offers neither.
+The server still persists outbound intent before submission and never retries an
+uncertain send.
+
+The Google adapter counts phone activity (conversation and message events) from
+the receive callback without touching the bounded queue, drops its cached
+conversation lists at most every ten seconds, and exposes `conversations_revision`
+(phone activity plus the saved-message change sequence) in owner state. The
+dashboard refetches the list only when that value changes, with a 30-second
+fallback. Typing events are held in memory for about eight seconds, only for
+conversations already identified as individual chats, and served from the
+owner-only `/inbox/typing`. Outgoing typing indicators are never sent.
+
+The owner conversation list adds `last_message_at` (the later of the phone time
+and the newest saved message), phone `unread` and `pinned` flags, and a
+120-character `preview` read from locally saved, encrypted messages for
+conversations the owner collects or archives. Previews are never logged or
+stored. The dashboard orders pinned first, then newest.
+
+`POST /inbox/conversations/{id}/read` marks a viewed conversation read on the
+phone. It is on by default through `mark_read_when_viewed` and requires
+collection access, an individual conversation, an exact participant match and a
+phone that reports the conversation unread. It runs outside the engine lock, is
+throttled per conversation, refuses when a message newer than the one the owner
+saw has arrived, and never sends a message or changes Live/Pause. The phone's own
+read-receipt setting decides whether the other person sees a receipt. Live
+Google acceptance of read marking and typing is pending; automated coverage uses
+offline fixtures.

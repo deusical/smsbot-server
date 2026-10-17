@@ -265,6 +265,15 @@ for (const heldEndpoint of ["conversations", "state"]) {
     const pending = new Promise<void>((resolve) => {
       started = resolve;
     });
+    if (heldEndpoint === "conversations") {
+      // The list is refetched only when the reported revision changes.
+      let revision = 0;
+      await page.route("**/api/v1/state", async (route) => {
+        const response = await route.fetch();
+        if (!response.ok()) return route.fulfill({ response });
+        await route.fulfill({ json: { ...(await response.json()), conversations_revision: `test-${revision++}` } });
+      });
+    }
     await page.route(
       heldEndpoint === "conversations" ? /\/api\/v1\/(?:inbox\/)?conversations(?:\?|$)/ : "**/api/v1/state",
       async (route) => {

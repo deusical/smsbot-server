@@ -494,7 +494,7 @@ test("scrolling older history preserves messages and never routes imported comma
     await page.locator(".messages").evaluate(el => {el.scrollTop = 0});
     await expect(page.locator(".bubble.incoming").filter({hasText: "Historical synthetic input must never execute"})).toBeVisible();
     await page.locator(".messages").evaluate(el => {el.scrollTop = el.scrollHeight});
-    await expect(page.getByText("Synthetic pagination row 109", {exact:true})).toBeVisible();
+    await expect(page.locator(".messages").getByText("Synthetic pagination row 109", {exact:true})).toBeVisible();
     const afterJobs = (await (await page.request.get("/api/v1/activity")).json()).map((job: {id:string}) => job.id).sort();
     expect(afterJobs).toEqual(beforeJobs);
   } finally {

@@ -5,6 +5,7 @@ export type CaptureGap = {
 export type State = {
   api_version: number;
   inbox_capture_gap?: boolean;
+  conversations_revision?: string;
   inbox_capture_gap_unknown?: boolean;
   inbox_capture_gaps?: CaptureGap[];
   paused: boolean;
@@ -27,6 +28,8 @@ export type Conversation = {
   last_message_at?: string;
   unread?: boolean;
   pinned?: boolean;
+  preview?: string;
+  preview_from_me?: boolean;
 };
 export type Job = {
   id: string;
@@ -80,6 +83,7 @@ export type InboxSettings = {
   conversations: { conversation: string; participant: string }[];
   load_older: boolean;
   automatic_replies: boolean;
+  mark_read_when_viewed?: boolean;
   revision: number;
 };
 export function inboxAllows(

@@ -24,6 +24,7 @@ type Engine struct {
 	Transport      transport.Transport
 	Provider       Provider
 	mu             sync.Mutex
+	reads          readThrottle
 	dispatchMu     sync.Mutex
 	now            func() time.Time
 	pending        map[string]context.CancelFunc

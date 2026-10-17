@@ -22,6 +22,10 @@ type Conversation struct {
 	LastMessageAt string `json:"last_message_at,omitempty"`
 	Unread        bool   `json:"unread,omitempty"`
 	Pinned        bool   `json:"pinned,omitempty"`
+	// Preview is the newest saved message for conversations the owner collects.
+	// It is filled per request for the owner list and never stored or logged.
+	Preview       string `json:"preview,omitempty"`
+	PreviewFromMe bool   `json:"preview_from_me,omitempty"`
 }
 type Incoming struct {
 	Attachments    []media.File `json:"-"`
@@ -59,6 +63,10 @@ type Fixture struct {
 	Online bool
 	Fail   string
 	Sent   map[string]string
+	// Offline stand-ins for phone activity, typing and read marking.
+	activity uint64
+	typing   map[string]time.Time
+	Read     map[string]int
 }
 
 func NewFixture() *Fixture     { return &Fixture{Online: true, Sent: map[string]string{}} }

@@ -45,6 +45,7 @@ type Google struct {
 	saveMu        sync.Mutex
 	Diagnostic    func(AuthDiagnostic)
 	discovery     conversationPageCache
+	activity      activityState
 }
 
 func NewGoogle(v *vault.Vault, path string) *Google {
@@ -61,6 +62,19 @@ func (g *Google) enqueue(event any) {
 	_, reason, hard, _, failed := connectionFailure(event)
 	if failed {
 		g.noteFailure(reason, hard)
+	}
+	// Typing and activity hints bypass the bounded queue: they are ephemeral and
+	// must never contribute to overflow recovery or pause automation.
+	switch hint := event.(type) {
+	case *gmproto.TypingData:
+		g.noteTyping(hint)
+		return
+	case *gmproto.Conversation:
+		g.noteActivity()
+	case *libgm.WrappedMessage:
+		if hint != nil && hint.Message != nil {
+			g.noteActivity()
+		}
 	}
 	original := event
 	switch e := event.(type) {
@@ -313,7 +327,7 @@ func (g *Google) Conversations(ctx context.Context) ([]Conversation, error) {
 	if !g.Ready() {
 		return nil, errors.New("phone connection unavailable")
 	}
-	if time.Since(g.listed) < 30*time.Second {
+	if !g.activity.listStale.Swap(false) && time.Since(g.listed) < 30*time.Second {
 		return append([]Conversation(nil), g.list...), nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)

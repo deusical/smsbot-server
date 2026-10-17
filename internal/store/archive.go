@@ -278,3 +278,47 @@ func (s *Store) LatestMessageTimes(ctx context.Context) (map[string]string, erro
 	}
 	return out, rows.Err()
 }
+
+// ChangeSequence is the newest message change number; it moves whenever a
+// message is added, edited or receives a new status.
+func (s *Store) ChangeSequence() uint64 {
+	var seq sql.NullInt64
+	if err := s.DB.QueryRow("SELECT max(seq) FROM message_changes").Scan(&seq); err != nil || !seq.Valid || seq.Int64 < 0 {
+		return 0
+	}
+	return uint64(seq.Int64)
+}
+
+// Preview is the newest saved message of a conversation, for the owner list.
+type Preview struct {
+	Text       string
+	FromMe     bool
+	Attachment bool
+}
+
+// LatestPreviews opens only the newest message per requested conversation. The
+// caller must restrict ids to conversations the owner may see.
+func (s *Store) LatestPreviews(ctx context.Context, ids []string) (map[string]Preview, error) {
+	out := map[string]Preview{}
+	for _, id := range ids {
+		var mid, direction, enc string
+		var files int
+		err := s.DB.QueryRowContext(ctx, "SELECT m.id,m.direction,m.payload,EXISTS(SELECT 1 FROM message_attachments a WHERE a.message=m.id) FROM messages m WHERE m.conversation=? ORDER BY m.at DESC,m.id DESC LIMIT 1", id).Scan(&mid, &direction, &enc, &files)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		plain, err := s.Vault.Open("message:"+mid, enc)
+		if err != nil {
+			continue
+		}
+		text := strings.Join(strings.Fields(string(plain)), " ")
+		if runes := []rune(text); len(runes) > 120 {
+			text = string(runes[:120]) + "…"
+		}
+		out[id] = Preview{Text: text, FromMe: direction == "outgoing", Attachment: files == 1}
+	}
+	return out, nil
+}

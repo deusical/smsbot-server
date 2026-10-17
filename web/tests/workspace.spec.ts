@@ -248,6 +248,12 @@ test("conversation filters preserve enrollment and theme switches do not write b
       session: sessionStorage.length,
     })),
   ).toEqual({ local: 0, session: 0 });
+  let revision = 0;
+  await page.route("**/api/v1/state", async (route) => {
+    const response = await route.fetch();
+    if (!response.ok()) return route.fulfill({ response });
+    await route.fulfill({ json: { ...(await response.json()), conversations_revision: `test-${revision++}` } });
+  });
   await page.route("**/api/v1/inbox/conversations", (route) =>
     route.fulfill({
       json: {conversations: [

@@ -86,6 +86,8 @@ function App() {
   const [toasts, setToasts] = useState<Toast[]>([]),
     [confirmSignOut, setConfirmSignOut] = useState(false);
   const paginatedConversations = useRef(false);
+  // The list is refetched when the server reports activity, or every 30 seconds.
+  const listFetched = useRef({ revision: "", at: 0 });
   const refreshing = useRef(false),
     refreshingDetails = useRef(false),
     stateRevision = useRef(0),
@@ -134,6 +136,7 @@ function App() {
   function clearSession() {
     sessionRevision.current++;
     clearSeen();
+    listFetched.current = { revision: "", at: 0 };
     clearPending();
     setSignedIn(false);
     setState(null);
@@ -187,7 +190,13 @@ function App() {
       setJobs(activity);
       if (s.transport_ready || s.capabilities.includes("archive_history")) {
         stage = "conversations";
-        if (inboxConfig?.enabled || s.capabilities.includes("archive_history")) {
+        const fresh =
+          !!s.conversations_revision &&
+          listFetched.current.revision === s.conversations_revision &&
+          Date.now() - listFetched.current.at < 30000;
+        if (fresh) {
+          /* nothing changed since the last fetch */
+        } else if (inboxConfig?.enabled || s.capabilities.includes("archive_history")) {
           const discovered = await api<ConversationPage>(
             "/inbox/conversations",
           );
@@ -200,6 +209,7 @@ function App() {
             return [...m.values()];
           });
           setDiscoveryPartial(!!discovered.partial);
+          listFetched.current = { revision: s.conversations_revision ?? "", at: Date.now() };
         } else {
           const rows = await api<Conversation[]>("/conversations");
           if (session !== sessionRevision.current) return;
@@ -248,7 +258,10 @@ function App() {
     setError("");
     try {
       await fn();
-      if (refreshAfter) await refresh();
+      if (refreshAfter) {
+        listFetched.current = { revision: "", at: 0 };
+        await refresh();
+      }
     } catch (e) {
       setError(
         e instanceof ApiError

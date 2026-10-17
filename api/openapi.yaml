@@ -807,6 +807,60 @@ paths:
         schema:
           type: string
           maxLength: 4096
+  /inbox/typing:
+    get:
+      description: Individual conversations whose other participant is typing now. Owner only, in memory, expires within seconds; empty unless collection is enabled for the conversation.
+      security:
+      - browserSession: []
+      responses:
+        '200':
+          description: Typing conversations
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - conversations
+                properties:
+                  conversations:
+                    type: array
+                    items:
+                      type: string
+        '403':
+          description: Owner required
+  /inbox/conversations/{id}/read:
+    post:
+      description: Mark an individual conversation read on the phone through the newest message the owner saw. Requires collection access, an exact participant match and the mark-read setting; never sends a message or changes Live/Pause. Throttled per conversation.
+      security:
+      - browserSession: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+              - through
+              properties:
+                through:
+                  type: string
+                  format: date-time
+      responses:
+        '200':
+          description: Marked read, or already read or throttled
+        '400':
+          description: Invalid time
+        '403':
+          description: Owner required
+        '409':
+          description: Not allowed or unavailable (read_receipts_disabled, inbox_access_disabled, newer_message, ineligible_conversation, conversation_identity_changed, archive_identity_changed, read_unavailable)
   /inbox/conversations/{id}/history:
     parameters:
     - name: id
@@ -1121,6 +1175,9 @@ components:
       - fixture
       - capabilities
       properties:
+        conversations_revision:
+          type: string
+          description: Owner-only counter that changes when the phone reports activity or a message is saved; the dashboard refetches its conversation list only when it changes.
         inbox_capture_gap:
           type: boolean
           description: Owner-only pending history-verification warning; ranges are not confirmed outages or proof of missing messages.
@@ -1170,6 +1227,11 @@ components:
         pinned:
           type: boolean
           description: Phone pinned flag; optional display hint.
+        preview:
+          type: string
+          description: Newest saved message text (at most 120 characters) for conversations the owner collects; owner inbox listing only.
+        preview_from_me:
+          type: boolean
     Job:
       type: object
       properties:
@@ -1473,6 +1535,10 @@ components:
                 type: string
         load_older:
           type: boolean
+        mark_read_when_viewed:
+          type: boolean
+          default: true
+          description: Mark a conversation read on the phone while the owner is viewing it. Omitted means on.
           default: false
         automatic_replies:
           type: boolean
