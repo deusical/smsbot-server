@@ -75,3 +75,9 @@ func TestCookieUpdateModeValidation(t *testing.T) {
 		}
 	}
 }
+
+func TestVersionFlagPrintsWithoutState(t *testing.T) {
+	if err := runWithInput([]string{"--version"}, strings.NewReader("")); err != nil {
+		t.Fatal(err)
+	}
+}

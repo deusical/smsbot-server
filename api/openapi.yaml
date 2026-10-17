@@ -3,14 +3,13 @@ info:
   title: SmsBot control API
   version: 1.1.0
   description: Server commands, configuration, retained messages, owner-only attachments and control API.
-    Fixture transport/provider are offline. Browser mutations require exact Origin;
-    native clients use revocable bearer credentials. New optional capabilities are
+    Fixture transport/provider are offline. Every call needs an owner browser
+    session and mutations require the exact Origin. New optional capabilities are
     advertised by state.
 servers:
 - url: /api/v1
 security:
 - browserSession: []
-- clientCredential: []
 paths:
   /login:
     post:
@@ -79,17 +78,6 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/State'
-  /conversations:
-    get:
-      responses:
-        '200':
-          description: First 25 inbox conversations or synthetic fixture set
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/Conversation'
   /enrollment:
     post:
       requestBody:
@@ -134,80 +122,6 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/Job'
-  /conversations/{id}/messages:
-    parameters:
-    - name: id
-      in: path
-      required: true
-      schema:
-        type: string
-    get:
-      responses:
-        '200':
-          description: Latest retained messages, including explicitly imported historical
-            text; descending by time
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  type: object
-                  properties:
-                    id:
-                      type: string
-                    direction:
-                      type: string
-                      enum:
-                      - incoming
-                      - outgoing
-                    at:
-                      type: string
-                    text:
-                      type: string
-        '403':
-          description: Enrollment required
-  /clients:
-    get:
-      security:
-      - browserSession: []
-      responses:
-        '200':
-          description: Revocable client IDs and labels
-          never tokens: null
-    post:
-      security:
-      - browserSession: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required:
-              - label
-              additionalProperties: false
-              properties:
-                label:
-                  type: string
-                  minLength: 1
-                  maxLength: 80
-      responses:
-        '201':
-          description: New ID
-          label and token returned once; do not persist in browser storage: null
-  /clients/{id}:
-    parameters:
-    - name: id
-      in: path
-      required: true
-      schema:
-        type: string
-    delete:
-      security:
-      - browserSession: []
-      responses:
-        '200':
-          description: Credential revoked
   /fixture/incoming:
     post:
       description: Exists only in fixture mode; no Google/carrier/provider requests.
@@ -1161,9 +1075,6 @@ components:
       type: apiKey
       in: cookie
       name: smsbot_session
-    clientCredential:
-      type: http
-      scheme: bearer
   schemas:
     State:
       type: object

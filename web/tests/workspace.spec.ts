@@ -305,19 +305,22 @@ for (const viewport of [
       width: viewport.width,
       height: viewport.height,
     });
-    await page.route("**/api/v1/conversations", (route) =>
+    await page.route("**/api/v1/inbox/conversations", (route) =>
       route.fulfill({
-        json: [
-          {
-            id: "visual-thread",
-            participant_id: "visual-person",
-            label: "Demo conversation",
-            protocol: "RCS",
-            group: false,
-            writable: true,
-            enrolled: true,
-          },
-        ],
+        json: {
+          conversations: [
+            {
+              id: "visual-thread",
+              participant_id: "visual-person",
+              label: "Demo conversation",
+              protocol: "RCS",
+              group: false,
+              writable: true,
+              enrolled: true,
+            },
+          ],
+          next_cursor: "",
+        },
       }),
     );
     await page.route("**/api/v1/activity", (route) =>
@@ -349,7 +352,7 @@ for (const viewport of [
           transport_ready: true,
           fixture: true,
           transport: "fixture",
-          capabilities: ["history", "configuration"],
+          capabilities: ["history", "configuration", "archive_history"],
         },
       }),
     );

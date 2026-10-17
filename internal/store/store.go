@@ -77,6 +77,11 @@ func Open(path string, v *vault.Vault) (*Store, error) {
 		db.Close()
 		return nil, e
 	}
+	// Bearer client credentials are no longer accepted; drop any saved by older versions.
+	if _, e = db.Exec("DELETE FROM credentials WHERE kind='client'"); e != nil {
+		db.Close()
+		return nil, e
+	}
 	return s, nil
 }
 func (s *Store) migrate() error {
@@ -360,10 +365,6 @@ func (s *Store) SessionExpiry(token string) (int64, bool) {
 }
 func (s *Store) RevokeSessions() error {
 	_, e := s.DB.Exec("DELETE FROM credentials WHERE kind='session'")
-	return e
-}
-func (s *Store) Revoke(hash string) error {
-	_, e := s.DB.Exec("DELETE FROM credentials WHERE hash=? AND kind='client'", hash)
 	return e
 }
 func (s *Store) SaveMessage(id, conv, direction, text string) error {

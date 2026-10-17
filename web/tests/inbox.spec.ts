@@ -348,9 +348,9 @@ test("owner captures ordinary text while paused and sends manually without autom
 }) => {
   await login(page);
   await configure(page, true);
-  const originalConversations = await (
-    await page.request.get("/api/v1/conversations")
-  ).json();
+  const originalConversations = (
+    await (await page.request.get("/api/v1/inbox/conversations")).json()
+  ).conversations;
   const wasEnrolled = originalConversations.find(
     (c: { id: string; enrolled: boolean }) => c.id === "demo-chat",
   )?.enrolled;
@@ -395,11 +395,6 @@ test("owner captures ordinary text while paused and sends manually without autom
       page.locator(".bubble.outgoing:not(.pending)").filter({ hasText: reply }),
     ).toContainText("Sent from web", { timeout: 15000 });
     await expect(page.locator(".bubble.pending")).toHaveCount(0);
-    await page.evaluate(() => window.scrollTo(0, 0));
-    await page.screenshot({
-      path: "../docs/images/server-conversation-inbox.png",
-      fullPage: true,
-    });
   } finally {
     await configure(page, false);
     if (wasEnrolled)

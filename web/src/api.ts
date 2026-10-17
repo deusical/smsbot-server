@@ -100,7 +100,6 @@ export function inboxAllows(
       ))
   );
 }
-export type Client = { id: string; label: string; token?: string };
 export type Generation = {
   reasoning: string;
   answer_length: string;

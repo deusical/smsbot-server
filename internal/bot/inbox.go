@@ -28,7 +28,7 @@ type InboxSettings struct {
 	// MarkRead is a pointer so settings saved before this option existed keep the
 	// default (on) instead of decoding to false.
 	MarkRead *bool `json:"mark_read_when_viewed,omitempty"`
-	Revision             int64          `json:"revision"`
+	Revision int64 `json:"revision"`
 }
 
 func (s InboxSettings) FileLimits() media.Limits {

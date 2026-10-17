@@ -43,7 +43,9 @@ func (e *Engine) ImportHistory(ctx context.Context, conv, cursor string) (map[st
 	}
 	count := 0
 	for _, m := range page.Messages {
-  if len(m.Attachments) > 0 { continue }
+		if len(m.Attachments) > 0 {
+			continue
+		}
 		if cfg.Settings.RetentionDays > 0 && m.At.Before(e.now().AddDate(0, 0, -cfg.Settings.RetentionDays)) {
 			continue
 		}

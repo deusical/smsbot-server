@@ -55,13 +55,9 @@ func TestCredentialRevocationAndExpiry(t *testing.T) {
 		t.Fatal(e)
 	}
 	defer s.DB.Close()
-	s.AddCredential("fixture-client", "test", "client", 0)
+	s.AddCredential("fixture-session", "test", "session", 0)
 	s.AddCredential("fixture-expired", "test", "session", 1)
-	if s.Credential("fixture-expired", "session") || s.Credential("fixture-client", "owner") {
+	if s.Credential("fixture-expired", "session") || s.Credential("fixture-session", "owner") {
 		t.Fatal("credential scope/expiry")
-	}
-	s.Revoke(Hash("fixture-client"))
-	if s.Credential("fixture-client", "client") {
-		t.Fatal("revoke failed")
 	}
 }

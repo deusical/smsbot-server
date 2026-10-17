@@ -110,9 +110,6 @@ func TestReadReceiptsRespectConsentSettingAndThrottle(t *testing.T) {
 	if w := ownerRequest(s, "POST", path, body); w.Code != 409 {
 		t.Fatal("read accepted without collection", w.Code)
 	}
-	if w := req(s, "POST", path, body, "fixture-client", ""); w.Code != 403 {
-		t.Fatal("client credential can mark read", w.Code)
-	}
 	setInbox(t, s, func(c *botSettings) { c.Enabled = true })
 	if w := ownerRequest(s, "POST", path, `{"through":"nonsense"}`); w.Code != 400 {
 		t.Fatal("bad time accepted", w.Code)
@@ -172,8 +169,5 @@ func TestTypingOnlyForOptedInConversations(t *testing.T) {
 	f.SetTyping("demo-chat", false)
 	if got := typing(); len(got) != 0 {
 		t.Fatal("stopped typing still reported", got)
-	}
-	if w := req(s, "GET", "/api/v1/inbox/typing", "", "fixture-client", ""); w.Code != 403 {
-		t.Fatal("client credential can read typing", w.Code)
 	}
 }
