@@ -46,8 +46,6 @@ paths:
       responses:
         '200':
           description: All browser sessions revoked
-        '403':
-          description: Client credentials cannot revoke sessions
   /state:
     get:
       responses:
