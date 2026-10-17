@@ -28,16 +28,17 @@ type Conversation struct {
 	PreviewFromMe bool   `json:"preview_from_me,omitempty"`
 }
 type Incoming struct {
-	Attachments    []media.File `json:"-"`
-	ID             string       `json:"id"`
-	ConversationID string       `json:"conversation_id"`
-	ParticipantID  string       `json:"participant_id"`
-	Text           string       `json:"text"`
-	At             time.Time    `json:"at"`
-	Historical     bool         `json:"historical"`
-	Outgoing       bool         `json:"outgoing"`
-	TransactionID  string       `json:"transaction_id,omitempty"`
-	Status         string       `json:"status,omitempty"`
+	Interaction    *MessageInteraction `json:"-"`
+	Attachments    []media.File        `json:"-"`
+	ID             string              `json:"id"`
+	ConversationID string              `json:"conversation_id"`
+	ParticipantID  string              `json:"participant_id"`
+	Text           string              `json:"text"`
+	At             time.Time           `json:"at"`
+	Historical     bool                `json:"historical"`
+	Outgoing       bool                `json:"outgoing"`
+	TransactionID  string              `json:"transaction_id,omitempty"`
+	Status         string              `json:"status,omitempty"`
 }
 type ConversationLookup interface {
 	LookupConversation(context.Context, string) (Conversation, error)

@@ -173,6 +173,9 @@ func (e *Engine) Observe(ctx context.Context, m transport.Incoming) error {
 	return e.observe(ctx, m, 0)
 }
 func (e *Engine) observe(ctx context.Context, m transport.Incoming, epoch uint64) error {
+	if m.Outgoing && m.Interaction != nil {
+		m.Historical = true
+	}
 	if m.ID == "" || m.ConversationID == "" || (m.Text == "" && len(m.Attachments) == 0) || (!m.Historical && e.now().Sub(m.At) > 2*time.Minute) || m.At.After(e.now().Add(5*time.Second)) {
 		return nil
 	}
@@ -214,6 +217,17 @@ func (e *Engine) observe(ctx context.Context, m transport.Incoming, epoch uint64
 	if !s.Allows(c) || (!m.Outgoing && m.ParticipantID != c.ParticipantID) {
 		return nil
 	}
+	if m.Interaction != nil {
+		if source, ok := e.Transport.(transport.InteractionOwnerSource); ok {
+			owner, ownerErr := source.InteractionOwner(c.ID, c.ParticipantID)
+			if ownerErr != nil {
+				return ownerErr
+			}
+			snapshot := *m.Interaction
+			snapshot.OwnerID = owner
+			m.Interaction = &snapshot
+		}
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	current, err := e.InboxSettings()
@@ -244,7 +258,7 @@ func (e *Engine) observe(ctx context.Context, m transport.Incoming, epoch uint64
 	if err = e.Store.SaveArchive(a, current.ArchiveRetentionDays); err != nil {
 		return err
 	}
-	return e.Store.SaveObservedFiles(c.ID, m.ID, m.TransactionID, dir, m.Text, "phone", m.Status, m.At, m.Attachments)
+	return e.Store.SaveObservedFiles(c.ID, m.ID, m.TransactionID, dir, m.Text, "phone", m.Status, m.At, m.Attachments, m.Interaction)
 }
 func (e *Engine) InboxPage(ctx context.Context, conv, cursor, search string, limit int) (store.InboxPage, error) {
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
@@ -357,7 +371,7 @@ func (e *Engine) ImportInboxHistory(ctx context.Context, conv, cursor string) (m
 		if err = e.Store.DB.QueryRow("SELECT count(*) FROM message_alias WHERE alias=?", store.Hash(conv+"\x00"+m.ID)).Scan(&known); err != nil {
 			return nil, err
 		}
-		if err = e.Store.SaveObservedFiles(conv, m.ID, m.TransactionID, m.Direction, m.Text, "history", m.Status, m.At, m.Attachments); err != nil {
+		if err = e.Store.SaveObservedFiles(conv, m.ID, m.TransactionID, m.Direction, m.Text, "history", m.Status, m.At, m.Attachments, m.Interaction); err != nil {
 			return nil, err
 		}
 		if known == 0 {
@@ -371,7 +385,7 @@ func (e *Engine) ImportInboxHistory(ctx context.Context, conv, cursor string) (m
 
 // A repeat acknowledges the original intent without creating another job,
 // even if limits or global pause changed after the lost acknowledgement.
-func (e *Engine) existingCompose(id, conv, text string, files []media.File) (bool, error) {
+func (e *Engine) existingCompose(id, conv, text string, files []media.File, replyTarget ...string) (bool, error) {
 	var n int
 	if err := e.Store.DB.QueryRow("SELECT count(*) FROM jobs WHERE id=? AND conversation=? AND command='manual'", id, conv).Scan(&n); err != nil {
 		return false, err
@@ -386,7 +400,11 @@ func (e *Engine) existingCompose(id, conv, text string, files []media.File) (boo
 	if len(digest) == 0 {
 		return false, errors.New("request_already_recorded_check_activity")
 	}
-	if string(digest) != media.Intent(text, files) {
+	target := ""
+	if len(replyTarget) > 0 {
+		target = replyTarget[0]
+	}
+	if string(digest) != store.ComposeIntent(text, files, target) {
 		return false, errors.New("request_id_reused_with_different_message")
 	}
 	return true, nil
@@ -394,7 +412,14 @@ func (e *Engine) existingCompose(id, conv, text string, files []media.File) (boo
 func (e *Engine) ComposeInbox(ctx context.Context, conv, text, requestID string) (string, error) {
 	return e.ComposeInboxFiles(ctx, conv, text, requestID, nil)
 }
-func (e *Engine) ComposeInboxFiles(ctx context.Context, conv, text, requestID string, uploads []media.Upload) (string, error) {
+func (e *Engine) ComposeInboxFiles(ctx context.Context, conv, text, requestID string, uploads []media.Upload, replyTargets ...string) (string, error) {
+	replyTarget := ""
+	if len(replyTargets) > 0 {
+		replyTarget = replyTargets[0]
+	}
+	if len(replyTarget) > 128 {
+		return "", errors.New("invalid_reply_target")
+	}
 	settings, err := e.InboxSettings()
 	if err != nil {
 		return "", err
@@ -416,7 +441,7 @@ func (e *Engine) ComposeInboxFiles(ctx context.Context, conv, text, requestID st
 	defer cancel()
 	id := store.Hash("compose\x00" + conv + "\x00" + requestID)
 	e.mu.Lock()
-	exists, err := e.existingCompose(id, conv, text, files)
+	exists, err := e.existingCompose(id, conv, text, files, replyTarget)
 	s, settingsErr := e.InboxSettings()
 	consent := e.captureConsent.Load()
 	e.mu.Unlock()
@@ -442,7 +467,7 @@ func (e *Engine) ComposeInboxFiles(ctx context.Context, conv, text, requestID st
 
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	exists, err = e.existingCompose(id, conv, text, files)
+	exists, err = e.existingCompose(id, conv, text, files, replyTarget)
 	if err != nil {
 		return "", err
 	}
@@ -481,6 +506,14 @@ func (e *Engine) ComposeInboxFiles(ctx context.Context, conv, text, requestID st
 	if !permitted {
 		return "", errors.New("request_limit_reached")
 	}
-	_, err = e.Store.Enqueue(id, conv, "manual", store.Plan{Participant: c.ParticipantID, Reply: text, MaxChars: cfg.Settings.MaxChars, Manual: true, InboxOwnerOnly: true, Attachments: files})
+	wireTarget := ""
+	if replyTarget != "" {
+		v, err := e.replyTarget(ctx, c, replyTarget)
+		if err != nil {
+			return "", err
+		}
+		wireTarget = v.UpstreamID
+	}
+	_, err = e.Store.Enqueue(id, conv, "manual", store.Plan{ReplyTarget: replyTarget, ReplyWireTarget: wireTarget, Participant: c.ParticipantID, Reply: text, MaxChars: cfg.Settings.MaxChars, Manual: true, InboxOwnerOnly: true, Attachments: files})
 	return id, err
 }

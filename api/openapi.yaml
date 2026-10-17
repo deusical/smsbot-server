@@ -856,7 +856,8 @@ paths:
       description: Queue confirmed owner manual reply with idempotency key; pause and
         final access checks apply. Optional attachments are base64 bytes. Owner-configured
         attachment_limits control count, per-file MiB and combined MiB; each zero disables that limit. Empty text is allowed when files are supplied.
-        The request key binds the text, file names, MIME types and exact bytes.
+        The request key binds the text, file names, MIME types, exact bytes and optional reply target.
+        Quoted replies require a locally collected RCS target in this conversation and current RCS capability; they never silently downgrade to SMS.
       security:
       - browserSession: []
       responses:
@@ -890,6 +891,96 @@ paths:
                   type: string
                   minLength: 16
                   maxLength: 100
+                reply_to:
+                  type: string
+                  maxLength: 128
+                  description: Optional local message ID to quote. Resolved to an encrypted upstream identity on the server; never a raw upstream ID.
+  /inbox/conversations/{id}/messages/{message}/actions:
+    parameters:
+    - {name: id, in: path, required: true, schema: {type: string}}
+    - {name: message, in: path, required: true, schema: {type: string}}
+    get:
+      summary: Per-message protocol and current action eligibility
+      description: Owner only. Shared UI components use these flags rather than the conversation protocol label. Edit is false with editing_unavailable_in_companion_transport. SMS, MMS, unknown protocol, missing upstream IDs, changed identities, pause and unavailable collection fail closed for native RCS mutations.
+      security: [{browserSession: []}]
+      responses:
+        '200':
+          description: Current capability snapshot; every mutation repeats validation
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/MessageActions'}
+        '401': {description: Owner authentication required}
+        '409': {description: Actions unavailable}
+  /inbox/conversations/{id}/messages/{message}/reactions:
+    parameters:
+    - {name: id, in: path, required: true, schema: {type: string}}
+    - {name: message, in: path, required: true, schema: {type: string}}
+    post:
+      summary: Queue an owner RCS emoji reaction change once
+      description: Explicit add, switch or remove operation, bound to a capability version and idempotency key. Intent is encrypted and persisted before submission. An unresolved action blocks conflicting reactions on this target. Uncertain submissions are never automatically retried. Image reactions are not supported.
+      security: [{browserSession: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [emoji, operation, version, request_id]
+              properties:
+                emoji: {type: string, maxLength: 64, description: Unicode emoji including supported variation selectors and composed sequences}
+                operation: {type: string, enum: [add, switch, remove]}
+                version: {type: string, description: Version returned by message actions}
+                request_id: {type: string, minLength: 16, maxLength: 100}
+      responses:
+        '202':
+          description: Original or newly queued action ID; not delivery confirmation
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: {type: string}
+                  queued: {type: boolean}
+        '401': {description: Owner authentication required}
+        '409': {description: 'invalid_reaction, reaction_conflict, reaction_unavailable or request_id_reused_with_different_action'}
+  /inbox/conversations/{id}/actions/{action}:
+    parameters:
+    - {name: id, in: path, required: true, schema: {type: string}}
+    - {name: action, in: path, required: true, schema: {type: string}}
+    get:
+      summary: Owner reaction submission and observation status
+      description: Submitted means accepted by the transport and waiting for an authoritative snapshot. The reaction_confirmed state means the intended reaction was observed, independently of message read receipts. Unknown submission remains blocked until reconciled. No raw provider errors are returned.
+      security: [{browserSession: []}]
+      responses:
+        '200':
+          description: Action status scoped to this conversation
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: {type: string}
+                  state: {type: string, enum: [queued, generating, submitting, submitted, unknown_submission, reaction_confirmed, failed, cancelled, expired]}
+                  code: {type: string}
+        '401': {description: Owner authentication required}
+        '404': {description: Action unavailable in this conversation}
+  /inbox/conversations/{id}/messages/{message}/window:
+    parameters:
+    - {name: id, in: path, required: true, schema: {type: string}}
+    - {name: message, in: path, required: true, schema: {type: string}}
+    get:
+      summary: Bounded local history window around a quoted original
+      description: Owner archive access only. At most 50 retained messages around the exact local target. Does not fetch upstream history or prove that surrounding history is complete.
+      security: [{browserSession: []}]
+      responses:
+        '200':
+          description: Local message window
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/InboxPage'}
+        '401': {description: Owner authentication required}
+        '404': {description: Archive or original message unavailable}
   /inbox/conversations/{id}/messages/{message}/attachments/{attachment}:
     parameters:
     - name: id
@@ -1357,6 +1448,24 @@ components:
       type: object
       additionalProperties: false
       properties:
+        pending_action: {type: string, description: Unresolved reaction action ID retained across browser refresh}
+        protocol: {type: string, enum: [RCS, SMS, MMS, unknown], description: Observed protocol for this message, independent of current conversation capability}
+        quote:
+          type: object
+          properties:
+            id: {type: string, description: Local target ID when available in this conversation}
+            text: {type: string, description: Bounded local preview or unavailable-original placeholder}
+            direction: {type: string, enum: [incoming, outgoing]}
+            available: {type: boolean}
+        reactions:
+          type: array
+          items:
+            type: object
+            properties:
+              emoji: {type: string}
+              count: {type: integer, minimum: 0}
+              mine: {type: boolean}
+              unsupported: {type: boolean, description: Image or undecoded reaction; display an accessible placeholder}
         revision: {type: integer, minimum: 0}
         id: *id002
         direction:
@@ -1377,6 +1486,17 @@ components:
           type: string
         status:
           type: string
+    MessageActions:
+      type: object
+      required: [reply, react, edit, edit_reason, version]
+      properties:
+        reply: {type: boolean}
+        react: {type: boolean}
+        edit: {type: boolean}
+        edit_reason: {type: string}
+        reason: {type: string}
+        version: {type: string}
+        pending: {type: string, description: Unresolved reaction action ID, when present}
     InboxPage:
       type: object
       additionalProperties: false

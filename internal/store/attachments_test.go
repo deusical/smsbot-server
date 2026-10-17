@@ -76,7 +76,7 @@ func TestAttachmentMigrationFromVersionThree(t *testing.T) {
 	var version int
 	s.DB.QueryRow("PRAGMA user_version").Scan(&version)
 	p, err := s.MessagePage("synthetic-chat", "", "", 50)
-	if version != 5 || err != nil || len(p.Messages) != 1 || p.Messages[0].Text != "Synthetic existing text" {
+	if version != 6 || err != nil || len(p.Messages) != 1 || p.Messages[0].Text != "Synthetic existing text" {
 		t.Fatal("migration lost existing message", err)
 	}
 }

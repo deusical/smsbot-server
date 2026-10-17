@@ -57,6 +57,7 @@ type manifest struct {
 	Digest  string `json:"digest"`
 }
 type archiveRow struct {
+	Interaction  string         `json:"interaction,omitempty"`
 	Kind         string         `json:"kind"`
 	ID           string         `json:"id,omitempty"`
 	Conversation string         `json:"conversation,omitempty"`
@@ -371,14 +372,14 @@ func (s *Service) writePackage(ctx context.Context, w io.Writer, snapshot *store
 		}
 	}
 	where, args := scopeWhere(scope)
-	rows, err := snapshot.DB.QueryContext(ctx, "SELECT m.id,m.conversation,m.direction,m.at,m.payload,coalesce(meta.origin,'bot'),coalesce(meta.status,''),coalesce(meta.owner_only,0),coalesce(a.payload,'') FROM messages m LEFT JOIN message_meta meta ON meta.message=m.id LEFT JOIN message_attachments a ON a.message=m.id WHERE "+where+" ORDER BY m.id", args...)
+	rows, err := snapshot.DB.QueryContext(ctx, "SELECT m.id,m.conversation,m.direction,m.at,m.payload,coalesce(meta.origin,'bot'),coalesce(meta.status,''),coalesce(meta.owner_only,0),coalesce(a.payload,''),coalesce(i.payload,'') FROM messages m LEFT JOIN message_meta meta ON meta.message=m.id LEFT JOIN message_attachments a ON a.message=m.id LEFT JOIN message_interactions i ON i.message=m.id WHERE "+where+" ORDER BY m.id", args...)
 	if err != nil {
 		return counts, err
 	}
 	blobs := map[string]blobEntry{}
 	for rows.Next() {
 		r := archiveRow{Kind: "message"}
-		if err = rows.Scan(&r.ID, &r.Conversation, &r.Direction, &r.At, &r.Payload, &r.Origin, &r.Status, &r.Private, &r.Attachments); err != nil {
+		if err = rows.Scan(&r.ID, &r.Conversation, &r.Direction, &r.At, &r.Payload, &r.Origin, &r.Status, &r.Private, &r.Attachments, &r.Interaction); err != nil {
 			break
 		}
 		if r.Attachments != "" {
@@ -751,6 +752,14 @@ func (s *Service) restoreRow(ctx context.Context, dst *store.Store, r archiveRow
 		if _, err = tx.ExecContext(ctx, "INSERT INTO message_meta VALUES(?,?,?,?)", r.ID, r.Origin, r.Status, r.Private); err != nil {
 			return err
 		}
+		if r.Interaction != "" {
+			if _, err = dst.OpenInteraction(r.ID, r.Interaction); err != nil {
+				return err
+			}
+			if _, err = tx.ExecContext(ctx, "INSERT INTO message_interactions VALUES(?,?)", r.ID, r.Interaction); err != nil {
+				return err
+			}
+		}
 		if r.Attachments != "" {
 			if _, err = dst.OpenAttachmentPayload(r.ID, r.Attachments); err != nil {
 				return err
@@ -820,7 +829,7 @@ func (s *Service) publishRestore(ctx context.Context, staged *store.Store, blobs
 	}
 	// DETACH after commit/rollback releases the staging snapshot on Windows.
 	defer func() { _ = tx.Rollback(); _, _ = s.Store.DB.Exec("DETACH DATABASE archive_restore") }()
-	for _, table := range []string{"archive_conversations", "messages", "message_meta", "message_alias", "message_attachments", "message_revisions"} {
+	for _, table := range []string{"archive_conversations", "messages", "message_meta", "message_alias", "message_attachments", "message_revisions", "message_interactions"} {
 		if _, err = tx.ExecContext(ctx, "INSERT INTO "+table+" SELECT * FROM archive_restore."+table); err != nil {
 			return err
 		}
@@ -875,7 +884,14 @@ func (s *Service) publicRow(r archiveRow) (any, error) {
 				attachments = append(attachments, map[string]any{"id": f.ID, "name": f.Name, "mime": f.MIME, "size": f.Size, "archive_state": f.ArchiveState, "file": path})
 			}
 		}
-		return map[string]any{"type": "message", "id": r.ID, "conversation_id": r.Conversation, "direction": r.Direction, "at": r.At, "text": string(text), "origin": r.Origin, "status": r.Status, "private": r.Private, "attachments": attachments}, nil
+		var interaction any
+		if r.Interaction != "" {
+			interaction, err = s.Store.OpenInteraction(r.ID, r.Interaction)
+			if err != nil {
+				return nil, err
+			}
+		}
+		return map[string]any{"type": "message", "id": r.ID, "conversation_id": r.Conversation, "direction": r.Direction, "at": r.At, "text": string(text), "origin": r.Origin, "status": r.Status, "private": r.Private, "attachments": attachments, "interaction": interaction}, nil
 	default:
 		return nil, errors.New("invalid_public_record")
 	}

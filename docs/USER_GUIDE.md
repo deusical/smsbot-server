@@ -41,6 +41,27 @@ A Messages-style view of your individual conversations. Groups are never used.
   may see a receipt if your phone sends them. Turn this off in **Settings > Messages &
   privacy**. Sending is not required and pausing does not stop it.
 
+- **Message actions.** Open a message's three-dot button for Copy text and Details.
+  Desktop menus also work from the keyboard; on phones they open as a bottom sheet.
+  Escape closes the menu and returns focus to its button.
+- **RCS replies.** Eligible collected RCS messages offer Reply. A preview above the
+  composer shows the target; canceling it preserves your text. Replies can include
+  attachments. Quoted bubbles link to the retained original; missing originals are
+  labeled unavailable. Clear an active search before jumping to an original.
+- **RCS reactions.** Choose an emoji, use the expanded picker, or paste a Unicode
+  emoji. Choosing your existing emoji removes it; a different one changes it.
+  Reaction chips identify you and/or the other participant. A submitted change waits
+  for the phone to sync before another change can be made. An uncertain outcome is
+  never retried automatically. **Check request** only repeats the same idempotent
+  API request when its acknowledgement was lost; it cannot create another action.
+
+Action availability belongs to each message: an older SMS in an RCS conversation
+does not gain RCS actions. SMS/MMS and unknown messages currently offer Copy text
+and Details; native RCS actions never silently become SMS sends. Collection, pause,
+phone availability, and exact conversation identity still control sending.
+Observed phone edits continue to show **Edited**. Editing a sent message from this
+dashboard remains unavailable because the companion transport exposes no edit operation.
+
 Keyboard shortcuts: **Ctrl/Cmd+K** focuses conversation search (Esc clears), **Alt+Up** and
 **Alt+Down** switch conversation, **Ctrl/Cmd+S** saves pending settings changes.
 

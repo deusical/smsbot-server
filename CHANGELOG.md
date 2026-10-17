@@ -7,6 +7,9 @@ Notable changes. Versions before 0.1.0 were internal milestones.
 First public beta. Experimental; see [Known limitations](docs/LIMITATIONS.md).
 
 ### Added
+- Protocol-aware message action menus, RCS quoted replies, Unicode reaction
+  add/change/remove, bounded quote navigation, and durable reaction reconciliation.
+  Outbound editing remains pending companion-transport support.
 - Messages-style dashboard: conversations ordered by recency with pinned and unread
   markers, relative times, last-message previews, typing indicators, jump to latest,
   keyboard shortcuts (Ctrl/Cmd+K, Alt+Up/Down), paste or drop images, themed

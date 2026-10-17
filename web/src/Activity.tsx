@@ -4,7 +4,7 @@ import { Icon } from "./Icon";
 import { Segmented, timeAgo } from "./ui";
 
 export const pendingStates = ["queued", "generating", "awaiting_approval"],
-  completedStates = ["submitted", "delivered", "read"];
+  completedStates = ["submitted", "delivered", "read", "reaction_confirmed"];
 const stateLabels: Record<string, string> = {
   queued: "Queued",
   generating: "Writing reply",
@@ -13,6 +13,7 @@ const stateLabels: Record<string, string> = {
   submitted: "Submitted",
   delivered: "Delivered",
   read: "Displayed",
+  reaction_confirmed: "Reaction synced",
   unknown_submission: "Uncertain",
   cancelled: "Cancelled",
 };

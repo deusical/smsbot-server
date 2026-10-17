@@ -1,10 +1,13 @@
 import { useEffect, useSyncExternalStore } from "react";
+import {clearReactionAttempts} from "./pendingActions";
 import { api, type Job } from "./api";
 
 // Messages the owner has sent from this dashboard that the server has not yet
 // confirmed as saved history. They live in memory only (never browser storage),
 // survive moving between conversations, and clear on sign-out.
 export type Pending = {
+ replyTo?: string;
+ quote?: import("./api").Quote;
   // Idempotency key. Retrying a lost response always reuses it.
   key: string;
   text: string;
@@ -71,6 +74,7 @@ export function getPending(conversation: string, key: string) {
 }
 
 export function clearPending() {
+ clearReactionAttempts();
   all = {};
   emit();
 }

@@ -15,6 +15,7 @@ import (
 
 func (s *Server) inboxRoutes() {
 	s.archiveRoutes()
+	s.interactionRoutes()
 	s.mux.HandleFunc("GET /api/v1/inbox/conversations/{id}/messages/{message}/attachments/{attachment}", s.protected(s.inboxAttachment))
 	s.mux.HandleFunc("GET /api/v1/inbox/settings", s.protected(s.inboxSettings))
 	s.mux.HandleFunc("PUT /api/v1/inbox/settings", s.protected(s.saveInboxSettings))
@@ -160,11 +161,12 @@ func (s *Server) inboxCompose(w http.ResponseWriter, r *http.Request) {
 		Attachments []media.Upload `json:"attachments"`
 		Text        string         `json:"text"`
 		RequestID   string         `json:"request_id"`
+		ReplyTo     string         `json:"reply_to"`
 	}
 	if !s.decode(w, r, &v) {
 		return
 	}
-	id, err := s.Engine.ComposeInboxFiles(r.Context(), r.PathValue("id"), v.Text, v.RequestID, v.Attachments)
+	id, err := s.Engine.ComposeInboxFiles(r.Context(), r.PathValue("id"), v.Text, v.RequestID, v.Attachments, v.ReplyTo)
 	if err != nil {
 		code := "compose_unavailable"
 		switch err.Error() {

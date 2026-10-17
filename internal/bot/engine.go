@@ -402,6 +402,9 @@ func (e *Engine) Dispatch(ctx context.Context) error {
 		e.mu.Unlock()
 		return err
 	}
+	if p.Mutation != nil {
+		return e.dispatchReaction(ctx, j, p)
+	}
 	history := p.Context
 	if p.Memory {
 		epoch, epochErr := e.Store.MemoryEpoch(j.ConversationID)
@@ -595,6 +598,19 @@ func (e *Engine) Dispatch(ctx context.Context) error {
 	if len(runes) > max {
 		p.Reply = string(runes[:max-25]) + "\n[Reply shortened.]"
 	}
+	if p.ReplyTarget != "" {
+		c, lookupErr := e.lookupConversation(ctx, j.ConversationID)
+		if lookupErr != nil {
+			e.mu.Unlock()
+			return lookupErr
+		}
+		v, targetErr := e.replyTarget(ctx, c, p.ReplyTarget)
+		if targetErr != nil || v.UpstreamID != p.ReplyWireTarget {
+			err = e.Store.Complete(j.ID, "failed", "reply_unavailable")
+			e.mu.Unlock()
+			return err
+		}
+	}
 	txn := store.TransactionID()
 	if err = e.Store.Submitting(j.ID, txn); err != nil {
 		e.mu.Unlock()
@@ -604,7 +620,13 @@ func (e *Engine) Dispatch(ctx context.Context) error {
 	sendctx, cancelSend := context.WithTimeout(ctx, 30*time.Second)
 	var receipt transport.Receipt
 	var senderr error
-	if len(p.Attachments) > 0 {
+	if p.ReplyTarget != "" {
+		if sender, ok := e.Transport.(transport.ReplySender); ok {
+			receipt, senderr = sender.SendReply(sendctx, j.ConversationID, txn, p.Reply, p.ReplyWireTarget, p.Attachments)
+		} else {
+			senderr = transport.ErrNotSubmitted
+		}
+	} else if len(p.Attachments) > 0 {
 		if sender, ok := e.Transport.(transport.FileSender); ok {
 			receipt, senderr = sender.SendFiles(sendctx, j.ConversationID, txn, p.Reply, p.Attachments)
 		} else {
@@ -636,6 +658,12 @@ func (e *Engine) Dispatch(ctx context.Context) error {
 	if err != nil {
 		e.mu.Unlock()
 		return err
+	}
+	if p.ReplyTarget != "" {
+		if err = e.Store.SaveReplyRelationship(txn, j.ConversationID, p.ReplyWireTarget); err != nil {
+			e.mu.Unlock()
+			return err
+		}
 	}
 	origin := "bot"
 	if p.Manual {

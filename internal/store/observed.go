@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"smsbot-server/internal/media"
+	"smsbot-server/internal/transport"
 	"time"
 )
 
@@ -18,10 +19,10 @@ func (s *Store) SaveObserved(conv, upstream, txn, direction, text, origin, statu
 func (s *Store) SaveLegacyImported(conv, upstream, txn, direction, text, status string, at time.Time) error {
 	return s.saveObserved(conv, upstream, txn, direction, text, "history", status, at, false, nil)
 }
-func (s *Store) SaveObservedFiles(conv, upstream, txn, direction, text, origin, status string, at time.Time, files []media.File) error {
-	return s.saveObserved(conv, upstream, txn, direction, text, origin, status, at, true, files)
+func (s *Store) SaveObservedFiles(conv, upstream, txn, direction, text, origin, status string, at time.Time, files []media.File, interaction ...*transport.MessageInteraction) error {
+	return s.saveObserved(conv, upstream, txn, direction, text, origin, status, at, true, files, interaction...)
 }
-func (s *Store) saveObserved(conv, upstream, txn, direction, text, origin, status string, at time.Time, privateNew bool, files []media.File) error {
+func (s *Store) saveObserved(conv, upstream, txn, direction, text, origin, status string, at time.Time, privateNew bool, files []media.File, interaction ...*transport.MessageInteraction) error {
 	alias := Hash(conv + "\x00" + upstream)
 	id := alias
 	tx, err := s.DB.Begin()
@@ -116,6 +117,22 @@ func (s *Store) saveObserved(conv, upstream, txn, direction, text, origin, statu
 			} else if !errors.Is(attachmentErr, sql.ErrNoRows) {
 				return attachmentErr
 			}
+			var duplicateInteraction string
+			interactionErr := tx.QueryRow("SELECT payload FROM message_interactions WHERE message=?", duplicate).Scan(&duplicateInteraction)
+			if interactionErr == nil {
+				snapshot, openErr := s.OpenInteraction(duplicate, duplicateInteraction)
+				if openErr != nil {
+					return openErr
+				}
+				if err = s.saveInteraction(tx, conv, id, snapshot); err != nil {
+					return err
+				}
+			} else if !errors.Is(interactionErr, sql.ErrNoRows) {
+				return interactionErr
+			}
+			if _, err = tx.Exec("UPDATE interaction_intents SET target=? WHERE target=?", Hash(conv+"\x00"+id), Hash(conv+"\x00"+duplicate)); err != nil {
+				return err
+			}
 			if _, err = tx.Exec("DELETE FROM messages WHERE id=? AND conversation=? AND direction='outgoing'", duplicate, conv); err != nil {
 				return err
 			}
@@ -123,6 +140,11 @@ func (s *Store) saveObserved(conv, upstream, txn, direction, text, origin, statu
 	}
 	if _, err = tx.Exec("INSERT INTO message_alias VALUES(?,?) ON CONFLICT(alias) DO UPDATE SET message=excluded.message", alias, id); err != nil {
 		return err
+	}
+	if len(interaction) > 0 && privateNew {
+		if err = s.saveInteraction(tx, conv, id, interaction[0]); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }
@@ -152,7 +174,7 @@ func (s *Store) SetInboxPreferences(b []byte, stopAutomatic bool, retention int)
 		return err
 	}
 	if stopAutomatic {
-		if _, err = tx.Exec("UPDATE jobs SET state='cancelled',code='automatic_replies_disabled',plan='' WHERE command!='manual' AND state IN ('queued','generating','awaiting_approval')"); err != nil {
+		if _, err = tx.Exec("UPDATE jobs SET state='cancelled',code='automatic_replies_disabled',plan='' WHERE command NOT IN ('manual','reaction') AND state IN ('queued','generating','awaiting_approval')"); err != nil {
 			return err
 		}
 	}

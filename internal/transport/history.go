@@ -11,6 +11,7 @@ import (
 )
 
 type HistoricalMessage struct {
+	Interaction   *MessageInteraction
 	Attachments   []media.File
 	ID            string
 	Direction     string
@@ -120,6 +121,7 @@ func (g *Google) FetchHistory(ctx context.Context, conv, expectedPeer, cursor st
 			return HistoryPage{}, errors.New("invalid_history_cursor")
 		}
 	}
+	observed := time.Now().UTC()
 	result, err := g.client.FetchMessages(ctx, conv, 50, pointer)
 	if err != nil {
 		return HistoryPage{}, errors.New("history_fetch_failed")
@@ -131,6 +133,7 @@ func (g *Google) FetchHistory(ctx context.Context, conv, expectedPeer, cursor st
 	out := HistoryPage{Messages: []HistoricalMessage{}}
 	for _, m := range result.GetMessages() {
 		if item, ok := historicalText(m, conv); ok {
+			item.Interaction = interactionSnapshot(m, c.GetDefaultOutgoingID(), observed)
 			out.Messages = append(out.Messages, item)
 		}
 	}

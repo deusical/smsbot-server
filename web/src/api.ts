@@ -55,7 +55,13 @@ export type Attachment = {
   mime: string;
   size: number;
 };
+export type MessageCapabilities = {reply: boolean; react: boolean; edit: boolean; version: string; pending?: string; reason?: string; edit_reason: string};
+export type Quote = {id?: string; text: string; direction?: string; available: boolean};
 export type Message = {
+ pending_action?: string;
+ protocol?: string;
+ reactions?: {emoji: string; count: number; mine: boolean; unsupported?: boolean}[];
+ quote?: Quote;
  revision?: number;
   attachments?: Attachment[];
   id: string;

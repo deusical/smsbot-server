@@ -35,22 +35,25 @@ type Job struct {
 	RequestedReasoning string   `json:"requested_reasoning,omitempty"`
 }
 type Plan struct {
-	Attachments    []media.File    `json:"attachments,omitempty"`
-	Reply          string          `json:"reply"`
-	Participant    string          `json:"participant"`
-	Input          string          `json:"input,omitempty"`
-	Instructions   string          `json:"instructions,omitempty"`
-	Model          string          `json:"model,omitempty"`
-	Generation     json.RawMessage `json:"generation,omitempty"`
-	Memory         bool            `json:"memory,omitempty"`
-	MemoryHours    int             `json:"memory_hours,omitempty"`
-	MemoryEpoch    int64           `json:"memory_epoch,omitempty"`
-	Context        []Turn          `json:"context,omitempty"`
-	Approval       bool            `json:"approval,omitempty"`
-	Approved       bool            `json:"approved,omitempty"`
-	MaxChars       int             `json:"max_chars,omitempty"`
-	Manual         bool            `json:"manual,omitempty"`
-	InboxOwnerOnly bool            `json:"inbox_owner_only,omitempty"`
+	ReplyTarget     string          `json:"reply_target,omitempty"`
+	ReplyWireTarget string          `json:"reply_wire_target,omitempty"`
+	Mutation        *MutationIntent `json:"mutation,omitempty"`
+	Attachments     []media.File    `json:"attachments,omitempty"`
+	Reply           string          `json:"reply"`
+	Participant     string          `json:"participant"`
+	Input           string          `json:"input,omitempty"`
+	Instructions    string          `json:"instructions,omitempty"`
+	Model           string          `json:"model,omitempty"`
+	Generation      json.RawMessage `json:"generation,omitempty"`
+	Memory          bool            `json:"memory,omitempty"`
+	MemoryHours     int             `json:"memory_hours,omitempty"`
+	MemoryEpoch     int64           `json:"memory_epoch,omitempty"`
+	Context         []Turn          `json:"context,omitempty"`
+	Approval        bool            `json:"approval,omitempty"`
+	Approved        bool            `json:"approved,omitempty"`
+	MaxChars        int             `json:"max_chars,omitempty"`
+	Manual          bool            `json:"manual,omitempty"`
+	InboxOwnerOnly  bool            `json:"inbox_owner_only,omitempty"`
 }
 
 func ID() string {
@@ -92,11 +95,26 @@ func (s *Store) migrate() error {
 	if e := s.DB.QueryRow("PRAGMA user_version").Scan(&version); e != nil {
 		return e
 	}
-	if version > 5 {
+	if version > 6 {
 		return errors.New("database is newer than this service")
 	}
-	if version == 5 {
+	if version == 6 {
 		return nil
+	}
+	if version == 5 {
+		tx, err := s.DB.Begin()
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		_, err = tx.Exec(`CREATE TABLE IF NOT EXISTS message_interactions(message TEXT PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,payload TEXT NOT NULL);
+ CREATE TABLE IF NOT EXISTS interaction_intents(job TEXT PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE,target TEXT NOT NULL,payload TEXT NOT NULL);
+ CREATE INDEX IF NOT EXISTS interaction_target ON interaction_intents(target);
+ PRAGMA user_version=6;`)
+		if err != nil {
+			return err
+		}
+		return tx.Commit()
 	}
 	if version == 4 {
 		tx, err := s.DB.Begin()
@@ -123,7 +141,10 @@ PRAGMA user_version=5;`)
 		if err != nil {
 			return err
 		}
-		return tx.Commit()
+		if err = tx.Commit(); err != nil {
+			return err
+		}
+		return s.migrate()
 	}
 	if version == 3 {
 		tx, err := s.DB.Begin()
@@ -286,8 +307,21 @@ func (s *Store) Enqueue(id, conv, command string, p Plan) (bool, error) {
 	if e != nil {
 		return false, e
 	}
+	if n == 1 && p.Mutation != nil {
+		b, err := json.Marshal(p.Mutation)
+		if err != nil {
+			return false, err
+		}
+		sealed, err := s.Vault.Seal("mutation:"+id, b)
+		if err != nil {
+			return false, err
+		}
+		if _, err = tx.Exec("INSERT INTO interaction_intents VALUES(?,?,?)", id, Hash(conv+"\x00"+p.Mutation.Target), sealed); err != nil {
+			return false, err
+		}
+	}
 	if n == 1 && p.InboxOwnerOnly {
-		digest, err := s.Vault.Seal("compose-intent:"+id, []byte(media.Intent(p.Reply, p.Attachments)))
+		digest, err := s.Vault.Seal("compose-intent:"+id, []byte(ComposeIntent(p.Reply, p.Attachments, p.ReplyTarget)))
 		if err != nil {
 			return false, err
 		}
@@ -380,14 +414,18 @@ func (s *Store) SaveMessageAt(id, conv, direction, text string, at time.Time) er
 }
 
 type Message struct {
-	Revision    int          `json:"revision,omitempty"`
-	Attachments []media.Info `json:"attachments,omitempty"`
-	ID          string       `json:"id"`
-	Direction   string       `json:"direction"`
-	At          string       `json:"at"`
-	Text        string       `json:"text"`
-	Origin      string       `json:"origin,omitempty"`
-	Status      string       `json:"status,omitempty"`
+	PendingAction string         `json:"pending_action,omitempty"`
+	Protocol      string         `json:"protocol,omitempty"`
+	Reactions     []ReactionView `json:"reactions,omitempty"`
+	Quote         *Quote         `json:"quote,omitempty"`
+	Revision      int            `json:"revision,omitempty"`
+	Attachments   []media.Info   `json:"attachments,omitempty"`
+	ID            string         `json:"id"`
+	Direction     string         `json:"direction"`
+	At            string         `json:"at"`
+	Text          string         `json:"text"`
+	Origin        string         `json:"origin,omitempty"`
+	Status        string         `json:"status,omitempty"`
 }
 
 func (s *Store) Messages(conv string) ([]Message, error) {

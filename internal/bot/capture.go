@@ -53,6 +53,11 @@ func (e *Engine) InboxCaptureGap() bool {
 	return false
 }
 func (e *Engine) QueueObservation(m transport.Incoming) {
+	// A full outgoing snapshot is observation-only, including reactions/edits on
+	// old messages. Command freshness still applies independently in Accept.
+	if m.Outgoing && m.Interaction != nil {
+		m.Historical = true
+	}
 	consent := e.captureConsent.Load()
 	if consent == nil || !consent.settings.Enabled || m.ID == "" || m.ConversationID == "" || (m.Text == "" && len(m.Attachments) == 0) {
 		return

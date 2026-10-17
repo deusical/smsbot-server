@@ -24,6 +24,7 @@ type backupJob struct {
 	Plan string `json:"plan"`
 }
 type backupMessage struct {
+	Interaction  string `json:"interaction,omitempty"`
 	ID           string `json:"id"`
 	Conversation string `json:"conversation"`
 	Direction    string `json:"direction"`
@@ -48,7 +49,13 @@ type backupRevision struct {
 	Payload  string
 	Observed string
 }
+type backupMutation struct {
+	Job     string
+	Target  string
+	Payload string
+}
 type backupSnapshot struct {
+	Mutations   []backupMutation   `json:"mutations,omitempty"`
 	Archives    []backupArchive    `json:"archives,omitempty"`
 	Revisions   []backupRevision   `json:"revisions,omitempty"`
 	Attachments []backupAttachment `json:"attachments,omitempty"`
@@ -146,13 +153,13 @@ func (s *Store) ExportBackup() ([]byte, error) {
 	if e != nil {
 		return nil, e
 	}
-	rows, e = tx.Query("SELECT m.id,m.conversation,m.direction,m.at,m.payload,coalesce(meta.owner_only,0),coalesce(meta.origin,''),coalesce(meta.status,'') FROM messages m LEFT JOIN message_meta meta ON meta.message=m.id")
+	rows, e = tx.Query("SELECT m.id,m.conversation,m.direction,m.at,m.payload,coalesce(meta.owner_only,0),coalesce(meta.origin,''),coalesce(meta.status,''),coalesce(i.payload,'') FROM messages m LEFT JOIN message_meta meta ON meta.message=m.id LEFT JOIN message_interactions i ON i.message=m.id")
 	if e != nil {
 		return nil, e
 	}
 	for rows.Next() {
 		var v backupMessage
-		if e = rows.Scan(&v.ID, &v.Conversation, &v.Direction, &v.At, &v.Payload, &v.OwnerOnly, &v.Origin, &v.Status); e != nil {
+		if e = rows.Scan(&v.ID, &v.Conversation, &v.Direction, &v.At, &v.Payload, &v.OwnerOnly, &v.Origin, &v.Status, &v.Interaction); e != nil {
 			rows.Close()
 			return nil, e
 		}
@@ -256,6 +263,23 @@ func (s *Store) ExportBackup() ([]byte, error) {
 		if e != nil {
 			return nil, e
 		}
+	}
+	rows, e = tx.Query("SELECT job,target,payload FROM interaction_intents")
+	if e != nil {
+		return nil, e
+	}
+	for rows.Next() {
+		var m backupMutation
+		if e = rows.Scan(&m.Job, &m.Target, &m.Payload); e != nil {
+			rows.Close()
+			return nil, e
+		}
+		b.Mutations = append(b.Mutations, m)
+	}
+	e = rows.Err()
+	rows.Close()
+	if e != nil {
+		return nil, e
 	}
 	plain, e := json.Marshal(b)
 	if e != nil {
@@ -362,7 +386,7 @@ func (s *Store) RestoreBackup(data []byte) error {
 		case "submitting":
 			v.State = "unknown_submission"
 			v.Code = "restored_during_submission"
-		case "cancelled", "expired", "failed", "submitted", "delivered", "read", "unknown_submission":
+		case "cancelled", "expired", "failed", "submitted", "delivered", "read", "reaction_confirmed", "unknown_submission":
 		default:
 			return errors.New("invalid backup job state")
 		}
@@ -422,6 +446,24 @@ func (s *Store) RestoreBackup(data []byte) error {
 			return errors.New("invalid backup revision")
 		}
 		if _, e = tx.Exec("INSERT INTO message_revisions VALUES(?,?,?,?)", r.Message, r.Revision, r.Payload, r.Observed); e != nil {
+			return e
+		}
+	}
+	for _, m := range b.Messages {
+		if m.Interaction != "" {
+			if _, e = s.OpenInteraction(m.ID, m.Interaction); e != nil {
+				return e
+			}
+			if _, e = tx.Exec("INSERT INTO message_interactions VALUES(?,?)", m.ID, m.Interaction); e != nil {
+				return e
+			}
+		}
+	}
+	for _, m := range b.Mutations {
+		if _, e = s.Vault.Open("mutation:"+m.Job, m.Payload); e != nil {
+			return e
+		}
+		if _, e = tx.Exec("INSERT INTO interaction_intents VALUES(?,?,?)", m.Job, m.Target, m.Payload); e != nil {
 			return e
 		}
 	}

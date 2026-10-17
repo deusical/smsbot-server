@@ -1,3 +1,4 @@
+import {MessageActions} from "./MessageActions";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useViewedHistoryRefresh } from "./useViewedHistoryRefresh";
 import {
@@ -91,6 +92,28 @@ export function ConversationHistory({
     } | null>(null),
     composer = useRef<HTMLTextAreaElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
+ const [replyTarget,setReplyTarget]=useState<Message|null>(null);
+ const [highlighted,setHighlighted]=useState("");
+ useEffect(()=>{setReplyTarget(null);setHighlighted("");},[conversation.id]);
+ function quotePreview(m:Message) {return {id:m.id,text:m.text.slice(0,180)||"Attachment",direction:m.direction,available:true};}
+ async function jumpToMessage(id:string) {
+  const generation=request.current;
+  try {
+   if (query) {setError("Clear search to jump to the original message.");return;}
+   let next=messages;
+   if (!messages.some(m=>m.id===id)) {
+    const page=await api<{messages:Message[];next_cursor:string}>(`/inbox/conversations/${encodeURIComponent(conversation.id)}/messages/${encodeURIComponent(id)}/window`);
+    if(generation!==request.current)return;
+    next=[...new Map([...messages,...page.messages].map(m=>[m.id,m])).values()].sort((a,b)=>Date.parse(a.at)-Date.parse(b.at)||a.id.localeCompare(b.id));
+    setMessages(next);
+   }
+   const index=next.findIndex(m=>m.id===id);if(index<0)throw new Error("unavailable");
+   setHighlighted(id);setAway(true);
+   if(next.length>300)virtualizer.scrollToIndex(index,{align:"center"});
+   requestAnimationFrame(()=>requestAnimationFrame(()=>scroll.current?.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(id)}"]`)?.scrollIntoView({block:"center",behavior:"auto"})));
+  } catch {if(generation===request.current)setError("The original message is unavailable.");}
+ }
+
   const [files, setFiles] = useState<File[]>([]);
   const attachmentRevision = useRef(0);
   const fileLimits = inbox?.attachment_limits ?? defaultAttachmentLimits;
@@ -437,12 +460,15 @@ export function ConversationHistory({
     const item: Pending = {
       key: crypto.randomUUID(),
       text: outgoing,
+      replyTo:replyTarget?.id,
+      quote:replyTarget?quotePreview(replyTarget):undefined,
       files,
       at: new Date().toISOString(),
       route: null,
       phase: "posting",
     };
     setText("");
+    setReplyTarget(null);
     setFiles([]);
     attachmentRevision.current++;
     setSendError("");
@@ -458,7 +484,8 @@ export function ConversationHistory({
     removePending(conversation.id, p.key);
     setText((current) => (current.trim() ? `${p.text}
 ${current}` : p.text));
-    if (p.files.length) selectFiles(p.files);
+    if(p.replyTo && p.quote) setReplyTarget({id:p.replyTo,text:p.quote.text,direction:p.quote.direction??"incoming",at:p.at});
+ if (p.files.length) selectFiles(p.files);
     composer.current?.focus();
   }
   function refreshNow() {
@@ -707,12 +734,14 @@ ${current}` : p.text));
                 data-message-id={m.id}
                 className={
                   "bubble " +
-                  m.direction +
+                  m.direction + (highlighted===m.id?" message-highlight":"") +
                   (m.direction === "outgoing"
                     ? " from-" + (m.origin ?? "bot")
                     : "")
                 }
               >
+
+                {m.quote && <button type="button" className="message-quote" disabled={!m.quote.available||!m.quote.id} onClick={()=>m.quote?.id && void jumpToMessage(m.quote.id)} aria-label="Jump to original message"><strong>{m.quote.available?(m.quote.direction==="outgoing"?"You":conversation.label):"Original unavailable"}</strong><span>{m.quote.text}</span></button>}
                 {m.attachments?.map((attachment) => (
                   <MessageAttachment
                     key={attachment.id}
@@ -745,6 +774,7 @@ ${current}` : p.text));
                     </span>
                   )}
                 </small>
+                {state?.capabilities.includes("message_actions") && <MessageActions message={m} conversation={conversation.id} label={conversation.label} writable={inboxAllows(inbox,conversation) && !archiveReadOnly} onReply={m=>{setReplyTarget(m);composer.current?.focus();}} onChanged={refreshNow}/>}
               </div>
             </div>
           );
@@ -759,7 +789,8 @@ ${current}` : p.text));
               {p.files.map((file, index) => (
                 <PendingFile key={`${index}-${file.name}`} file={file} />
               ))}
-              {p.text && <p>{p.text}</p>}
+              {p.quote && <div className="message-quote"><strong>{p.quote.direction==="outgoing"?"You":conversation.label}</strong><span>{p.quote.text}</span></div>}
+ {p.text && <p>{p.text}</p>}
               <small>
                 {p.phase === "failed" ? (
                   <span className="pending-error" role="alert">{p.error}</span>
@@ -830,6 +861,7 @@ ${current}` : p.text));
           send();
         }}
       >
+        {replyTarget && <div className="reply-composer-preview"><div><strong>Replying to {replyTarget.direction==="outgoing"?"yourself":conversation.label}</strong><span>{replyTarget.text.slice(0,180)||"Attachment"}</span></div><button type="button" className="icon ghost" aria-label="Cancel reply" onClick={()=>{setReplyTarget(null);composer.current?.focus();}}><Icon name="x" size={17}/></button></div>}
         {blocked && (
           <div className="composer-blocked" role="status">
             {blocked === "paused" ? (
@@ -1022,12 +1054,12 @@ async function postPending(
       ? item.route === "inbox"
       : inboxAllows(await readInbox(), conversation);
     patchPending(conversation.id, key, { route: useInbox ? "inbox" : "legacy" });
-    if (!useInbox && attachments.length) throw new ApiError(409, "inbox_access_disabled");
+    if (!useInbox && (attachments.length || item.replyTo)) throw new ApiError(409, "inbox_access_disabled");
     const composeBase = `${useInbox ? "/inbox" : ""}/conversations/${encodeURIComponent(conversation.id)}`;
     const result = await api<{ id?: string }>(
       `${composeBase}/compose`,
       "POST",
-      useInbox ? { text: item.text, request_id: key, attachments } : { text: item.text },
+      useInbox ? { text: item.text, request_id: key, attachments, ...(item.replyTo?{reply_to:item.replyTo}:{}) } : { text: item.text },
     );
     patchPending(conversation.id, key, { phase: "queued", job: result?.id, queuedAt: Date.now() });
   } catch (e) {

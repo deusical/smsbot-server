@@ -35,6 +35,20 @@ conversation.
 
 ## Product limits
 
+- **Message actions depend on protocol.** Native quoted replies and Unicode emoji
+  reactions are implemented for eligible collected RCS messages, with synthetic
+  offline verification. Live reply/reaction interoperability remains pending owner
+  testing. SMS/MMS equivalents and image reactions are not implemented. Messages
+  without known upstream identity/protocol cannot be action targets until refreshed.
+- **Outbound editing is unavailable.** The pinned companion library exposes no
+  outbound edit operation; Google documents editing as phone-app-only. The dashboard
+  retains and displays observed changes, but cannot edit a sent message on the phone.
+- **Reaction ordering is best effort.** Snapshots whose reads started before a newer
+  local observation are rejected. The companion protocol supplies no reliable action
+  version, so delayed upstream events and stale upstream snapshots cannot always be
+  distinguished. A submitted or uncertain reaction blocks conflicting changes until
+  a later snapshot shows its intended state; check the phone if it remains unresolved.
+
 - **Individual conversations only.** Groups are never used.
 - **History is best effort.** The archive stores what Google makes available. An
   exhausted history cursor does not prove the history is complete, edits are only

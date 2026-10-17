@@ -88,7 +88,15 @@ func (s *Store) messagePage(conv, before, search string, limit int, owner bool) 
 			out.Messages = append(out.Messages, m)
 		}
 	}
-	return out, rows.Err()
+	err := rows.Err()
+	rows.Close()
+	if err != nil {
+		return out, err
+	}
+	if owner {
+		err = s.EnrichMessages(conv, out.Messages)
+	}
+	return out, err
 }
 
 // Retention removes old sensitive payloads without deleting durable deduplication

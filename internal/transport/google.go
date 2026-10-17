@@ -413,7 +413,7 @@ func (g *Google) Send(ctx context.Context, id, txn, text string) (Receipt, error
 func (g *Google) SendFiles(ctx context.Context, id, txn, text string, files []media.File) (Receipt, error) {
 	return g.sendParts(ctx, id, txn, text, files)
 }
-func (g *Google) sendParts(ctx context.Context, id, txn, text string, files []media.File) (Receipt, error) {
+func (g *Google) sendParts(ctx context.Context, id, txn, text string, files []media.File, replyTo ...string) (Receipt, error) {
 	if !g.Ready() {
 		return Receipt{}, ErrNotSubmitted
 	}
@@ -456,7 +456,15 @@ func (g *Google) sendParts(ctx context.Context, id, txn, text string, files []me
 		return Receipt{}, ErrNotSubmitted
 	}
 	payload := &gmproto.MessagePayload{ConversationID: id, ParticipantID: c.GetDefaultOutgoingID(), TmpID: txn, TmpID2: txn, MessageInfo: parts}
-	res, e := g.client.SendMessage(ctx, &gmproto.SendMessageRequest{ConversationID: id, SIMPayload: sim, TmpID: txn, MessagePayload: payload})
+	req := &gmproto.SendMessageRequest{ConversationID: id, SIMPayload: sim, TmpID: txn, MessagePayload: payload}
+	if len(replyTo) > 0 {
+		if !rcsProtocol(c.GetType().String()) {
+			return Receipt{}, ErrNotSubmitted
+		}
+		req.Reply = &gmproto.ReplyPayload{MessageID: replyTo[0]}
+		req.ForceRCS = true
+	}
+	res, e := g.client.SendMessage(ctx, req)
 	if e != nil {
 		return Receipt{}, ErrUnknown
 	}
@@ -591,11 +599,7 @@ func (g *Google) Run(ctx context.Context, incoming func(Incoming), pause func(),
 				g.settings = e
 				g.mu.Unlock()
 			case *gmproto.Conversation:
-				g.mu.Lock()
-				old := g.conversations[e.GetConversationID()]
-				changed := old != nil && (!eligible(e) || peer(old) != peer(e) || old.GetDefaultOutgoingID() != e.GetDefaultOutgoingID())
-				g.mu.Unlock()
-				if changed {
+				if g.rememberConversationEvent(e) {
 					pause()
 				}
 			case *libgm.WrappedMessage:
@@ -613,10 +617,18 @@ func (g *Google) Run(ctx context.Context, incoming func(Incoming), pause func(),
 					receipt(e.GetConversationID(), e.GetTmpID(), state, status.String())
 				}
 				if m, ok := normalize(e, g.started); ok && !g.overflow.Load() && !g.healthFailure.Load() {
+					g.mu.Lock()
+					c := g.conversations[m.ConversationID]
+					g.mu.Unlock()
+					m.Interaction = interactionSnapshot(e.Message, c.GetDefaultOutgoingID(), time.Now().UTC())
 					incoming(m)
 				} else if !g.overflow.Load() {
 					if item, ok := historicalText(e.Message, e.GetConversationID()); ok {
-						incoming(Incoming{ID: item.ID, ConversationID: e.GetConversationID(), ParticipantID: e.GetParticipantID(), Text: item.Text, Attachments: item.Attachments, At: item.At, Historical: true, Outgoing: item.Direction == "outgoing", TransactionID: item.TransactionID, Status: item.Status})
+						g.mu.Lock()
+						c := g.conversations[e.GetConversationID()]
+						g.mu.Unlock()
+						item.Interaction = interactionSnapshot(e.Message, c.GetDefaultOutgoingID(), time.Now().UTC())
+						incoming(Incoming{ID: item.ID, ConversationID: e.GetConversationID(), ParticipantID: e.GetParticipantID(), Text: item.Text, Attachments: item.Attachments, At: item.At, Historical: true, Outgoing: item.Direction == "outgoing", TransactionID: item.TransactionID, Status: item.Status, Interaction: item.Interaction})
 					}
 				}
 			case *events.AccountChange:

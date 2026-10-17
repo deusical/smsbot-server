@@ -1,5 +1,31 @@
 # Design notes
 
+## Message interactions
+
+`message_interactions` stores sealed upstream identities, per-message protocol,
+reply targets and reaction snapshots, independent of the thread's current protocol.
+Non-nil snapshots are complete; nil observations preserve existing metadata.
+History reads carry their start time so an older in-flight scan cannot replace a
+newer observation. Metadata changes emit `message_changes` without creating content
+revisions. The upstream protocol provides no definitive reaction version; delayed
+upstream snapshots remain a documented limitation.
+
+Replies extend the existing immutable compose intent and its idempotency proof.
+Only the owner API resolves local target IDs to encrypted wire IDs. The dispatcher
+rechecks protocol and sends a native RCS reply with force-RCS enabled.
+Reactions use the existing serialized dispatcher with a separate mutation branch,
+encrypted durable `interaction_intents`, version checks, and persisted submitting
+state. They never enter text-send, message receipt, or command execution paths.
+Queued, submitted, and uncertain actions lock the target until definitive failure
+or an observed intended state. Restart never retries an uncertain submission.
+Reaction confirmation is `reaction_confirmed`, separate from message read receipts.
+Service backups and archive exports/restores preserve message interaction metadata;
+service backups also retain mutation evidence without resuming work.
+
+The shared UI menu reads per-message eligibility; unsupported SMS/MMS actions and
+outbound editing are omitted. The pinned companion transport has no outbound edit
+operation. Observed content revisions continue through the existing archive path.
+
 Detailed design notes, grouped by subsystem. Start with [ARCHITECTURE.md](ARCHITECTURE.md) for the overview and the safety rules; this file records the finer points. The service owns messaging and bot state; the dashboard uses API v1 and can be closed without stopping the bot.
 
 ## Boundaries

@@ -229,6 +229,9 @@ func (s *Store) Changes(conv, after, search string) (Changes, error) {
 		// Return changes even when an edit stops matching search, so clients can remove it.
 		out.Messages = append(out.Messages, m)
 	}
+	if err = s.EnrichMessages(conv, out.Messages); err != nil {
+		return out, err
+	}
 	return out, nil
 }
 func MatchMessage(m Message, q string) bool {

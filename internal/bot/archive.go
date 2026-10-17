@@ -127,7 +127,7 @@ func (h archiveHost) Commit(ctx context.Context, a store.Archive, p history.Poli
 			if watermarkErr != nil {
 				return watermarkErr
 			}
-			if err = e.Store.SaveObservedFiles(a.Conversation.ID, m.ID, m.TransactionID, m.Direction, m.Text, "history", m.Status, m.At, m.Attachments); err != nil {
+			if err = e.Store.SaveObservedFiles(a.Conversation.ID, m.ID, m.TransactionID, m.Direction, m.Text, "history", m.Status, m.At, m.Attachments, m.Interaction); err != nil {
 				return err
 			}
 			if p.Deep {
