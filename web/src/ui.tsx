@@ -310,3 +310,57 @@ export function timeAgo(iso: string) {
     day: "numeric",
   });
 }
+
+export function Group({
+  title,
+  description,
+  aside,
+  children,
+  className = "",
+}: {
+  title: string;
+  description?: ReactNode;
+  aside?: ReactNode;
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <section className={"panel group " + className}>
+      <div className="panel-head">
+        <div>
+          <h2>{title}</h2>
+          {description && <p className="muted">{description}</p>}
+        </div>
+        {aside}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+export type Tone = "ok" | "busy" | "wait" | "bad" | "idle";
+
+export function StatusPill({ tone, children }: { tone: Tone; children: ReactNode }) {
+  return (
+    <span className={"pill status-pill tone-" + tone}>
+      <span className="state-dot" aria-hidden="true" />
+      {children}
+    </span>
+  );
+}
+
+export function Notice({
+  tone = "wait",
+  role,
+  children,
+}: {
+  tone?: "wait" | "bad" | "ok";
+  role?: "alert" | "status";
+  children: ReactNode;
+}) {
+  return (
+    <div className={"banner notice-" + tone} role={role}>
+      {children}
+    </div>
+  );
+}

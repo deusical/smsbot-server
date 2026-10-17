@@ -14,7 +14,7 @@ import {
 import { Confirmation } from "./Confirmation";
 import { GenerationEditor } from "./Generation";
 import { Icon } from "./Icon";
-import { Field, ModelPicker, Segmented, Switch } from "./ui";
+import { Field, Group, ModelPicker, Segmented, Switch } from "./ui";
 import { defaultGeneration, normalize, type Workspace } from "./workspace";
 
 const sections = [
@@ -103,31 +103,6 @@ type SectionProps = {
   act: (fn: () => Promise<unknown>, refreshAfter?: boolean) => Promise<void>;
   notify: (text: string) => void;
 };
-
-function Group({
-  title,
-  description,
-  aside,
-  children,
-}: {
-  title: string;
-  description?: ReactNode;
-  aside?: ReactNode;
-  children: ReactNode;
-}) {
-  return (
-    <section className="panel group">
-      <div className="panel-head">
-        <div>
-          <h2>{title}</h2>
-          {description && <p className="muted">{description}</p>}
-        </div>
-        {aside}
-      </div>
-      {children}
-    </section>
-  );
-}
 
 function setSetting<K extends keyof BotSettings>(
   workspace: Workspace,
@@ -647,21 +622,23 @@ function InboxSection({
                       }
                     />
                   </label>
-                  <small>
-                    {limits[key] === 0 ? "Unlimited" : "0 means Unlimited"}
-                  </small>
-                  <button
-                    type="button"
-                    className="link"
-                    aria-label={`Unlimited ${label}`}
-                    onClick={() =>
-                      workspace.editInbox({
-                        attachment_limits: { ...limits, [key]: 0 },
-                      })
-                    }
-                  >
-                    Unlimited
-                  </button>
+                  <div className="field-foot">
+                    <small>
+                      {limits[key] === 0 ? "Unlimited" : "0 means Unlimited"}
+                    </small>
+                    <button
+                      type="button"
+                      className="link"
+                      aria-label={`Unlimited ${label}`}
+                      onClick={() =>
+                        workspace.editInbox({
+                          attachment_limits: { ...limits, [key]: 0 },
+                        })
+                      }
+                    >
+                      Unlimited
+                    </button>
+                  </div>
                 </div>
               );
             })}
