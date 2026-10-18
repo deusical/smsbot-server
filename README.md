@@ -34,7 +34,7 @@ conversations you choose.
 
 ## Quick start (offline demo)
 
-You need Go 1.27.2 and Node.js 24. On Windows:
+You need Go 1.27.2 and Node.js 24.15 or newer in the 24.x series. On Windows:
 
 ```powershell
 .\build.ps1          # builds the dashboard and the service, runs the checks
@@ -75,11 +75,14 @@ HTTPS address such as Tailscale, and updating cookies without pairing again.
 ## Develop and test
 
 ```powershell
-.\build.ps1                       # install, build, Go tests and vet
+.\build.ps1                       # install, build, frontend/Go tests and vet
 .\security-check.ps1              # Go and npm vulnerability scans
-cd web; npx playwright install chromium; npm test
+cd web; npm run test:unit         # fast frontend tests; no fixture server needed
+npx playwright install chromium; npm test  # from web/: browser tests
 ```
 
+Use `npm run test:unit:watch` from `web/` for frontend test feedback while editing.
+See [Contributing](CONTRIBUTING.md#frontend-tests) for test placement and focused runs.
 Playwright starts its own isolated fixture service with synthetic data and never
 contacts Google, carriers or AI providers. Pass `-SkipInstall -SkipChecks` to
 `build.ps1` for a quick rebuild. `smsbot --version` prints the build version.

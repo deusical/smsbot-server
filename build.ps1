@@ -19,6 +19,10 @@ try {
             }
             & npm.cmd run build
             if ($LASTEXITCODE -ne 0) { throw 'Web build failed' }
+            if (-not $SkipChecks) {
+                & npm.cmd run test:unit
+                if ($LASTEXITCODE -ne 0) { throw 'Frontend unit tests failed' }
+            }
         } finally { Pop-Location }
         # Vite uses content-hashed filenames. Replace the embedded file set so
         # previous dashboard versions cannot accumulate inside the executable.

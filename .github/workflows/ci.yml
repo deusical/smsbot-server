@@ -22,7 +22,7 @@ jobs:
           node-version: '24'
           cache: npm
           cache-dependency-path: web/package-lock.json
-      - run: npm ci && npm run build && npm audit --omit=dev
+      - run: npm ci && npm run test:unit && npm run build && npm audit --omit=dev
         working-directory: web
       - run: node --test scripts/sync-web-assets.test.mjs
       - run: node scripts/sync-web-assets.mjs
