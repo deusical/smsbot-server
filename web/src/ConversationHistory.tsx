@@ -406,14 +406,39 @@ export function ConversationHistory({
   }, [conversation.id, query, base]);
   useEffect(() => {
     const generation = request.current;
-    const timer = setInterval(
-      () => {
-        if (state?.capabilities.includes("archive_history") && base.startsWith("/inbox") && changeCursor.current !== null) void refreshChanges();
-        else void load("", true, generation, true);
-      },
-      3000,
-    );
-    return () => clearInterval(timer);
+    let timer: ReturnType<typeof setInterval> | null = null;
+    function poll() {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+      if (state?.capabilities.includes("archive_history") && base.startsWith("/inbox") && changeCursor.current !== null) void refreshChanges();
+      else void load("", true, generation, true);
+    }
+    function startTimer() {
+      if (!timer) timer = setInterval(poll, 3000);
+    }
+    function stopTimer() {
+      if (timer) {
+        clearInterval(timer);
+        timer = null;
+      }
+    }
+    function onVisibilityChange() {
+      if (document.visibilityState === "visible") {
+        poll();
+        startTimer();
+      } else {
+        stopTimer();
+      }
+    }
+    if (typeof document !== "undefined") {
+      if (document.visibilityState !== "hidden") startTimer();
+      document.addEventListener("visibilitychange", onVisibilityChange);
+    }
+    return () => {
+      stopTimer();
+      if (typeof document !== "undefined") {
+        document.removeEventListener("visibilitychange", onVisibilityChange);
+      }
+    };
   }, [conversation.id, query, base, state?.capabilities.includes("archive_history")]);
   // Search as you type; the request guard discards results from older queries.
   useEffect(() => {

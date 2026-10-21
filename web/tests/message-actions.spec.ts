@@ -23,44 +23,48 @@ async function prepare(page: Page, protocol = "RCS", actionGate?: Promise<void>)
 }
 const original = (page: Page) => page.locator('[data-message-id="original"]');
 
-test("visible actions prefetch once and open immediately from memory", async ({page}) => {
+test("actions load on demand when opening menu and reuse cached capabilities in memory", async ({page}) => {
   const requests: string[] = [];
   page.on("request", request => {if (request.url().endsWith("/messages/original/actions")) requests.push(request.url());});
   await prepare(page);
   const trigger = original(page).getByRole("button", {name: "Message actions", exact: true});
   await expect(trigger).toHaveAttribute("aria-busy", "false");
-  expect(requests).toHaveLength(1);
-  // A cold request after this point would fail: opening must use prefetched data.
+  expect(requests).toHaveLength(0);
+  await trigger.click();
+  await expect.poll(() => requests.length).toBe(1);
+  const contents = await page.getByRole("dialog", {name: "Message actions", exact: true}).evaluate(node => ({reply: node.textContent?.includes("Reply"), loading: node.textContent?.includes("Loading actions")}));
+  expect(contents).toEqual({reply: true, loading: false});
+  await page.keyboard.press("Escape");
+  // A cold request after this point would fail: subsequent opening must use cached data in memory.
   await page.route("**/messages/original/actions", route => route.fulfill({status: 503}));
-  for (let i = 0; i < 2; i++) {
-    await trigger.click();
-    const contents = await page.getByRole("dialog", {name: "Message actions", exact: true}).evaluate(node => ({reply: node.textContent?.includes("Reply"), loading: node.textContent?.includes("Loading actions")}));
-    expect(contents).toEqual({reply: true, loading: false});
-    await page.keyboard.press("Escape");
-  }
+  await trigger.click();
+  const cachedContents = await page.getByRole("dialog", {name: "Message actions", exact: true}).evaluate(node => ({reply: node.textContent?.includes("Reply"), loading: node.textContent?.includes("Loading actions")}));
+  expect(cachedContents).toEqual({reply: true, loading: false});
+  await page.keyboard.press("Escape");
   expect(requests).toHaveLength(1);
 });
 
-test("early click waits for the existing prefetch without showing partial actions", async ({page}) => {
+test("opening menu shows loading status for capabilities while local actions remain immediately accessible", async ({page}) => {
   let release!: () => void;
   const gate = new Promise<void>(resolve => {release = resolve;});
   let requests = 0;
   page.on("request", request => {if (request.url().endsWith("/messages/original/actions")) requests++;});
   await prepare(page, "RCS", gate);
-  await expect.poll(() => requests).toBe(1);
+  expect(requests).toBe(0);
   await original(page).getByRole("button", {name: "Message actions", exact: true}).click();
+  await expect.poll(() => requests).toBe(1);
   const menu = page.getByRole("dialog", {name: "Message actions", exact: true});
   await expect(menu.getByRole("status")).toHaveText("Loading actions...");
-  await expect(menu.getByRole("button", {name: "Copy text", exact: true})).toHaveCount(0);
-  await expect(menu.getByRole("button", {name: "Details", exact: true})).toHaveCount(0);
+  await expect(menu.getByRole("button", {name: "Copy text", exact: true})).toBeVisible();
+  await expect(menu.getByRole("button", {name: "Details", exact: true})).toBeVisible();
+  await expect(menu.getByRole("button", {name: "Reply", exact: true})).toHaveCount(0);
   expect(requests).toBe(1);
   release();
   await expect(menu.getByRole("button", {name: "Reply", exact: true})).toBeVisible();
   expect(requests).toBe(1);
 });
 
-test("failed capabilities show an explicit retry instead of SMS actions", async ({page}) => {
-  await page.route("**/messages/original/actions", route => route.fulfill({status: 503}));
+test("failed capabilities show an explicit retry while keeping details and copy text accessible", async ({page}) => {
   await prepare(page);
   // The last registered matching route wins, so replace the helper route.
   await page.route("**/messages/original/actions", route => route.fulfill({status: 503}));
@@ -70,7 +74,8 @@ test("failed capabilities show an explicit retry instead of SMS actions", async 
   await original(page).getByRole("button", {name: "Message actions", exact: true}).click();
   const menu = page.getByRole("dialog", {name: "Message actions", exact: true});
   await expect(menu.getByRole("alert")).toContainText("unavailable");
-  await expect(menu.getByRole("button", {name: "Details", exact: true})).toHaveCount(0);
+  await expect(menu.getByRole("button", {name: "Details", exact: true})).toBeVisible();
+  await expect(menu.getByRole("button", {name: "Copy text", exact: true})).toBeVisible();
   let release!: () => void;
   const gate = new Promise<void>(resolve => {release = resolve;});
   await page.route("**/messages/original/actions", async route => {await gate;await route.fulfill({json: {reply: true, react: true, edit: false, version: "retry-version"}});});

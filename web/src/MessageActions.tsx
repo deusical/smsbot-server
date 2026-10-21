@@ -14,7 +14,8 @@ export function MessageActions({message, conversation, label, writable, eligibil
   const [open, setOpen] = useState(false), [details, setDetails] = useState(false);
   const [cachedCaps, setCachedCaps] = useState<{key: string; value: MessageCapabilities} | null>(null);
   const [picker, setPicker] = useState(false), [custom, setCustom] = useState("");
-  const [error, setError] = useState("");
+  const [capsError, setCapsError] = useState("");
+  const [actionError, setActionError] = useState("");
   const anchor = useRef<HTMLButtonElement>(null), panel = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState({top: 0, left: 0, up: false, right: false});
   const path = `/inbox/conversations/${encodeURIComponent(conversation)}`;
@@ -41,7 +42,7 @@ export function MessageActions({message, conversation, label, writable, eligibil
     inFlight.current?.controller.abort();
     const controller = new AbortController(), epoch = reactionEpoch();
     const request = {key: requestKey, controller, done: Promise.resolve()};
-    setError("");
+    setCapsError("");
     request.done = (async () => {
       try {
         const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(25000)]);
@@ -50,7 +51,7 @@ export function MessageActions({message, conversation, label, writable, eligibil
         setCachedCaps({key: requestKey, value: next});
         if (next.pending && !reactionAttempt(key)) setReactionAttempt(key, {id: next.pending, request_id: "", emoji: "", operation: "add", version: "", state: "submitted"});
       } catch {
-        if (!controller.signal.aborted && currentKey.current === requestKey && epoch === reactionEpoch()) setError("Message actions are unavailable. Try again.");
+        if (!controller.signal.aborted && currentKey.current === requestKey && epoch === reactionEpoch()) setCapsError("Message actions are unavailable. Try again.");
       } finally {
         if (inFlight.current === request) inFlight.current = null;
       }
@@ -59,25 +60,21 @@ export function MessageActions({message, conversation, label, writable, eligibil
     return request.done;
   }
   useEffect(() => {
-    setError("");
-    if (!writable || !anchor.current) return;
-    const observer = new IntersectionObserver(entries => {
-      if (entries.some(entry => entry.isIntersecting)) {
-        observer.disconnect();
-        void capabilities();
-      }
-    });
-    observer.observe(anchor.current);
+    if (open && writable && !caps) {
+      void capabilities();
+    }
+  }, [open, writable, caps, requestKey]);
+  useEffect(() => {
+    setCapsError("");
+    setActionError("");
     return () => {
-      observer.disconnect();
       inFlight.current?.controller.abort();
       inFlight.current = null;
     };
   }, [requestKey]);
   function show() {
     restoreFocus.current=true;
-    setError(""); setDetails(false); setPicker(false); setOpen(true);
-    if (writable && !caps) void capabilities();
+    setCapsError(""); setActionError(""); setDetails(false); setPicker(false); setOpen(true);
   }
   // Touch screens have no hover: tapping the bubble itself opens the menu.
   const showRef = useRef(show); showRef.current = show;
@@ -117,7 +114,7 @@ export function MessageActions({message, conversation, label, writable, eligibil
     const top = place === "below" ? bottom + gap : place === "above" ? box.top - h - gap : Math.max(edge, Math.min(box.top, vh - h - edge));
     const left = place === "beside" ? (outgoing ? box.left - w - gap : box.right + gap) : outgoing ? box.right - w : box.left;
     setPosition({top, left: Math.max(edge, Math.min(left, vw - w - edge)), up: place === "above", right: outgoing && place !== "beside"});
-  }, [open, details, picker, caps, error]);
+  }, [open, details, picker, caps, capsError, actionError]);
   useEffect(() => {
     if (!open) return;
     const previous = document.activeElement as HTMLElement | null;
@@ -167,7 +164,7 @@ export function MessageActions({message, conversation, label, writable, eligibil
     } catch (err) {
       // Keep the exact intent/key: the request may have reached the server.
       if(reactionAttempt(key)?.request_id===attempt.request_id) setReactionAttempt(key, {...attempt, state: err instanceof ApiError && err.status >= 400 && err.status < 500 ? "failed" : "unconfirmed"});
-      setError("Reaction request not confirmed. Check its status before changing it.");
+      setActionError("Reaction request not confirmed. Check its status before changing it.");
     } finally {submitting.current = false;}
   }
   function react(emoji: string) {
@@ -176,7 +173,7 @@ export function MessageActions({message, conversation, label, writable, eligibil
     void post({request_id: crypto.randomUUID(), emoji, operation, version: caps.version, state: "posting"});
   }
   return <>
-    <button ref={anchor} type="button" className="message-options icon ghost" aria-label="Message actions" aria-haspopup="dialog" aria-expanded={open} aria-busy={writable && !caps && !error} onClick={show}><Icon name="more" size={18}/></button>
+    <button ref={anchor} type="button" className="message-options icon ghost" aria-label="Message actions" aria-haspopup="dialog" aria-expanded={open} aria-busy={false} onClick={show}><Icon name="more" size={18}/></button>
     {!!message.reactions?.length && <div className="reaction-chips" role="group" aria-label="Reactions">
       {message.reactions.map((r, i) => <button key={`${r.emoji}-${i}`} type="button" className={`reaction-chip${r.mine ? " mine" : ""}`} aria-label={`${r.unsupported ? "Unsupported reaction" : r.emoji}: ${r.mine ? "You" : label}${r.count > 1 ? ` and ${r.mine ? label : "you"}` : ""}`} title={`${r.mine ? "You" : label}${r.count > 1 ? ` and ${r.mine ? label : "you"}` : ""}`} onClick={show}>{r.unsupported ? "◌" : r.emoji}{r.count > 1 && <span>{r.count}</span>}</button>)}
     </div>}
@@ -186,20 +183,23 @@ export function MessageActions({message, conversation, label, writable, eligibil
       {["failed", "cancelled", "expired"].includes(pending.state) && <button type="button" className="small ghost" onClick={() => {setReactionAttempt(key);void capabilities(true);}}>Dismiss</button>}
     </div>}
     {open && createPortal(<div className="message-action-overlay" onPointerDown={e => {if (e.target === e.currentTarget) setOpen(false);}}>
-      <div ref={panel} tabIndex={-1} role="dialog" aria-modal="true" aria-label={details ? "Message details" : "Message actions"} className={`message-action-panel${position.up ? " up" : ""}${position.right ? " right" : ""}${details ? " details" : ""}`} style={{top: position.top, left: position.left}}>
+      <div ref={panel} tabIndex={-1} role="dialog" aria-modal="true" aria-busy={!details && writable && !caps && !capsError} aria-label={details ? "Message details" : "Message actions"} className={`message-action-panel${position.up ? " up" : ""}${position.right ? " right" : ""}${details ? " details" : ""}`} style={{top: position.top, left: position.left}}>
         <button type="button" className="message-action-close icon ghost" aria-label="Close message actions" onClick={() => setOpen(false)}><Icon name="x" size={16}/></button>
         {details && <div className="message-action-heading"><button type="button" className="icon ghost" aria-label="Back to actions" onClick={() => setDetails(false)}><Icon name="back" size={16}/></button><strong>Message details</strong></div>}
-        {error && <p role="alert" className="hint">{error}</p>}
-        {writable && !caps ? <>
-          {!error && <p role="status" className="hint">Loading actions...</p>}
-          {error && <button type="button" className="message-action-item" onClick={() => void capabilities()}>Try again</button>}
-        </> : details ? <dl className="message-details"><dt>Protocol</dt><dd>{message.protocol ?? "Unknown"}</dd><dt>Sent</dt><dd>{new Date(message.at).toLocaleString()}</dd><dt>Sender</dt><dd>{message.direction === "outgoing" ? "You" : label}</dd>{message.status && <><dt>Status</dt><dd>{({submitted:"Sent",delivered:"Delivered",read:"Read"} as Record<string,string>)[message.status] ?? message.status}</dd></>}{!!message.revision && <><dt>Content</dt><dd>Edited · {message.revision} observed revision(s)</dd></>}</dl> : <>
-          {writable && caps?.react && <>
-            <div className="reaction-picker" aria-label="Choose a reaction">{commonEmoji.map(emoji => <button type="button" key={emoji} disabled={busy} aria-label={`React ${emoji}`} aria-pressed={mine === emoji} onClick={() => react(emoji)}>{emoji}</button>)}<button type="button" disabled={busy} aria-label="More emoji" aria-expanded={picker} onClick={() => setPicker(!picker)}><Icon name="plus" size={17}/></button></div>
-            {picker && <div className="emoji-picker-expanded"><div className="emoji-grid">{moreEmoji.map(emoji => <button type="button" key={emoji} disabled={busy} aria-label={`React ${emoji}`} onClick={() => react(emoji)}>{emoji}</button>)}</div><div className="emoji-custom"><label>Custom emoji<input value={custom} maxLength={32} onChange={e => setCustom(e.target.value)} placeholder="Paste an emoji"/></label><button type="button" disabled={busy || !custom.trim()} aria-label="Use emoji" onClick={() => react(custom.trim())}>Use</button></div></div>}
+        {details ? <dl className="message-details"><dt>Protocol</dt><dd>{message.protocol ?? "Unknown"}</dd><dt>Sent</dt><dd>{new Date(message.at).toLocaleString()}</dd><dt>Sender</dt><dd>{message.direction === "outgoing" ? "You" : label}</dd>{message.status && <><dt>Status</dt><dd>{({submitted:"Sent",delivered:"Delivered",read:"Read"} as Record<string,string>)[message.status] ?? message.status}</dd></>}{!!message.revision && <><dt>Content</dt><dd>Edited · {message.revision} observed revision(s)</dd></>}</dl> : <>
+          {actionError && <p role="alert" className="hint">{actionError}</p>}
+          {capsError && <p role="alert" className="hint">{capsError}</p>}
+          {writable && !caps ? <>
+            {!capsError && <p role="status" className="hint">Loading actions...</p>}
+            {capsError && <button type="button" className="message-action-item" onClick={() => void capabilities(true)}>Try again</button>}
+          </> : <>
+            {writable && caps?.react && <>
+              <div className="reaction-picker" aria-label="Choose a reaction">{commonEmoji.map(emoji => <button type="button" key={emoji} disabled={busy} aria-label={`React ${emoji}`} aria-pressed={mine === emoji} onClick={() => react(emoji)}>{emoji}</button>)}<button type="button" disabled={busy} aria-label="More emoji" aria-expanded={picker} onClick={() => setPicker(!picker)}><Icon name="plus" size={17}/></button></div>
+              {picker && <div className="emoji-picker-expanded"><div className="emoji-grid">{moreEmoji.map(emoji => <button type="button" key={emoji} disabled={busy} aria-label={`React ${emoji}`} onClick={() => react(emoji)}>{emoji}</button>)}</div><div className="emoji-custom"><label>Custom emoji<input value={custom} maxLength={32} onChange={e => setCustom(e.target.value)} placeholder="Paste an emoji"/></label><button type="button" disabled={busy || !custom.trim()} aria-label="Use emoji" onClick={() => react(custom.trim())}>Use</button></div></div>}
+            </>}
+            {writable && caps?.reply && <button type="button" className="message-action-item" onClick={() => {restoreFocus.current=false;onReply(message);setOpen(false);}}><Icon name="reply" size={17}/>Reply</button>}
           </>}
-          {writable && caps?.reply && <button type="button" className="message-action-item" onClick={() => {restoreFocus.current=false;onReply(message);setOpen(false);}}><Icon name="reply" size={17}/>Reply</button>}
-          {!!message.text && <button type="button" className="message-action-item" onClick={() => {void navigator.clipboard.writeText(message.text).then(() => setOpen(false)).catch(() => setError("Could not copy. Select the message text to copy it."));}}><Icon name="copy" size={17}/>Copy text</button>}
+          {!!message.text && <button type="button" className="message-action-item" onClick={() => {void navigator.clipboard.writeText(message.text).then(() => setOpen(false)).catch(() => setActionError("Could not copy. Select the message text to copy it."));}}><Icon name="copy" size={17}/>Copy text</button>}
           <button type="button" className="message-action-item" onClick={() => setDetails(true)}><Icon name="info" size={17}/>Details</button>
         </>}
       </div>
