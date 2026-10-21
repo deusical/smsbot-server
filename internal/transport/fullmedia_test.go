@@ -6,6 +6,7 @@ import (
 	"go.mau.fi/mautrix-gmessages/pkg/libgm"
 	"go.mau.fi/mautrix-gmessages/pkg/libgm/gmproto"
 	"smsbot-server/internal/media"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -69,5 +70,40 @@ func TestFullMediaCancellationAndFailureNeverReturnPreview(t *testing.T) {
 		if len(r.pending) != 0 {
 			t.Fatal("cancelled request leaked")
 		}
+	}
+}
+
+func TestOriginalReadBackIsSparseAndStopsWithRequest(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	var reads atomic.Int32
+	delivered := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		readBackOriginal(ctx, []time.Duration{0, 20 * time.Millisecond, time.Hour}, func(context.Context) ([]*gmproto.Message, error) {
+			if reads.Add(1) == 2 {
+				return []*gmproto.Message{{MessageID: "synthetic-message"}}, nil
+			}
+			return nil, nil
+		}, func(*gmproto.Message) { close(delivered) })
+	}()
+	<-delivered
+	cancel()
+	<-done
+	if reads.Load() != 2 {
+		t.Fatalf("read back %d times", reads.Load())
+	}
+	if len(fullMediaReadBack) > 3 || fullMediaReadBack[0] != 0 || fullMediaReadBack[len(fullMediaReadBack)-1] >= 20*time.Second || fullMediaReadCount > 10 {
+		t.Fatal("full-size read-back is no longer sparse and bounded by the request deadline")
+	}
+}
+func TestOriginalReadBackStopsOnPhoneError(t *testing.T) {
+	reads := 0
+	readBackOriginal(context.Background(), []time.Duration{0, 0, 0}, func(context.Context) ([]*gmproto.Message, error) {
+		reads++
+		return nil, errors.New("synthetic failure")
+	}, func(*gmproto.Message) {})
+	if reads != 1 {
+		t.Fatal("read back continued after a phone error")
 	}
 }

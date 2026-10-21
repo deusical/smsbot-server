@@ -11,11 +11,16 @@ type cachedConversationPage struct {
 	page ConversationPage
 	at   time.Time
 }
+
+// Pages that are not partial stay valid until the phone reports activity. Phone reads after
+// activity are spaced by listInvalidateGap; a page older than the latest
+// activity is returned marked stale within that gap so callers ask again.
 type conversationPageCache struct {
 	mu         sync.Mutex
 	pages      map[string]cachedConversationPage
 	flights    map[string]chan struct{}
 	generation uint64
+	changedAt  time.Time
 }
 
 func cloneConversationPage(p ConversationPage) ConversationPage {
@@ -28,15 +33,33 @@ func (c *conversationPageCache) invalidate() {
 	c.pages = nil
 	c.generation++
 }
+func (c *conversationPageCache) markChanged(now time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if now.After(c.changedAt) {
+		c.changedAt = now
+	}
+}
 func (c *conversationPageCache) get(ctx context.Context, key string, fetch func(context.Context) (ConversationPage, error)) (ConversationPage, error) {
 	for {
 		if err := ctx.Err(); err != nil {
 			return ConversationPage{}, err
 		}
 		c.mu.Lock()
-		if cached, ok := c.pages[key]; ok && time.Since(cached.at) < 30*time.Second {
-			c.mu.Unlock()
-			return cloneConversationPage(cached.page), nil
+		if cached, ok := c.pages[key]; ok {
+			current := cached.at.After(c.changedAt)
+			// A partial page is never kept as complete: it is read again after
+			// partialRetryGap, or after listInvalidateGap once activity arrives.
+			gap := listInvalidateGap
+			if current {
+				gap = partialRetryGap
+			}
+			if current && !cached.page.Partial || time.Since(cached.at) < gap {
+				c.mu.Unlock()
+				page := cloneConversationPage(cached.page)
+				page.Stale = !current
+				return page, nil
+			}
 		}
 		if wait, ok := c.flights[key]; ok {
 			c.mu.Unlock()
@@ -57,6 +80,8 @@ func (c *conversationPageCache) get(ctx context.Context, key string, fetch func(
 		done := make(chan struct{})
 		c.flights[key] = done
 		generation := c.generation
+		// Activity during the read must leave the page older than that activity.
+		started := time.Now()
 		c.mu.Unlock()
 		page, err := fetch(ctx)
 		c.mu.Lock()
@@ -71,11 +96,13 @@ func (c *conversationPageCache) get(ctx context.Context, key string, fetch func(
 					break
 				}
 			}
-			c.pages[key] = cachedConversationPage{cloneConversationPage(page), time.Now()}
+			c.pages[key] = cachedConversationPage{cloneConversationPage(page), started}
 		}
+		out := cloneConversationPage(page)
+		out.Stale = err == nil && !started.After(c.changedAt)
 		close(done)
 		c.mu.Unlock()
-		return cloneConversationPage(page), err
+		return out, err
 	}
 }
 

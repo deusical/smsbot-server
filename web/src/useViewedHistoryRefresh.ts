@@ -19,10 +19,11 @@ export function useViewedHistoryRefresh(id: string, ready: boolean, enabled: boo
       }
     };
     latestCheck.current = check;
+    // Check the phone when a section opens and when the owner returns to it.
+    // While it stays open, pushed messages and capture-gap repair keep it current.
     const initial = setTimeout(() => void check(), 500);
-    const timer = setInterval(() => void check(), 30000);
     const visible = () => { if (document.visibilityState === "visible") void check(); };
     document.addEventListener("visibilitychange", visible);
-    return () => { disposed = true; if (latestCheck.current === check) latestCheck.current = null; clearTimeout(initial); clearInterval(timer); document.removeEventListener("visibilitychange", visible); };
+    return () => { disposed = true; if (latestCheck.current === check) latestCheck.current = null; clearTimeout(initial); document.removeEventListener("visibilitychange", visible); };
   }, [id, ready, enabled, range?.since, range?.until]);
 }

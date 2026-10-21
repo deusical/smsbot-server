@@ -12,7 +12,7 @@ async function prepare(page: Page, rows: Row[], messageCount = 3) {
     const response = await route.fetch();
     await route.fulfill({json: {...await response.json(), enabled: true, scope: "all", archive_retention_days: 0}});
   });
-  await page.route("**/api/v1/inbox/conversations", route => route.fulfill({json: {conversations: state.rows.map(r => ({participant_id: `peer-${r.id}`, protocol: "RCS", writable: true, archived: true, enrolled: false, ...r})), next_cursor: ""}}));
+  await page.route(/\/api\/v1\/inbox\/conversations(\?refresh=1)?$/, route => route.fulfill({json: {conversations: state.rows.map(r => ({participant_id: `peer-${r.id}`, protocol: "RCS", writable: true, archived: true, enrolled: false, ...r})), next_cursor: ""}}));
   await page.route("**/api/v1/inbox/conversations/*/history?*", route => route.fulfill({json: {messages: Array.from({length: messageCount}, (_, i) => ({id: `m${i}`, direction: i % 2 ? "outgoing" : "incoming", text: `Synthetic message ${i}`, at: new Date(Date.UTC(2026, 9, 16, 12, i)).toISOString()})), next_cursor: ""}}));
   const descriptor = JSON.parse(readFileSync(".test-state/connection.json", "utf8"));
   await page.goto("/");

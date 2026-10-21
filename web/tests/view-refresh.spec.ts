@@ -9,7 +9,7 @@ async function setup(page: Page) {
   await expect(page.getByRole("heading", { name: "Home", exact: true })).toBeVisible();
   const previous = await (await page.request.get("/api/v1/inbox/settings")).json();
   expect((await page.request.put("/api/v1/inbox/settings", { headers, data: { ...previous, enabled: true, scope: "all", load_older: false, automatic_replies: false, archive_retention_days: 0 } })).ok()).toBeTruthy();
-  await page.route("**/api/v1/inbox/conversations", route => route.fulfill({ json: { conversations: [{ id: "demo-chat", participant_id: "demo-peer", label: "Demo conversation", protocol: "RCS", writable: true, group: false, enrolled: false, archived: true }], next_cursor: "" } }));
+  await page.route(/\/api\/v1\/inbox\/conversations(\?refresh=1)?$/, route => route.fulfill({ json: { conversations: [{ id: "demo-chat", participant_id: "demo-peer", label: "Demo conversation", protocol: "RCS", writable: true, group: false, enrolled: false, archived: true }], next_cursor: "" } }));
   return async () => {
     const current = await (await page.request.get("/api/v1/inbox/settings")).json();
     await page.request.put("/api/v1/inbox/settings", { headers, data: { ...previous, revision: current.revision } });

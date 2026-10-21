@@ -49,6 +49,11 @@ func (s *Server) inboxConversations(w http.ResponseWriter, r *http.Request) {
 	var p transport.ConversationPage
 	if s.Engine.Transport.Ready() {
 		source, ok := s.Engine.Transport.(transport.ConversationPageSource)
+		// The dashboard asks for one phone read when it returns to the foreground,
+		// for changes the phone may not push. The transport spaces these reads.
+		if refresher, can := s.Engine.Transport.(transport.ConversationRefresher); can && ok && r.URL.Query().Get("refresh") == "1" {
+			refresher.RequestConversationRefresh()
+		}
 		if ok {
 			var err error
 			p, err = source.DiscoverConversations(r.Context(), r.URL.Query().Get("cursor"))

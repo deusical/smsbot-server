@@ -4,25 +4,26 @@ type Row = {id:string;label:string;last_message_at?:string;unread?:boolean;pinne
 type Msg = {id:string;direction:string;text:string;at:string};
 const iso = (minutesAgo: number) => new Date(Date.now() - minutesAgo * 60000).toISOString();
 
-async function prepare(page: Page, rows: Row[], options: {readReceipts?: boolean; messages?: Msg[]} = {}) {
+async function prepare(page: Page, rows: Row[], options: {readReceipts?: boolean; messages?: Msg[]; ready?: boolean} = {}) {
   const world = {
     rows, revision: "1.1", typing: [] as string[],
-    listCalls: 0, readCalls: [] as {id:string;through:string}[],
+    listCalls: 0, forcedCalls: 0, stale: false, partial: false, ready: options.ready ?? true, readCalls: [] as {id:string;through:string}[],
     messages: options.messages ?? [] as Msg[],
   };
   await page.route("**/api/v1/state", async route => {
     const response = await route.fetch();
     if (!response.ok()) return route.fulfill({response});
-    await route.fulfill({json: {...await response.json(), paused: false, transport_ready: true, conversations_revision: world.revision}});
+    await route.fulfill({json: {...await response.json(), paused: false, transport_ready: world.ready, conversations_revision: world.revision}});
   });
   await page.route("**/api/v1/inbox/settings", async route => {
     const response = await route.fetch();
     const body = await response.json();
     await route.fulfill({json: {...body, enabled: true, scope: "all", archive_retention_days: 0, ...(options.readReceipts === false ? {mark_read_when_viewed: false} : {})}});
   });
-  await page.route("**/api/v1/inbox/conversations", route => {
+  await page.route(/\/api\/v1\/inbox\/conversations(\?refresh=1)?$/, route => {
     world.listCalls++;
-    return route.fulfill({json: {conversations: world.rows.map(r => ({participant_id: `peer-${r.id}`, protocol: "RCS", writable: true, archived: true, enrolled: false, ...r})), next_cursor: ""}});
+    if (route.request().url().endsWith("?refresh=1")) world.forcedCalls++;
+    return route.fulfill({json: {conversations: world.rows.map(r => ({participant_id: `peer-${r.id}`, protocol: "RCS", writable: true, archived: true, enrolled: false, ...r})), next_cursor: "", ...(world.stale ? {stale: true} : {}), ...(world.partial ? {partial: true} : {})}});
   });
   await page.route("**/api/v1/inbox/typing", route => route.fulfill({json: {conversations: world.typing}}));
   await page.route("**/api/v1/inbox/conversations/*/history?*", route => route.fulfill({json: {messages: world.messages, next_cursor: ""}}));
@@ -68,6 +69,56 @@ test("the list is refetched only when the server reports a change", async ({page
   world.rows = [{id: "a", label: "First stable", last_message_at: iso(10)}, {id: "b", label: "Second stable", last_message_at: iso(0)}];
   world.revision = "2.1";
   await expect.poll(async () => (await page.locator(".conversation .conversation-text strong").allTextContents()).map(t => t.replace(/ \((pinned|unread)\)/g, "")), {timeout: 10000}).toEqual(["Second stable", "First stable"]);
+});
+
+test("opening and returning to the dashboard each force one phone read; stale pages are asked again", async ({page}) => {
+  const world = await prepare(page, [{id: "a", label: "Focus refresh", last_message_at: iso(10)}]);
+  await expect(row(page, "Focus refresh")).toBeVisible();
+  expect(world.forcedCalls).toBe(1);
+  const settled = world.listCalls;
+  await page.waitForTimeout(7000);
+  expect(world.listCalls).toBe(settled);
+  await page.evaluate(() => Object.defineProperty(document, "visibilityState", {configurable: true, value: "hidden"}));
+  await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+  world.stale = true;
+  await page.evaluate(() => { Object.defineProperty(document, "visibilityState", {configurable: true, value: "visible"}); document.dispatchEvent(new Event("visibilitychange")); });
+  await expect.poll(() => world.forcedCalls).toBe(2);
+  // A stale page is fetched again on a later poll, without forcing another phone read.
+  await expect.poll(() => world.listCalls, {timeout: 8000}).toBeGreaterThan(settled + 1);
+  world.stale = false;
+  const unforced = world.listCalls;
+  await expect.poll(() => world.listCalls, {timeout: 8000}).toBeGreaterThan(unforced);
+  const quiet = world.listCalls;
+  await page.waitForTimeout(7000);
+  expect(world.listCalls).toBe(quiet);
+  expect(world.forcedCalls).toBe(2);
+});
+
+test("a list read before the phone was ready is read again once it connects", async ({page}) => {
+  const world = await prepare(page, [], {ready: false});
+  await expect.poll(() => world.listCalls).toBeGreaterThan(0);
+  const offline = world.listCalls;
+  world.rows = [{id: "a", label: "Arrived on connect", last_message_at: iso(1)}];
+  world.ready = true;
+  await expect(row(page, "Arrived on connect")).toBeVisible({timeout: 8000});
+  expect(world.listCalls).toBe(offline + 1);
+});
+
+test("a partial list is retried after a spacing interval and then left alone", async ({page}) => {
+  test.setTimeout(90000);
+  const world = await prepare(page, [{id: "a", label: "Partial first", last_message_at: iso(5)}]);
+  world.partial = true;
+  await page.evaluate(() => { Object.defineProperty(document, "visibilityState", {configurable: true, value: "visible"}); document.dispatchEvent(new Event("visibilitychange")); });
+  await expect(page.getByText(/didn.t load/)).toBeVisible();
+  const partialAt = world.listCalls;
+  world.partial = false;
+  world.rows = [...world.rows, {id: "b", label: "Retried later", last_message_at: iso(1)}];
+  await page.waitForTimeout(20000);
+  expect(world.listCalls).toBe(partialAt);
+  await expect(row(page, "Retried later")).toBeVisible({timeout: 20000});
+  const complete = world.listCalls;
+  await page.waitForTimeout(35000);
+  expect(world.listCalls).toBe(complete);
 });
 
 test("viewing an unread conversation marks it read through its newest message", async ({page}) => {

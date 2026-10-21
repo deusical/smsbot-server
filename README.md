@@ -34,7 +34,7 @@ conversations you choose.
 
 ## Quick start (offline demo)
 
-You need Go 1.27.2 and Node.js 24.15 or newer in the 24.x series. On Windows:
+You need Go 1.27.3 and Node.js 24.15 or newer in the 24.x series. On Windows:
 
 ```powershell
 .\build.ps1          # builds the dashboard and the service, runs the checks

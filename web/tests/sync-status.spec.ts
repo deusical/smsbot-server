@@ -17,7 +17,7 @@ test("saved import date, independent progress and gap repair status stay underst
  await page.route("**/api/v1/inbox/settings",async route=>{
   const response=await route.fetch();await route.fulfill({json:{...await response.json(),enabled:true,scope:"all",archive_retention_days:0}});
  });
- await page.route("**/api/v1/inbox/conversations",route=>route.fulfill({json:{conversations:[{id:"demo-chat",participant_id:"demo-peer",label:"Demo conversation",protocol:"RCS",writable:true,archived:true}],next_cursor:""}}));
+ await page.route(/\/api\/v1\/inbox\/conversations(\?refresh=1)?$/,route=>route.fulfill({json:{conversations:[{id:"demo-chat",participant_id:"demo-peer",label:"Demo conversation",protocol:"RCS",writable:true,archived:true}],next_cursor:""}}));
  await page.route("**/api/v1/inbox/archive",route=>route.fulfill({json:[record]}));
  await page.route("**/api/v1/inbox/conversations/demo-chat/refresh",route=>route.fulfill({json:record}));
  await page.route("**/api/v1/inbox/conversations/demo-chat/sync",async route=>{

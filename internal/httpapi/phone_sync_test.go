@@ -171,3 +171,35 @@ func TestTypingOnlyForOptedInConversations(t *testing.T) {
 		t.Fatal("stopped typing still reported", got)
 	}
 }
+
+type refreshingFixture struct {
+	*transport.Fixture
+	refreshes int
+}
+
+func (f *refreshingFixture) RequestConversationRefresh() bool { f.refreshes++; return true }
+func (f *refreshingFixture) PhoneRequests() map[string]transport.PhoneRequestCount {
+	return map[string]transport.PhoneRequestCount{"list": {Total: 3, LastHour: 2}}
+}
+
+func TestConversationListForcesPhoneReadOnlyWhenAskedAndStateReportsPhoneRequests(t *testing.T) {
+	s := apiSetup(t)
+	setInbox(t, s, func(c *botSettings) { c.Enabled = true })
+	f := &refreshingFixture{Fixture: fixtureOf(t, s)}
+	s.Engine.Transport = f
+	for _, path := range []string{"/api/v1/inbox/conversations", "/api/v1/inbox/conversations?refresh=0", "/api/v1/inbox/conversations?refresh=1"} {
+		if w := ownerRequest(s, "GET", path, ""); w.Code != 200 {
+			t.Fatal(path, w.Code)
+		}
+	}
+	if f.refreshes != 1 {
+		t.Fatalf("forced %d phone reads", f.refreshes)
+	}
+	w := ownerRequest(s, "GET", "/api/v1/state", "")
+	var state struct {
+		PhoneRequests map[string]transport.PhoneRequestCount `json:"phone_requests"`
+	}
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &state) != nil || state.PhoneRequests["list"] != (transport.PhoneRequestCount{Total: 3, LastHour: 2}) {
+		t.Fatal("state omitted phone request counts", w.Body.String())
+	}
+}

@@ -254,7 +254,7 @@ test("conversation filters preserve enrollment and theme switches do not write b
     if (!response.ok()) return route.fulfill({ response });
     await route.fulfill({ json: { ...(await response.json()), conversations_revision: `test-${revision++}` } });
   });
-  await page.route("**/api/v1/inbox/conversations", (route) =>
+  await page.route(/\/api\/v1\/inbox\/conversations(\?refresh=1)?$/, (route) =>
     route.fulfill({
       json: {conversations: [
         {
@@ -305,7 +305,7 @@ for (const viewport of [
       width: viewport.width,
       height: viewport.height,
     });
-    await page.route("**/api/v1/inbox/conversations", (route) =>
+    await page.route(/\/api\/v1\/inbox\/conversations(\?refresh=1)?$/, (route) =>
       route.fulfill({
         json: {
           conversations: [

@@ -75,18 +75,81 @@ func TestDiscoverySkipsFailureAndMarksPartialWithoutChangingOrder(t *testing.T) 
 		t.Fatal("one failure hid the page or group exclusion/order was lost")
 	}
 }
-func TestDiscoveryCacheExpires(t *testing.T) {
+func TestDiscoveryCacheKeepsPagesUntilActivity(t *testing.T) {
 	var cache conversationPageCache
 	calls := 0
 	fetch := func(context.Context) (ConversationPage, error) { calls++; return ConversationPage{}, nil }
 	cache.get(context.Background(), "", fetch)
+	ageCachedPage(&cache, time.Hour)
+	p, _ := cache.get(context.Background(), "", fetch)
+	if calls != 1 || p.Stale {
+		t.Fatal("an idle page was read from the phone again or marked stale")
+	}
+}
+func TestDiscoveryCacheSpacesReadsAfterActivityAndMarksStalePages(t *testing.T) {
+	var cache conversationPageCache
+	calls := 0
+	fetch := func(context.Context) (ConversationPage, error) { calls++; return ConversationPage{}, nil }
+	cache.get(context.Background(), "", fetch)
+	cache.markChanged(time.Now().Add(time.Millisecond))
+	p, _ := cache.get(context.Background(), "", fetch)
+	if calls != 1 || !p.Stale {
+		t.Fatal("activity inside the spacing gap read the phone or hid staleness")
+	}
+	ageCachedPage(&cache, listInvalidateGap)
+	p, _ = cache.get(context.Background(), "", fetch)
+	if calls != 2 || p.Stale {
+		t.Fatal("activity after the spacing gap was not read from the phone")
+	}
+	p, _ = cache.get(context.Background(), "", fetch)
+	if calls != 2 || p.Stale {
+		t.Fatal("a current page was read again")
+	}
+}
+func TestDiscoveryCacheActivityDuringReadLeavesPageStale(t *testing.T) {
+	var cache conversationPageCache
+	calls := 0
+	first, _ := cache.get(context.Background(), "", func(context.Context) (ConversationPage, error) {
+		calls++
+		cache.markChanged(time.Now().Add(time.Millisecond))
+		return ConversationPage{}, nil
+	})
+	if !first.Stale {
+		t.Fatal("the reading caller was not told about activity during its read")
+	}
+	p, _ := cache.get(context.Background(), "", func(context.Context) (ConversationPage, error) { calls++; return ConversationPage{}, nil })
+	if calls != 1 || !p.Stale {
+		t.Fatal("activity during a read was absorbed into the cached page")
+	}
+}
+func ageCachedPage(cache *conversationPageCache, by time.Duration) {
 	cache.mu.Lock()
+	defer cache.mu.Unlock()
 	p := cache.pages[""]
-	p.at = time.Now().Add(-time.Minute)
+	p.at = p.at.Add(-by)
 	cache.pages[""] = p
-	cache.mu.Unlock()
+	if !cache.changedAt.IsZero() {
+		cache.changedAt = cache.changedAt.Add(-by)
+	}
+}
+func TestDiscoveryCacheRetriesPartialPages(t *testing.T) {
+	var cache conversationPageCache
+	calls := 0
+	fetch := func(context.Context) (ConversationPage, error) { calls++; return ConversationPage{Partial: true}, nil }
+	cache.get(context.Background(), "", fetch)
+	ageCachedPage(&cache, listInvalidateGap)
+	if p, _ := cache.get(context.Background(), "", fetch); calls != 1 || !p.Partial || p.Stale {
+		t.Fatal("a partial page was re-read before its retry gap")
+	}
+	ageCachedPage(&cache, partialRetryGap)
 	cache.get(context.Background(), "", fetch)
 	if calls != 2 {
-		t.Fatal("expired page reused")
+		t.Fatal("a partial page was kept as complete")
+	}
+	cache.markChanged(time.Now().Add(time.Millisecond))
+	ageCachedPage(&cache, listInvalidateGap)
+	cache.get(context.Background(), "", fetch)
+	if calls != 3 {
+		t.Fatal("activity on a partial page waited for the longer retry gap")
 	}
 }

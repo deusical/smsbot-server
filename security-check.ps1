@@ -5,7 +5,7 @@ $previousTemp = $env:GOTMPDIR
 try {
     New-Item -ItemType Directory -Force .build-temp | Out-Null
     $env:GOTMPDIR = Join-Path $PSScriptRoot '.build-temp'
-    $env:GOTOOLCHAIN = 'go1.27.2'
+    $env:GOTOOLCHAIN = 'go1.27.3'
     & go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
     if ($LASTEXITCODE -ne 0) { throw 'Go vulnerability check failed.' }
     Push-Location web

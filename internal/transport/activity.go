@@ -30,30 +30,52 @@ type ReadMarker interface {
 var ErrNewerMessage = errors.New("newer_message")
 
 const (
-	typingTTL         = 8 * time.Second
-	listInvalidateGap = 10 * time.Second
+	typingTTL              = 8 * time.Second
+	listInvalidateGap      = 10 * time.Second
+	partialRetryGap        = 30 * time.Second
+	conversationRefreshGap = time.Minute
 )
 
 type activityState struct {
 	revision       atomic.Uint64
 	listStale      atomic.Bool
 	lastInvalidate atomic.Int64
+	lastRefresh    atomic.Int64
 	typingMu       sync.Mutex
 	typing         map[string]time.Time
 }
 
 // noteActivity runs on libgm's receive loop: it must stay cheap and never touch
-// storage or the phone. Cached conversation pages are dropped at most every ten
-// seconds so a chatty period cannot cause a burst of phone lookups.
+// storage or the phone. Every report marks discovery pages out of date; the
+// cache spaces the resulting phone reads so a chatty period cannot cause a burst.
 func (g *Google) noteActivity() {
 	g.activity.revision.Add(1)
+	g.discovery.markChanged(time.Now())
 	now := time.Now().UnixNano()
 	last := g.activity.lastInvalidate.Load()
-	if now-last < int64(listInvalidateGap) || !g.activity.lastInvalidate.CompareAndSwap(last, now) {
+	if elapsed := now - last; elapsed >= 0 && elapsed < int64(listInvalidateGap) || !g.activity.lastInvalidate.CompareAndSwap(last, now) {
 		return
 	}
 	g.activity.listStale.Store(true)
-	g.discovery.invalidate()
+}
+
+// ConversationRefresher lets the owner's dashboard ask for one fresh phone read
+// of the conversation list, for changes the phone may not push. Requests are
+// honoured at most once per conversationRefreshGap across all clients.
+type ConversationRefresher interface{ RequestConversationRefresh() bool }
+
+func (g *Google) RequestConversationRefresh() bool {
+	return g.Ready() && g.forceDiscoveryRefresh(time.Now())
+}
+
+func (g *Google) forceDiscoveryRefresh(now time.Time) bool {
+	// A clock stepped backwards counts as elapsed rather than locking refreshes out.
+	last := g.activity.lastRefresh.Load()
+	if elapsed := now.UnixNano() - last; last != 0 && elapsed >= 0 && elapsed < int64(conversationRefreshGap) || !g.activity.lastRefresh.CompareAndSwap(last, now.UnixNano()) {
+		return false
+	}
+	g.discovery.markChanged(now)
+	return true
 }
 
 func (g *Google) ActivityRevision() uint64 { return g.activity.revision.Load() }
@@ -109,6 +131,7 @@ func (g *Google) MarkRead(ctx context.Context, conv, expectedPeer string, throug
 	}
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
+	g.countPhone(phoneLookup)
 	c, err := g.client.GetConversation(ctx, conv)
 	if err != nil || !eligible(c) || peer(c) != expectedPeer || c.GetIsGroupChat() {
 		return errors.New("ineligible_conversation")
@@ -116,6 +139,7 @@ func (g *Google) MarkRead(ctx context.Context, conv, expectedPeer string, throug
 	if !c.GetUnread() {
 		return nil
 	}
+	g.countPhone(phoneMessages)
 	res, err := g.client.FetchMessages(ctx, conv, 1, nil)
 	if err != nil {
 		return errors.New("read_failed")
@@ -133,9 +157,11 @@ func (g *Google) MarkRead(ctx context.Context, conv, expectedPeer string, throug
 		return ErrNewerMessage
 	}
 	// The conversation may have changed identity while the messages were fetched.
+	g.countPhone(phoneLookup)
 	if again, err := g.client.GetConversation(ctx, conv); err != nil || !eligible(again) || peer(again) != expectedPeer {
 		return errors.New("conversation_identity_changed")
 	}
+	g.countPhone(phoneMarkRead)
 	if err := g.client.MarkRead(ctx, conv, latest.GetMessageID()); err != nil {
 		return errors.New("read_failed")
 	}

@@ -6,7 +6,7 @@ RUN --mount=type=cache,target=/root/.npm npm ci
 COPY web/ ./
 RUN npm run build
 
-FROM golang:1.27.2-bookworm AS build
+FROM golang:1.27.3-bookworm AS build
 WORKDIR /build
 COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod go mod download

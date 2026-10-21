@@ -4,7 +4,7 @@ async function prepare(page: Page, fullInbox = true) {
   let archiveReads=0, mutations=0, checks=0;
   const record={conversation:{id:"demo-chat"},state:"running",since:"2026-07-16T07:00:00Z",imported:0,oldest:"",last_sync:"2026-10-16T12:00:00Z",error:""};
   await page.route("**/api/v1/inbox/settings",async route=>{const response=await route.fetch();await route.fulfill({json:{...await response.json(),enabled:fullInbox,scope:"all",archive_retention_days:0}});});
-  await page.route("**/api/v1/inbox/conversations",route=>route.fulfill({json:{conversations:[{id:"demo-chat",participant_id:"demo-peer",label:"Demo conversation",protocol:"RCS",writable:true,archived:fullInbox,enrolled:!fullInbox}],next_cursor:""}}));
+  await page.route(/\/api\/v1\/inbox\/conversations(\?refresh=1)?$/,route=>route.fulfill({json:{conversations:[{id:"demo-chat",participant_id:"demo-peer",label:"Demo conversation",protocol:"RCS",writable:true,archived:fullInbox,enrolled:!fullInbox}],next_cursor:""}}));
   await page.route("**/api/v1/inbox/archive",route=>{archiveReads++;return route.fulfill({json:fullInbox?[record]:[]});});
   await page.route("**/api/v1/inbox/conversations/demo-chat/refresh",route=>{checks++;return route.fulfill({json:record});});
   await page.route("**/api/v1/inbox/conversations/demo-chat/sync",route=>{mutations++;const body=route.request().postDataJSON();record.since=body.since;record.state=body.cancel?"cancelled":"queued";return route.fulfill({json:record});});

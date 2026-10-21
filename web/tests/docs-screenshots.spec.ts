@@ -26,7 +26,7 @@ async function prepare(page: Page, options: {live?: boolean} = {}) {
     const response = await route.fetch();
     await route.fulfill({json: {...await response.json(), enabled: true, scope: "all", archive_retention_days: 0}});
   });
-  await page.route("**/api/v1/inbox/conversations", route => route.fulfill({json: {conversations: people.map(p => ({id: p.id, participant_id: `peer-${p.id}`, label: p.label, protocol: "RCS", writable: true, archived: true, enrolled: p.id === "p1" || p.id === "p2", last_message_at: minutes(p.last), unread: p.unread, pinned: p.pinned, preview: p.preview, preview_from_me: p.fromMe})), next_cursor: ""}}));
+  await page.route(/\/api\/v1\/inbox\/conversations(\?refresh=1)?$/, route => route.fulfill({json: {conversations: people.map(p => ({id: p.id, participant_id: `peer-${p.id}`, label: p.label, protocol: "RCS", writable: true, archived: true, enrolled: p.id === "p1" || p.id === "p2", last_message_at: minutes(p.last), unread: p.unread, pinned: p.pinned, preview: p.preview, preview_from_me: p.fromMe})), next_cursor: ""}}));
   await page.route("**/api/v1/inbox/conversations/*/history?*", route => route.fulfill({json: {messages: [
     {id: "m1", direction: "outgoing", text: "Hey! Are you free later this week?", at: minutes(180), origin: "web", status: "read"},
     {id: "m2", direction: "incoming", text: "Yes, Thursday works for me.", at: minutes(170)},

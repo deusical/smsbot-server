@@ -22,31 +22,32 @@ import (
 
 // Google is opt-in and never instantiated by fixture mode.
 type Google struct {
-	recovery      recoveryControl
-	recoveryWake  chan struct{}
-	recoveryProbe func(context.Context) error // offline fault injection; nil in production
-	fullMedia     fullMediaRequests
-	client        *libgm.Client
-	vault         *vault.Vault
-	path          string
-	ready         atomic.Bool
-	mu            sync.Mutex
-	listMu        sync.Mutex
-	listed        time.Time
-	list          []Conversation
+	recovery            recoveryControl
+	recoveryWake        chan struct{}
+	recoveryProbe       func(context.Context) error // offline fault injection; nil in production
+	fullMedia           fullMediaRequests
+	client              *libgm.Client
+	vault               *vault.Vault
+	path                string
+	ready               atomic.Bool
+	mu                  sync.Mutex
+	listMu              sync.Mutex
+	listed              time.Time
+	list                []Conversation
 	settings            *gmproto.Settings
 	conversations       map[string]*gmproto.Conversation
 	conversationFetched map[string]time.Time
 	updates             chan any
-	queueMu       sync.Mutex
-	overflow      atomic.Bool
-	healthFailure atomic.Bool
-	overflowWake  chan struct{}
-	started       time.Time
-	saveMu        sync.Mutex
-	Diagnostic    func(AuthDiagnostic)
-	discovery     conversationPageCache
-	activity      activityState
+	queueMu             sync.Mutex
+	overflow            atomic.Bool
+	healthFailure       atomic.Bool
+	overflowWake        chan struct{}
+	started             time.Time
+	saveMu              sync.Mutex
+	Diagnostic          func(AuthDiagnostic)
+	discovery           conversationPageCache
+	phoneRequests       phoneRequests
+	activity            activityState
 }
 
 func NewGoogle(v *vault.Vault, path string) *Google {
@@ -254,6 +255,7 @@ func (g *Google) Connect(ctx context.Context) error {
 		g.diagnose("paired_connect", e)
 		return errors.New("paired connection failed")
 	}
+	g.countPhone(phoneProbe)
 	probe, e := g.client.IsBugleDefault(deadline)
 	g.diagnose("phone_readiness", e)
 	if e != nil || !probe.GetSuccess() {
@@ -367,6 +369,7 @@ func (g *Google) LookupConversation(ctx context.Context, id string) (Conversatio
 	}
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
+	g.countPhone(phoneLookup)
 	c, err := g.client.GetConversation(ctx, id)
 	if err != nil {
 		if !errors.Is(err, context.Canceled) {
@@ -400,6 +403,7 @@ func (g *Google) Conversations(ctx context.Context) ([]Conversation, error) {
 	}
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
+	g.countPhone(phoneList)
 	res, e := g.client.ListConversations(ctx, &gmproto.ListConversationsRequest{Count: 25, Folder: gmproto.ListConversationsRequest_INBOX})
 	if e != nil {
 		return nil, errors.New("conversation refresh failed")
@@ -415,6 +419,7 @@ func (g *Google) Conversations(ctx context.Context) ([]Conversation, error) {
 		if cached := g.cachedDetail(id); cached != nil {
 			return cached, nil
 		}
+		g.countPhone(phoneLookup)
 		c, err := g.client.GetConversation(ctx, id)
 		if err != nil {
 			return nil, err
@@ -545,6 +550,7 @@ func (g *Google) sendParts(ctx context.Context, id, txn, text string, files []me
 		return Receipt{}, ErrNotSubmitted
 	}
 
+	g.countPhone(phoneLookup)
 	c, e := g.client.GetConversation(ctx, id)
 	if e != nil {
 		return Receipt{}, ErrNotSubmitted
@@ -575,6 +581,7 @@ func (g *Google) sendParts(ctx context.Context, id, txn, text string, files []me
 		req.Reply = &gmproto.ReplyPayload{MessageID: replyTo[0]}
 		req.ForceRCS = true
 	}
+	g.countPhone(phoneSend)
 	res, e := g.client.SendMessage(ctx, req)
 	if e != nil {
 		return Receipt{}, ErrUnknown

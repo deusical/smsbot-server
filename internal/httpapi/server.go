@@ -218,6 +218,10 @@ func (s *Server) state(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if reporter, ok := s.Engine.Transport.(transport.PhoneRequestReporter); ok {
+		value["phone_requests"] = reporter.PhoneRequests()
+	}
+
 	gaps, unknown := s.Engine.CaptureGapStatus()
 	active := unknown
 	for _, g := range gaps {

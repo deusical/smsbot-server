@@ -187,6 +187,7 @@ func (g *Google) startRecovery(ctx context.Context, now time.Time, results chan<
 			}
 			if err == nil {
 				var responding bool
+				g.countPhone(phoneProbe)
 				response, probeErr := g.client.IsBugleDefault(call)
 				responding = probeErr == nil && response.GetSuccess()
 				if probeErr != nil {
@@ -277,4 +278,6 @@ func (g *Google) invalidateIdentities() {
 	g.mu.Unlock()
 	g.listMu.Unlock()
 	g.discovery.invalidate()
+	// Dashboards refetch only on a revision change; the cleared list must be read again.
+	g.activity.revision.Add(1)
 }

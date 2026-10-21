@@ -254,7 +254,7 @@ test("history search and pagination preserve messages, compose sends on Enter", 
 }) => {
   await setup(page);
   let compose: unknown;
-  await page.route("**/api/v1/inbox/conversations", (route) =>
+  await page.route(/\/api\/v1\/inbox\/conversations(\?refresh=1)?$/, (route) =>
     route.fulfill({
       json: {
         conversations: [

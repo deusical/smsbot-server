@@ -35,6 +35,7 @@ type ConversationPage = {
   conversations: Conversation[];
   next_cursor: string;
   partial?: boolean;
+  stale?: boolean;
 };
 
 function connectionLabel(status?: string): string {
@@ -86,8 +87,10 @@ function App() {
   const [toasts, setToasts] = useState<Toast[]>([]),
     [confirmSignOut, setConfirmSignOut] = useState(false);
   const paginatedConversations = useRef(false);
-  // The list is refetched when the server reports activity, or every 30 seconds.
-  const listFetched = useRef({ revision: "", at: 0 });
+  // The list is refetched when the server reports activity. Opening the app or
+  // returning to it also asks the server for one fresh read from the phone.
+  const listFetched = useRef({ revision: "", ready: false, partial: false, at: 0 });
+  const forceList = useRef(true);
   const refreshing = useRef(false),
     refreshingDetails = useRef(false),
     stateRevision = useRef(0),
@@ -136,7 +139,7 @@ function App() {
   function clearSession() {
     sessionRevision.current++;
     clearSeen();
-    listFetched.current = { revision: "", at: 0 };
+    listFetched.current = { revision: "", ready: false, partial: false, at: 0 };
     clearPending();
     setSignedIn(false);
     setState(null);
@@ -190,16 +193,26 @@ function App() {
       setJobs(activity);
       if (s.transport_ready || s.capabilities.includes("archive_history")) {
         stage = "conversations";
+        const force = forceList.current;
         const fresh =
+          !force &&
           !!s.conversations_revision &&
           listFetched.current.revision === s.conversations_revision &&
-          Date.now() - listFetched.current.at < 30000;
+          // A list read while the phone was unavailable holds archived rows only.
+          listFetched.current.ready === s.transport_ready &&
+          // A partial list is retried, spaced so a failing lookup cannot keep waking the phone.
+          !(listFetched.current.partial && Date.now() - listFetched.current.at >= 30000);
         if (fresh) {
           /* nothing changed since the last fetch */
         } else if (inboxConfig?.enabled || s.capabilities.includes("archive_history")) {
+          // A return to the app during this read keeps its own forced read.
+          forceList.current = false;
           const discovered = await api<ConversationPage>(
-            "/inbox/conversations",
-          );
+            force ? "/inbox/conversations?refresh=1" : "/inbox/conversations",
+          ).catch((e: unknown) => {
+            if (force) forceList.current = true;
+            throw e;
+          });
           if (session !== sessionRevision.current) return;
           if (!paginatedConversations.current)
             setConversationCursor(discovered.next_cursor);
@@ -209,7 +222,13 @@ function App() {
             return [...m.values()];
           });
           setDiscoveryPartial(!!discovered.partial);
-          listFetched.current = { revision: s.conversations_revision ?? "", at: Date.now() };
+          // A stale page predates recent activity; ask again on the next poll.
+          listFetched.current = {
+            revision: discovered.stale ? "" : (s.conversations_revision ?? ""),
+            ready: s.transport_ready,
+            partial: !!discovered.partial,
+            at: Date.now(),
+          };
         }
         setError("");
       } else
@@ -238,7 +257,9 @@ function App() {
       if (document.visibilityState !== "hidden") void refresh();
     }, 3000);
     const visible = () => {
-      if (document.visibilityState === "visible") void refresh();
+      if (document.visibilityState !== "visible") return;
+      forceList.current = true;
+      void refresh();
     };
     document.addEventListener("visibilitychange", visible);
     return () => {
@@ -252,7 +273,7 @@ function App() {
     try {
       await fn();
       if (refreshAfter) {
-        listFetched.current = { revision: "", at: 0 };
+        listFetched.current = { revision: "", ready: false, partial: false, at: 0 };
         await refresh();
       }
     } catch (e) {

@@ -21,7 +21,9 @@ people with bot replies on, enabled commands), recent requests with inline **App
 
 ![Conversations](images/conversations.png)
 
-A Messages-style view of your individual conversations. Groups are never used.
+A Messages-style view of your individual conversations. Groups are never used. The list
+updates as your phone reports new messages; opening or returning to the dashboard also
+checks your phone once, so it does not keep waking your phone while the tab is open.
 
 - **Order and markers.** Newest message first, pinned conversations on top, a time on each
   row, an unread dot, and a last-message preview (with "You:" for messages you sent).
@@ -102,8 +104,9 @@ the tab closed.
 - **Overview.** Storage used, saved messages, original files and conversations tracked.
 - **Conversation history.** Pick a conversation and choose **Archive conversation**: it
   reads all available history, fills gaps, reconciles edits and downloads original files
-  in the background. Archive again to re-scan. Advanced options limit a new import to a
-  start date. Recent checks, viewed-section checks and file downloads run separately.
+  in the background. Completed imports are not re-scanned automatically; archive again
+  to re-scan. Advanced options limit a new import to a start date. Recent checks,
+  viewed-section checks and file downloads run separately.
 - **Automatic history repair** lists updates that could not be saved and retries them;
   it never claims completeness.
 - **Retention** (days, 0 keeps everything), **original file archive** (limits and

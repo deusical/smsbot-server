@@ -2,7 +2,7 @@
 
 ## Requirements
 
-- Go 1.27.2 and Node.js 24.15 or newer in the 24.x series (dependencies are locked).
+- Go 1.27.3 and Node.js 24.15 or newer in the 24.x series (dependencies are locked).
 - For a real account: a phone with Google Messages and a desktop browser to pair it.
 - Optional: an OpenRouter key or an OpenAI-compatible endpoint for AI commands.
 

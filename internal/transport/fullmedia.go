@@ -94,34 +94,55 @@ func (r *fullMediaRequests) get(ctx context.Context, f media.File, request func(
 		return result, nil
 	}
 }
+
+// Read-back schedule after asking the phone for an original, relative to the
+// request. The cursor starts just after the message, so a few rows suffice.
+var fullMediaReadBack = []time.Duration{0, 4 * time.Second, 12 * time.Second}
+
+const fullMediaReadCount = 5
+
+// readBackOriginal reads at each offset from its start until ctx ends, which
+// happens once the request is fulfilled or reaches its deadline. One read at
+// once covers an original uploaded earlier; the push normally finishes first.
+func readBackOriginal(ctx context.Context, schedule []time.Duration, fetch func(context.Context) ([]*gmproto.Message, error), deliver func(*gmproto.Message)) {
+	start := time.Now()
+	for _, at := range schedule {
+		timer := time.NewTimer(time.Until(start.Add(at)))
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+		messages, err := fetch(ctx)
+		if err != nil {
+			return
+		}
+		for _, m := range messages {
+			deliver(m)
+		}
+	}
+}
+
 func (g *Google) fullSizeFile(ctx context.Context, f media.File) (media.File, error) {
 	// The phone may already have uploaded the original, without emitting another
 	// push. Read back the exact part as well as observing the requested update.
 	return g.fullMedia.get(ctx, f, func(ctx context.Context, message, action string) error {
+		g.countPhone(phoneFullSize)
 		if _, err := g.client.GetFullSizeImage(ctx, message, action); err != nil {
 			return err
 		}
 		if f.ConversationID != "" && f.Timestamp > 0 {
-			go func() {
-				ticker := time.NewTicker(time.Second)
-				defer ticker.Stop()
-				for {
-					select {
-					case <-ctx.Done():
-						return
-					case <-ticker.C:
-					}
-					res, err := g.client.FetchMessages(ctx, f.ConversationID, 50, &gmproto.Cursor{LastItemTimestamp: time.UnixMicro(f.Timestamp).Add(time.Millisecond).UnixMilli()})
-					if err != nil {
-						return
-					}
-					for _, m := range res.GetMessages() {
-						if m.GetConversationID() == f.ConversationID && m.GetMessageID() == message {
-							g.fullMedia.deliver(m)
-						}
-					}
+			cursor := &gmproto.Cursor{LastItemTimestamp: time.UnixMicro(f.Timestamp).Add(time.Millisecond).UnixMilli()}
+			go readBackOriginal(ctx, fullMediaReadBack, func(ctx context.Context) ([]*gmproto.Message, error) {
+				g.countPhone(phoneMessages)
+				res, err := g.client.FetchMessages(ctx, f.ConversationID, fullMediaReadCount, cursor)
+				return res.GetMessages(), err
+			}, func(m *gmproto.Message) {
+				if m.GetConversationID() == f.ConversationID && m.GetMessageID() == message {
+					g.fullMedia.deliver(m)
 				}
-			}()
+			})
 		}
 		return nil
 	})
@@ -139,6 +160,7 @@ func (g *Google) RefreshFile(ctx context.Context, conv, id string, at time.Time,
 	}
 	cursor := &gmproto.Cursor{LastItemTimestamp: at.Add(time.Millisecond).UnixMilli()}
 	for page := 0; page < 4; page++ {
+		g.countPhone(phoneMessages)
 		res, err := g.client.FetchMessages(ctx, conv, 50, cursor)
 		if err != nil {
 			return media.File{}, errors.New("original_unavailable")

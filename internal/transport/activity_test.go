@@ -45,3 +45,55 @@ func TestActivityDropsCachedListsAtMostOncePerGap(t *testing.T) {
 		t.Fatalf("revision %d", g.ActivityRevision())
 	}
 }
+
+func TestEveryActivityMarksDiscoveryChanged(t *testing.T) {
+	g := NewGoogle(nil, "")
+	g.noteActivity()
+	g.discovery.mu.Lock()
+	first := g.discovery.changedAt
+	g.discovery.mu.Unlock()
+	time.Sleep(2 * time.Millisecond)
+	g.noteActivity()
+	g.discovery.mu.Lock()
+	second := g.discovery.changedAt
+	g.discovery.mu.Unlock()
+	if first.IsZero() || !second.After(first) {
+		t.Fatal("activity inside the list gap was not recorded for discovery")
+	}
+}
+func TestForcedDiscoveryRefreshIsSpacedAcrossClients(t *testing.T) {
+	g := NewGoogle(nil, "")
+	if g.RequestConversationRefresh() {
+		t.Fatal("refresh honoured while the phone is unavailable")
+	}
+	now := time.Now()
+	if !g.forceDiscoveryRefresh(now) {
+		t.Fatal("first forced refresh refused")
+	}
+	if g.forceDiscoveryRefresh(now.Add(30 * time.Second)) {
+		t.Fatal("forced refresh honoured inside the spacing gap")
+	}
+	if !g.forceDiscoveryRefresh(now.Add(conversationRefreshGap)) {
+		t.Fatal("forced refresh refused after the spacing gap")
+	}
+	if g.ActivityRevision() != 0 {
+		t.Fatal("a forced refresh changed the activity revision")
+	}
+}
+
+func TestClearedIdentitiesAdvanceTheListRevision(t *testing.T) {
+	g := NewGoogle(nil, "")
+	before := g.ActivityRevision()
+	g.invalidateIdentities()
+	if g.ActivityRevision() == before {
+		t.Fatal("reconnect or overflow cleared the list without telling dashboards to read it again")
+	}
+}
+
+func TestBackwardClockDoesNotLockOutForcedRefresh(t *testing.T) {
+	g := NewGoogle(nil, "")
+	now := time.Now()
+	if !g.forceDiscoveryRefresh(now) || !g.forceDiscoveryRefresh(now.Add(-time.Hour)) {
+		t.Fatal("a clock stepped backwards locked out forced refreshes")
+	}
+}

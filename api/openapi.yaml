@@ -703,6 +703,9 @@ paths:
                   partial:
                     type: boolean
                     description: Some conversations could not be resolved; available entries are shown.
+                  stale:
+                    type: boolean
+                    description: Optional. The page was read from the phone before its latest reported activity; phone reads are spaced, so ask again shortly.
                   next_cursor:
                     type: string
         '401':
@@ -719,6 +722,13 @@ paths:
         schema:
           type: string
           maxLength: 4096
+      - name: refresh
+        in: query
+        description: Optional. `1` asks for one fresh phone read of the list, for changes the phone may not push. Honoured at most once a minute across clients; otherwise the current list is returned. Omit for ordinary reads.
+        schema:
+          type: string
+          enum:
+          - '1'
   /inbox/typing:
     get:
       description: Individual conversations whose other participant is typing now. Owner only, in memory, expires within seconds; empty unless collection is enabled for the conversation.
@@ -1175,6 +1185,21 @@ components:
       - fixture
       - capabilities
       properties:
+        phone_requests:
+          type: object
+          description: Owner-only in-memory counts of requests sent to the paired phone, by kind, since the service started and in the last hour. No identifiers or content. Absent for transports that do not report it.
+          additionalProperties:
+            type: object
+            required:
+            - total
+            - last_hour
+            properties:
+              total:
+                type: integer
+                minimum: 0
+              last_hour:
+                type: integer
+                minimum: 0
         conversations_revision:
           type: string
           description: Owner-only counter that changes when the phone reports activity or a message is saved; the dashboard refetches its conversation list only when it changes.

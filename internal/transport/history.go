@@ -28,6 +28,9 @@ type ConversationPage struct {
 	Conversations []Conversation `json:"conversations"`
 	NextCursor    string         `json:"next_cursor"`
 	Partial       bool           `json:"partial,omitempty"`
+	// Stale marks a cached page read before the latest phone activity; the
+	// next request after a short spacing interval reads the phone again.
+	Stale bool `json:"stale,omitempty"`
 }
 type ConversationPageSource interface {
 	DiscoverConversations(context.Context, string) (ConversationPage, error)
@@ -58,6 +61,7 @@ func (g *Google) DiscoverConversations(ctx context.Context, cursor string) (Conv
 		}
 	}
 	return g.discovery.get(ctx, cursor, func(ctx context.Context) (ConversationPage, error) {
+		g.countPhone(phoneList)
 		res, err := g.client.ListConversations(ctx, &gmproto.ListConversationsRequest{Count: 25, Folder: gmproto.ListConversationsRequest_INBOX, Cursor: pointer})
 		if err != nil {
 			return ConversationPage{}, err
@@ -115,6 +119,7 @@ func (g *Google) FetchHistory(ctx context.Context, conv, expectedPeer, cursor st
 	}
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
+	g.countPhone(phoneLookup)
 	c, err := g.client.GetConversation(ctx, conv)
 	if err != nil || !eligible(c) || peer(c) != expectedPeer {
 		return HistoryPage{}, errors.New("ineligible_conversation")
@@ -134,10 +139,12 @@ func (g *Google) FetchHistory(ctx context.Context, conv, expectedPeer, cursor st
 		}
 	}
 	observed := time.Now().UTC()
+	g.countPhone(phoneMessages)
 	result, err := g.client.FetchMessages(ctx, conv, 50, pointer)
 	if err != nil {
 		return HistoryPage{}, errors.New("history_fetch_failed")
 	}
+	g.countPhone(phoneLookup)
 	c, err = g.client.GetConversation(ctx, conv)
 	if err != nil || !eligible(c) || peer(c) != expectedPeer {
 		return HistoryPage{}, errors.New("conversation_identity_changed")

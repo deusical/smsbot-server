@@ -17,7 +17,7 @@ async function prepare(page: Page) {
     const response = await route.fetch();
     await route.fulfill({json: {...await response.json(), enabled: true, scope: "all", archive_retention_days: 0}});
   });
-  await page.route("**/api/v1/inbox/conversations", route => route.fulfill({json: {conversations: [{id: "a", label: "Send chat", participant_id: "peer-a", protocol: "RCS", writable: true, archived: true, enrolled: false, last_message_at: new Date().toISOString()}], next_cursor: ""}}));
+  await page.route(/\/api\/v1\/inbox\/conversations(\?refresh=1)?$/, route => route.fulfill({json: {conversations: [{id: "a", label: "Send chat", participant_id: "peer-a", protocol: "RCS", writable: true, archived: true, enrolled: false, last_message_at: new Date().toISOString()}], next_cursor: ""}}));
   await page.route("**/api/v1/inbox/conversations/a/history?*", route => route.fulfill({json: {messages: world.messages, next_cursor: ""}}));
   await page.route("**/api/v1/activity", route => route.fulfill({json: world.job ? [world.job] : []}));
   await page.route("**/api/v1/inbox/conversations/a/compose", async (route: Route) => {

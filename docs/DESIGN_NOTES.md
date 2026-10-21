@@ -47,7 +47,7 @@ Fresh complete incoming text → exact enrolled individual participant → pause
 
 Pause/unenrollment cancel queued work. Startup recovery marks submitting jobs uncertain, then starts paused and cancels queued work. No automatic retries after invoking a transport. Correlated Google status events match both conversation and transaction ID; statuses do not downgrade. Displayed means Google reports displayed, not proof a human consciously read the text.
 
-History fetching does not feed routing. The default inbox retains accepted command text and replies. The opt-in owner inbox observes complete fresh incoming/outgoing text independently of command acceptance, pause and quiet hours. A bounded queue and four capture workers verify current individual-conversation identity before retention without blocking transport control events. Consent epochs discard work queued under revoked capture policies. Capture lookup failures, overflow or stale queued messages raise an owner-only gap warning without pausing automation. Inbox discovery coalesces requests and caches pages for 30 seconds; individual lookup failures produce explicitly partial pages. Settings validation and history fetches have a shared 20-second deadline and run outside the engine mutex, with final revision/access checks before persistence. Selected access binds stable participant IDs; all-conversation access still excludes groups. Encrypted owner settings and `/inbox/*` APIs are separate from recipe configuration. Legacy message/history APIs filter private inbox rows. Schema v3 adds message provenance/status/visibility metadata and upstream-to-transaction aliases without modifying the existing ciphertext scope. Backups preserve visibility/aliases but exclude collection consent. Automatic replies have a separate control, while global pause still stops every send. Settings revisions reject concurrent stale saves; manual owner compose requests use a stable idempotency key and recheck access before submission. An encrypted intent digest binds that key to its original text, so lost acknowledgements can be retried even after pause/cancellation without creating another job.
+History fetching does not feed routing. The default inbox retains accepted command text and replies. The opt-in owner inbox observes complete fresh incoming/outgoing text independently of command acceptance, pause and quiet hours. A bounded queue and four capture workers verify current individual-conversation identity before retention without blocking transport control events. Consent epochs discard work queued under revoked capture policies. Capture lookup failures, overflow or stale queued messages raise an owner-only gap warning without pausing automation. Inbox discovery coalesces requests and keeps pages until the phone reports activity, spacing the resulting phone reads at least 10 seconds apart; a page served from before the latest activity is marked `stale` so the dashboard asks again. Individual lookup failures produce explicitly partial pages. Settings validation and history fetches have a shared 20-second deadline and run outside the engine mutex, with final revision/access checks before persistence. Selected access binds stable participant IDs; all-conversation access still excludes groups. Encrypted owner settings and `/inbox/*` APIs are separate from recipe configuration. Legacy message/history APIs filter private inbox rows. Schema v3 adds message provenance/status/visibility metadata and upstream-to-transaction aliases without modifying the existing ciphertext scope. Backups preserve visibility/aliases but exclude collection consent. Automatic replies have a separate control, while global pause still stops every send. Settings revisions reject concurrent stale saves; manual owner compose requests use a stable idempotency key and recheck access before submission. An encrypted intent digest binds that key to its original text, so lost acknowledgements can be retried even after pause/cancellation without creating another job.
 
 Phone history imports store available pages without routing commands; retained history has bounded decrypted search and stable cursors. The web scroller merges local, imported and live messages by canonical ID, preserves scroll position on prepend, and leaves readers above the bottom in place during polling. Provider work and retention are implemented. Booting a fixture environment cannot construct the Google adapter. Use separate state directories for fixture/live environments.
 
@@ -160,8 +160,9 @@ consent and exact identity checks, while locally submitted originals are preserv
 
 The owner dashboard shows local history immediately. A debounced viewport range,
 with nearby messages for overlap, requests an independent durable refresh lane
-when collection is allowed. It renews while visible and on return to the page;
-no explicit refresh button is required. The owner-only `POST
+when collection is allowed. It is checked when a section opens and on return to
+the page; while it stays open, pushed messages and capture-gap repair keep it
+current. No explicit refresh button is required. The owner-only `POST
 /api/v1/inbox/conversations/{id}/refresh` accepts RFC3339 `since` and optional
 `until` bounds. `archive_refresh` advertises support. Google can start at the
 view's upper bound; pages continue to the lower bound to repair gaps as well as
@@ -174,8 +175,8 @@ the generation so old reads cannot publish. Consent revisions, exact participant
 checks, group exclusion and per-message change watermarks still guard commits.
 An active section gets the first history turn, followed by one round-robin
 background conversation. Recent reconciliation continues; completed old-history
-scans are revisited daily within existing date/retention limits, while cancelled
-deep imports remain cancelled. Owner-visible states distinguish saved data,
+scans are not revisited automatically (archiving again re-scans within existing
+date/retention limits), and cancelled deep imports remain cancelled. Owner-visible states distinguish saved data,
 checking, retrying and when the available section was last checked.
 
 Original-file sweeps prioritize the recently viewed time range. Every third turn
@@ -200,7 +201,7 @@ bounded page before routine discovery on each worker turn. Multiple explicit job
 rotate by last attempt. Visible-section reads keep their own checkpoint; ordinary
 recent and deep background reconciliation still get a turn. Cancellation and
 changed requests invalidate in-flight work through the existing generation check.
-Existing date-limited pending requests receive the same priority on upgrade. Daily maintenance is identified as automatic rather than a new owner request.
+Existing date-limited pending requests receive the same priority on upgrade. Imports of newly discovered conversations are identified as automatic rather than a new owner request.
 
 Older-history progress records pages and messages checked, newly saved messages,
 updated messages, oldest scanned timestamp and last progress time. Recent and
@@ -228,6 +229,31 @@ Successful repair reports only that the available range was rechecked, and clear
 the active warning for that range; unavailable history can still contain gaps.
 Unknown scope is explicitly unverified and cannot be automatically declared repaired.
 
+
+## Phone wake budget
+
+Every request to the paired phone wakes its radio and CPU, so phone reads are
+driven by activity and owner attention rather than timers. The history worker
+runs every 3 seconds only while it has work (queued or running imports and
+refreshes, ready retries, unfinished recent checks or pending capture gaps); when
+idle it sleeps up to 15 minutes, or until the next scheduled retry. Owner
+requests, capture gaps and enabling collection wake it at once.
+
+The conversation list is read from the phone when the phone reports activity,
+after reconnection or queue overflow (which clear cached identities), and once
+when the dashboard opens or returns to the foreground. That foreground read,
+requested with `refresh=1` on `GET /api/v1/inbox/conversations`, is honoured at
+most once a minute across clients, for changes the phone may not push. A partial
+page (a lookup or the read failed) is retried after 30 seconds rather than kept.
+Dashboard polling otherwise reads only server state. Conversation details are cached for
+10 minutes; sends, reactions and read receipts still verify the conversation live.
+
+After asking the phone for an original file, the transport reads the message back
+at once (the phone may already have uploaded it without another push), then at 4
+and 12 seconds, within the 20-second request deadline; the push normally finishes
+the request first. `GET /api/v1/state` reports in-memory counts of phone requests
+by kind, in total and for the last hour, with no identifiers or content. They
+reset on restart.
 
 Archive operations live in the dedicated owner Archive page. It polls the complete
 archive job list independently of paginated conversation discovery and shows scope,
