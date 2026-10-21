@@ -156,7 +156,7 @@ func TestIndependentRecentAndBackfillRetries(t *testing.T) {
 	}
 }
 
-func TestCompletedOlderHistoryIsRecheckedGradually(t *testing.T) {
+func TestCompletedOlderHistoryIsNotRecheckedAutomatically(t *testing.T) {
 	v, _ := vault.New(make([]byte, 32))
 	s, err := store.Open(filepath.Join(t.TempDir(), "state.db"), v)
 	if err != nil {
@@ -171,11 +171,113 @@ func TestCompletedOlderHistoryIsRecheckedGradually(t *testing.T) {
 	}
 	worker.Tick(context.Background())
 	worker.Tick(context.Background())
-	if len(h.calls) != 1 {
-		t.Fatal("old history was not revisited once on schedule", h.calls)
+	if len(h.calls) != 0 {
+		t.Fatalf("completed history should not be revisited automatically, got calls: %v", h.calls)
 	}
 	a, _ = s.Archive("chat")
-	if a.DeepCheckedAt == "" || a.State != "available_pages_exhausted" || a.Pages != 1 || a.Checked != 0 || a.Imported != 0 {
-		t.Fatal("rescan progress missing")
+	if a.State != "available_pages_exhausted" || a.Pages != 20 || a.Checked != 1000 || a.Imported != 50 {
+		t.Fatalf("completed archive state was reset: %+v", a)
+	}
+
+	// Explicit owner request initiates a rescan.
+	a.State = "queued"
+	a.RequestSource = "owner"
+	a.RequestedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	a.RetryAt = ""
+	if err := s.SaveArchive(a, 0); err != nil {
+		t.Fatal(err)
+	}
+	worker.Tick(context.Background())
+	if len(h.calls) != 1 {
+		t.Fatalf("explicit owner request did not trigger fetch: %v", h.calls)
+	}
+}
+
+func TestServiceIdleBackoffAndWake(t *testing.T) {
+	v, _ := vault.New(make([]byte, 32))
+	s, err := store.Open(filepath.Join(t.TempDir(), "state.db"), v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.DB.Close()
+	h := &retryHost{s: s, fail: map[string]bool{}}
+	worker := New(s, h)
+
+	// No archives -> idle interval
+	if d := worker.nextInterval(); d != idleInterval {
+		t.Fatalf("expected idle interval %v, got %v", idleInterval, d)
+	}
+
+	// Completed archive -> idle interval
+	a := store.Archive{Conversation: transport.Conversation{ID: "chat", ParticipantID: "peer", Writable: true}, State: "available_pages_exhausted", Generation: 1}
+	if err := s.SaveArchive(a, 0); err != nil {
+		t.Fatal(err)
+	}
+	if d := worker.nextInterval(); d != idleInterval {
+		t.Fatalf("expected idle interval %v for completed archive, got %v", idleInterval, d)
+	}
+
+	// Active queued state -> active interval
+	a.State = "queued"
+	if err := s.SaveArchive(a, 0); err != nil {
+		t.Fatal(err)
+	}
+	if d := worker.nextInterval(); d != activeInterval {
+		t.Fatalf("expected active interval %v for queued archive, got %v", activeInterval, d)
+	}
+
+	// Active view refresh -> active interval
+	a.State = "available_pages_exhausted"
+	a.RefreshState = "queued"
+	if err := s.SaveArchive(a, 0); err != nil {
+		t.Fatal(err)
+	}
+	if d := worker.nextInterval(); d != activeInterval {
+		t.Fatalf("expected active interval %v for view refresh, got %v", activeInterval, d)
+	}
+
+	// Ready recent retry -> active interval
+	a.RefreshState = ""
+	a.RecentRetryAt = time.Now().Add(-time.Second).UTC().Format(time.RFC3339Nano)
+	if err := s.SaveArchive(a, 0); err != nil {
+		t.Fatal(err)
+	}
+	if d := worker.nextInterval(); d != activeInterval {
+		t.Fatalf("expected active interval %v for ready recent retry, got %v", activeInterval, d)
+	}
+
+	// Future recent retry -> returns delta delay
+	a.RecentRetryAt = time.Now().Add(30 * time.Second).UTC().Format(time.RFC3339Nano)
+	if err := s.SaveArchive(a, 0); err != nil {
+		t.Fatal(err)
+	}
+	if d := worker.nextInterval(); d <= 0 || d > 35*time.Second {
+		t.Fatalf("expected bounded delay for future recent retry, got %v", d)
+	}
+
+	// Clear recent retry for wake test
+	a.RecentRetryAt = ""
+	_ = s.SaveArchive(a, 0)
+
+	// Verify Wake() promptly triggers Tick in Run()
+	a.RefreshState = ""
+	_ = s.SaveArchive(a, 0)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	runDone := make(chan struct{})
+	go func() {
+		defer close(runDone)
+		worker.Run(ctx)
+	}()
+
+	// Wake signals processing
+	worker.Wake()
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	select {
+	case <-runDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("worker.Run did not stop on context cancellation")
 	}
 }

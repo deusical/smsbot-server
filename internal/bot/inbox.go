@@ -142,6 +142,9 @@ func (e *Engine) SetInboxSettings(ctx context.Context, s InboxSettings) error {
 		}
 	}
 	e.publishCaptureConsent(s)
+	if s.Enabled && e.History != nil {
+		e.History.Wake()
+	}
 	return nil
 }
 

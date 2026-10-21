@@ -34,9 +34,10 @@ type Google struct {
 	listMu        sync.Mutex
 	listed        time.Time
 	list          []Conversation
-	settings      *gmproto.Settings
-	conversations map[string]*gmproto.Conversation
-	updates       chan any
+	settings            *gmproto.Settings
+	conversations       map[string]*gmproto.Conversation
+	conversationFetched map[string]time.Time
+	updates             chan any
 	queueMu       sync.Mutex
 	overflow      atomic.Bool
 	healthFailure atomic.Bool
@@ -49,7 +50,15 @@ type Google struct {
 }
 
 func NewGoogle(v *vault.Vault, path string) *Google {
-	return &Google{recoveryWake: make(chan struct{}, 1), vault: v, path: path, updates: make(chan any, 256), overflowWake: make(chan struct{}, 1), conversations: map[string]*gmproto.Conversation{}}
+	return &Google{
+		recoveryWake:        make(chan struct{}, 1),
+		vault:               v,
+		path:                path,
+		updates:             make(chan any, 256),
+		overflowWake:        make(chan struct{}, 1),
+		conversations:       map[string]*gmproto.Conversation{},
+		conversationFetched: map[string]time.Time{},
+	}
 }
 func (g *Google) attach(auth *libgm.AuthData) {
 	g.client = libgm.NewClient(auth, nil, zerolog.New(io.Discard), exhttp.SensibleClientSettings)
@@ -291,6 +300,67 @@ func peer(c *gmproto.Conversation) string {
 func eligible(c *gmproto.Conversation) bool {
 	return c != nil && !c.GetIsGroupChat() && !c.GetReadOnly() && peer(c) != "" && c.GetDefaultOutgoingID() != ""
 }
+
+const conversationDetailTTL = 10 * time.Minute
+
+func (g *Google) cachedDetail(id string) *gmproto.Conversation {
+	if id == "" {
+		return nil
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.conversations == nil || g.conversationFetched == nil {
+		return nil
+	}
+	c, ok := g.conversations[id]
+	if !ok || c == nil || c.GetConversationID() != id {
+		return nil
+	}
+	fetched, ok := g.conversationFetched[id]
+	if !ok || time.Since(fetched) > conversationDetailTTL {
+		return nil
+	}
+	return c
+}
+
+func (g *Google) cacheDetail(c *gmproto.Conversation) {
+	if c == nil || c.GetConversationID() == "" {
+		return
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.conversations == nil {
+		g.conversations = map[string]*gmproto.Conversation{}
+	}
+	if g.conversationFetched == nil {
+		g.conversationFetched = map[string]time.Time{}
+	}
+	g.conversations[c.GetConversationID()] = c
+	g.conversationFetched[c.GetConversationID()] = time.Now()
+}
+
+func (g *Google) DiscoveryLookup(ctx context.Context, id string) (Conversation, error) {
+	if c := g.cachedDetail(id); c != nil {
+		label := c.GetName()
+		if label == "" {
+			if c.GetIsGroupChat() {
+				label = "Group conversation"
+			} else {
+				label = "Individual conversation"
+			}
+		}
+		return withListState(Conversation{
+			ID:            id,
+			ParticipantID: peer(c),
+			Label:         label,
+			Protocol:      c.GetType().String(),
+			Group:         c.GetIsGroupChat(),
+			Writable:      eligible(c),
+		}, c), nil
+	}
+	return g.LookupConversation(ctx, id)
+}
+
 func (g *Google) LookupConversation(ctx context.Context, id string) (Conversation, error) {
 	if !g.Ready() {
 		return Conversation{}, ErrUnavailable
@@ -312,9 +382,7 @@ func (g *Google) LookupConversation(ctx context.Context, id string) (Conversatio
 	if c.GetConversationID() != id {
 		return Conversation{}, errors.New("ineligible_conversation")
 	}
-	g.mu.Lock()
-	g.conversations[id] = c
-	g.mu.Unlock()
+	g.cacheDetail(c)
 	label := c.GetName()
 	if label == "" {
 		label = "Individual conversation"
@@ -341,21 +409,64 @@ func (g *Google) Conversations(ctx context.Context) ([]Conversation, error) {
 	for i, summary := range res.GetConversations() {
 		ids[i] = summary.GetConversationID()
 	}
-	details, e := conversationDetails(ctx, ids, g.client.GetConversation)
+	var fetchedMu sync.Mutex
+	newFetched := make(map[string]time.Time)
+	fetchDetail := func(ctx context.Context, id string) (*gmproto.Conversation, error) {
+		if cached := g.cachedDetail(id); cached != nil {
+			return cached, nil
+		}
+		c, err := g.client.GetConversation(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		now := time.Now()
+		fetchedMu.Lock()
+		newFetched[id] = now
+		fetchedMu.Unlock()
+		return c, nil
+	}
+	details, e := conversationDetails(ctx, ids, fetchDetail)
 	if e != nil {
 		return nil, errors.New("conversation identity refresh failed")
 	}
-	for _, c := range details {
+	summaries := res.GetConversations()
+	for i, c := range details {
 		label := c.GetName()
 		if label == "" {
-			label = "Individual conversation"
+			if c.GetIsGroupChat() {
+				label = "Group conversation"
+			} else {
+				label = "Individual conversation"
+			}
 		}
-		out = append(out, withListState(Conversation{ID: c.GetConversationID(), ParticipantID: peer(c), Label: label, Protocol: c.GetType().String(), Group: c.GetIsGroupChat(), Writable: eligible(c)}, c))
+		conv := Conversation{
+			ID:            c.GetConversationID(),
+			ParticipantID: peer(c),
+			Label:         label,
+			Protocol:      c.GetType().String(),
+			Group:         c.GetIsGroupChat(),
+			Writable:      eligible(c),
+		}
+		conv = withListState(conv, c)
+		if i < len(summaries) && summaries[i] != nil {
+			conv = withListState(conv, summaries[i])
+		}
+		out = append(out, conv)
 	}
 	// Publish identities only after the entire refresh succeeds.
 	g.mu.Lock()
+	if g.conversations == nil {
+		g.conversations = map[string]*gmproto.Conversation{}
+	}
+	if g.conversationFetched == nil {
+		g.conversationFetched = map[string]time.Time{}
+	}
 	for _, c := range details {
-		g.conversations[c.GetConversationID()] = c
+		id := c.GetConversationID()
+		g.conversations[id] = c
+		if fetchedAt, ok := newFetched[id]; ok {
+			g.conversationFetched[id] = fetchedAt
+		}
 	}
 	g.mu.Unlock()
 	g.list = out

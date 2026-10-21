@@ -50,6 +50,9 @@ func (e *Engine) noteCaptureGap(m transport.Incoming, epoch uint64, reason strin
 		g = mergeCaptureGap(previous.gap, g)
 	}
 	e.pendingGaps[g.Conversation] = pendingCaptureGap{g, epoch}
+	if e.History != nil {
+		defer e.History.Wake()
+	}
 }
 func mergeCaptureGap(old, next store.CaptureGap) store.CaptureGap {
 	if old.State == "checked_available" {
@@ -153,6 +156,30 @@ func (e *Engine) CaptureGapStatus() ([]store.CaptureGap, bool) {
 		}
 	}
 	return gaps, unknown
+}
+
+func (h archiveHost) HasPendingGap() bool {
+	e := h.e
+	e.gapMu.Lock()
+	hasMemoryGaps := len(e.pendingGaps) > 0
+	e.gapMu.Unlock()
+	if hasMemoryGaps {
+		return true
+	}
+	e.mu.Lock()
+	settings, settingsErr := e.InboxSettings()
+	gaps, err := e.Store.CaptureGaps()
+	e.mu.Unlock()
+	if settingsErr != nil || !settings.Enabled || err != nil {
+		return false
+	}
+	for i := range gaps {
+		g := &gaps[i]
+		if settings.AllowsID(g.Conversation) && g.Conversation != "" && g.State != "checked_available" && g.State != "scope_unknown" {
+			return true
+		}
+	}
+	return false
 }
 
 func (h archiveHost) RepairCaptureGap(ctx context.Context) error {

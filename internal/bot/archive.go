@@ -208,7 +208,11 @@ func (e *Engine) RequestArchive(ctx context.Context, conv, since string, cancel 
 			a.RequestedAt = e.now().UTC().Format(time.RFC3339Nano)
 			a.LastAttemptAt = ""
 			a.Generation++
-			return a, e.Store.SaveArchive(a, s.ArchiveRetentionDays)
+			err = e.Store.SaveArchive(a, s.ArchiveRetentionDays)
+			if err == nil && e.History != nil {
+				e.History.Wake()
+			}
+			return a, err
 		}
 		return a, nil
 	}
@@ -236,7 +240,11 @@ func (e *Engine) RequestArchive(ctx context.Context, conv, since string, cancel 
 	a.Failures = 0
 	a.RetryAt = ""
 	a.DeepCheckedAt = ""
-	return a, e.Store.SaveArchive(a, s.ArchiveRetentionDays)
+	err = e.Store.SaveArchive(a, s.ArchiveRetentionDays)
+	if err == nil && e.History != nil {
+		e.History.Wake()
+	}
+	return a, err
 }
 func (e *Engine) ArchiveConversations() ([]transport.Conversation, error) {
 	list, err := e.Store.Archives()
@@ -330,5 +338,9 @@ func (e *Engine) RequestArchiveRefresh(ctx context.Context, conv, from, to strin
 	if source, ok := e.Transport.(transport.HistoryRangeSource); ok {
 		a.RefreshCursor = source.HistoryCursorBefore(until.Add(time.Millisecond))
 	}
-	return a, e.Store.SaveArchive(a, settings.ArchiveRetentionDays)
+	err = e.Store.SaveArchive(a, settings.ArchiveRetentionDays)
+	if err == nil && e.History != nil {
+		e.History.Wake()
+	}
+	return a, err
 }

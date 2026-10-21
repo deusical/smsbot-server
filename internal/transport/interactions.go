@@ -54,12 +54,18 @@ func (g *Google) rememberConversationEvent(c *gmproto.Conversation) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	old := g.conversations[c.GetConversationID()]
-	changed := old != nil && (!eligible(c) || peer(old) != peer(c) || old.GetDefaultOutgoingID() != c.GetDefaultOutgoingID())
-	if !changed && eligible(c) && c.GetConversationID() != "" {
+	changed := old != nil && eligible(old) && (!eligible(c) || peer(old) != peer(c) || old.GetDefaultOutgoingID() != c.GetDefaultOutgoingID())
+	if !changed && c.GetConversationID() != "" {
 		if g.conversations == nil {
 			g.conversations = map[string]*gmproto.Conversation{}
 		}
+		if g.conversationFetched == nil {
+			g.conversationFetched = map[string]time.Time{}
+		}
 		g.conversations[c.GetConversationID()] = c
+		g.conversationFetched[c.GetConversationID()] = time.Now()
+	} else if changed && g.conversationFetched != nil {
+		delete(g.conversationFetched, c.GetConversationID())
 	}
 	return changed
 }

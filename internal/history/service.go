@@ -33,11 +33,97 @@ type Service struct {
 	Host            Host
 	tickMu          sync.Mutex
 	recent          map[string]time.Time
+	wake            chan struct{}
 }
 
+const (
+	activeInterval = 3 * time.Second
+	idleInterval   = 15 * time.Minute
+)
+
 func New(s *store.Store, h Host) *Service {
-	return &Service{Store: s, Host: h, recent: map[string]time.Time{}, fetchTimeout: 20 * time.Second}
+	return &Service{
+		Store:        s,
+		Host:         h,
+		recent:       map[string]time.Time{},
+		fetchTimeout: 20 * time.Second,
+		wake:         make(chan struct{}, 1),
+	}
 }
+
+func (s *Service) Wake() {
+	if s == nil || s.wake == nil {
+		return
+	}
+	select {
+	case s.wake <- struct{}{}:
+	default:
+	}
+}
+
+func (s *Service) nextInterval() time.Duration {
+	if checker, ok := s.Host.(interface{ HasPendingGap() bool }); ok && checker.HasPendingGap() {
+		return activeInterval
+	}
+	archives, err := s.Store.Archives()
+	if err != nil {
+		return idleInterval
+	}
+	now := time.Now()
+	var earliestRetry time.Time
+	for _, a := range archives {
+		if a.RefreshState == "queued" || a.RefreshState == "running" {
+			return activeInterval
+		}
+		if a.RefreshState == "retrying" {
+			if retryReady(a.RefreshRetryAt) {
+				return activeInterval
+			}
+			if at, err := time.Parse(time.RFC3339Nano, a.RefreshRetryAt); err == nil && at.After(now) {
+				if earliestRetry.IsZero() || at.Before(earliestRetry) {
+					earliestRetry = at
+				}
+			}
+		}
+		if a.State == "queued" || a.State == "running" {
+			return activeInterval
+		}
+		if a.State == "retrying" {
+			if retryReady(a.RetryAt) {
+				return activeInterval
+			}
+			if at, err := time.Parse(time.RFC3339Nano, a.RetryAt); err == nil && at.After(now) {
+				if earliestRetry.IsZero() || at.Before(earliestRetry) {
+					earliestRetry = at
+				}
+			}
+		}
+		if a.RecentStarted != "" {
+			return activeInterval
+		}
+		if a.RecentRetryAt != "" {
+			if retryReady(a.RecentRetryAt) {
+				return activeInterval
+			}
+			if at, err := time.Parse(time.RFC3339Nano, a.RecentRetryAt); err == nil && at.After(now) {
+				if earliestRetry.IsZero() || at.Before(earliestRetry) {
+					earliestRetry = at
+				}
+			}
+		}
+	}
+	if !earliestRetry.IsZero() {
+		delay := earliestRetry.Sub(now)
+		if delay < activeInterval {
+			return activeInterval
+		}
+		if delay < idleInterval {
+			return delay
+		}
+	}
+	return idleInterval
+}
+
 func (s *Service) Run(ctx context.Context) {
 	timer := time.NewTimer(0)
 	defer timer.Stop()
@@ -45,9 +131,18 @@ func (s *Service) Run(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
+		case <-s.wake:
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			s.Tick(ctx)
+			timer.Reset(s.nextInterval())
 		case <-timer.C:
 			s.Tick(ctx)
-			timer.Reset(3 * time.Second)
+			timer.Reset(s.nextInterval())
 		}
 	}
 }
@@ -154,21 +249,12 @@ func (s *Service) Tick(ctx context.Context) {
 			continue
 		}
 		if a.State == "available_pages_exhausted" || a.State == "cutoff_reached" {
-			checked, _ := time.Parse(time.RFC3339Nano, a.DeepCheckedAt)
 			if a.DeepCheckedAt == "" {
-				// Existing completed archives have no scan timestamp. Start the
-				// new daily schedule without an immediate duplicate phone read.
+				// Completed archives without a timestamp record completion time.
 				a.DeepCheckedAt = time.Now().UTC().Format(time.RFC3339Nano)
 				if s.Host.Commit(ctx, a, p, transport.HistoryPage{}, true) != nil {
 					return
 				}
-			} else if time.Since(checked) >= 24*time.Hour {
-				a.State = "queued"
-				a.RequestedAt = "" // Scheduled maintenance is not a new explicit request.
-				a.RequestSource = "automatic"
-				a.Checked, a.Pages, a.Updated, a.Imported, a.Duplicates, a.Skipped = 0, 0, 0, 0, 0, 0
-				a.ScannedThrough, a.LastProgressAt = "", ""
-				a.Cursor = ""
 			}
 		}
 		if (manual == nil || manual.Conversation.ID != c.ID) && retryReady(a.RetryAt) && (a.State == "queued" || a.State == "running" || a.State == "retrying") {
