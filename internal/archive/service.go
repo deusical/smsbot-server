@@ -178,6 +178,10 @@ func (s *Service) Tick(ctx context.Context) {
 			if ctx.Err() != nil {
 				return
 			}
+			retry, _ := time.Parse(time.RFC3339Nano, file.RetryAt)
+			if time.Now().Before(retry) {
+				continue
+			}
 			if repairer, ok := s.Host.(interface {
 				Repair(context.Context, transport.Conversation, string, media.File) (bool, error)
 			}); ok {
@@ -194,10 +198,6 @@ func (s *Service) Tick(ctx context.Context) {
 				if err != nil || file.RetryPolicy == policyToken(policy, used) {
 					continue
 				}
-			}
-			retry, _ := time.Parse(time.RFC3339Nano, file.RetryAt)
-			if time.Now().Before(retry) {
-				continue
 			}
 			call, cancel := context.WithTimeout(ctx, 90*time.Second)
 			revision, err := s.Host.Authorize(call, a.Conversation)

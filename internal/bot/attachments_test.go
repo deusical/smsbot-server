@@ -303,6 +303,64 @@ func TestAttachmentReadsEnforceExpiryWithoutPruning(t *testing.T) {
 
 type originalRepairTransport struct{ *transport.Fixture }
 
+type failingRepairTransport struct {
+	*originalRepairTransport
+	calls int
+	fail  bool
+}
+
+func (f *failingRepairTransport) RefreshFile(ctx context.Context, conv, id string, at time.Time, file media.File) (media.File, error) {
+	f.calls++
+	if f.fail {
+		return media.File{}, errors.New("synthetic_failure")
+	}
+	return f.originalRepairTransport.RefreshFile(ctx, conv, id, at, file)
+}
+func TestLegacyRepairFailureBackoffAndRecovery(t *testing.T) {
+	e, f := setup(t)
+	enableInbox(t, e)
+	source := &failingRepairTransport{originalRepairTransport: &originalRepairTransport{f}, fail: true}
+	e.Transport = source
+	now := time.Now()
+	e.now = func() time.Time { return now }
+	c := transport.Conversation{ID: "demo-chat", ParticipantID: "demo-peer", Writable: true}
+	if err := e.Store.SaveArchive(store.Archive{Conversation: c, State: "running", Generation: 1}, 0); err != nil {
+		t.Fatal(err)
+	}
+	old := media.File{Info: media.Info{ID: "part-0", MIME: "image/jpeg", Size: 7}, Data: []byte("preview")}
+	if err := e.Store.SaveObservedFiles(c.ID, "synthetic-message", "", "incoming", "", "phone", "", now, []media.File{old}); err != nil {
+		t.Fatal(err)
+	}
+	message := store.Hash(c.ID + "\x00synthetic-message")
+	host := archiveFileHost{e}
+	if _, err := host.Repair(context.Background(), c, message, old); err == nil {
+		t.Fatal("repair failure hidden")
+	}
+	saved, err := e.Store.Attachment(c.ID, message, old.ID)
+	if err != nil || saved.Failures != 1 || saved.RetryAt == "" || !bytes.Equal(saved.Data, old.Data) {
+		t.Fatal("repair lost preview or backoff", err)
+	}
+	if err := e.Store.SaveObservedFiles(c.ID, "synthetic-message", "", "incoming", "", "phone", "", now, []media.File{old}); err != nil {
+		t.Fatal(err)
+	}
+	replayed, err := e.Store.Attachment(c.ID, message, old.ID)
+	if err != nil || replayed.RetryAt != saved.RetryAt || replayed.Failures != 1 {
+		t.Fatal("duplicate descriptor erased retry", err)
+	}
+	if _, err := host.Repair(context.Background(), c, message, saved); err != nil || source.calls != 1 {
+		t.Fatal("early repair retried", err)
+	}
+	now = now.Add(11 * time.Second)
+	source.fail = false
+	if ok, err := host.Repair(context.Background(), c, message, saved); !ok || err != nil {
+		t.Fatal("repair did not recover", err)
+	}
+	saved, err = e.Store.Attachment(c.ID, message, old.ID)
+	if err != nil || saved.RetryAt != "" || saved.Failures != 0 || saved.RemoteID != "synthetic-original" {
+		t.Fatal("successful repair retained failure", err)
+	}
+}
+
 func (f *originalRepairTransport) RefreshFile(ctx context.Context, conv, id string, at time.Time, file media.File) (media.File, error) {
 	file.Data = nil
 	file.PreviewData = []byte("tiny preview")

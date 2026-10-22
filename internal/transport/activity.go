@@ -229,3 +229,9 @@ func (f *Fixture) MarkRead(ctx context.Context, conv, expectedPeer string, throu
 	f.activity++
 	return nil
 }
+
+// IdentityEpochSource invalidates only optimization hints after identity/connection
+// changes. A value never grants capture or sending permission.
+type IdentityEpochSource interface{ IdentityEpoch() uint64 }
+
+func (g *Google) IdentityEpoch() uint64 { return g.identityEpoch.Load() }

@@ -19,6 +19,7 @@ type conversationPageCache struct {
 	mu         sync.Mutex
 	pages      map[string]cachedConversationPage
 	flights    map[string]chan struct{}
+	failures   map[string]time.Time
 	generation uint64
 	changedAt  time.Time
 }
@@ -31,6 +32,7 @@ func (c *conversationPageCache) invalidate() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.pages = nil
+	c.failures = nil
 	c.generation++
 }
 func (c *conversationPageCache) markChanged(now time.Time) {
@@ -46,6 +48,10 @@ func (c *conversationPageCache) get(ctx context.Context, key string, fetch func(
 			return ConversationPage{}, err
 		}
 		c.mu.Lock()
+		if until := c.failures[key]; time.Now().Before(until) {
+			c.mu.Unlock()
+			return ConversationPage{}, errors.New("discovery_unavailable")
+		}
 		if cached, ok := c.pages[key]; ok {
 			current := cached.at.After(c.changedAt)
 			// A partial page is never kept as complete: it is read again after
@@ -86,6 +92,22 @@ func (c *conversationPageCache) get(ctx context.Context, key string, fetch func(
 		page, err := fetch(ctx)
 		c.mu.Lock()
 		delete(c.flights, key)
+		if generation == c.generation {
+			if err != nil && ctx.Err() == nil {
+				if c.failures == nil {
+					c.failures = map[string]time.Time{}
+				}
+				if len(c.failures) >= 64 {
+					for old := range c.failures {
+						delete(c.failures, old)
+						break
+					}
+				}
+				c.failures[key] = time.Now().Add(partialRetryGap)
+			} else if err == nil {
+				delete(c.failures, key)
+			}
+		}
 		if err == nil && generation == c.generation {
 			if c.pages == nil {
 				c.pages = map[string]cachedConversationPage{}

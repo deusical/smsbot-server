@@ -25,6 +25,8 @@ type Engine struct {
 	Provider       Provider
 	mu             sync.Mutex
 	reads          readThrottle
+	captureReads   captureReads
+	preflight      preflightRetry
 	dispatchMu     sync.Mutex
 	now            func() time.Time
 	pending        map[string]context.CancelFunc
@@ -385,11 +387,21 @@ func (e *Engine) Dispatch(ctx context.Context) error {
 		e.mu.Unlock()
 		return err
 	}
+	if e.preflight.job != j.ID {
+		e.preflight = preflightRetry{job: j.ID}
+	}
+	if e.now().Before(e.preflight.until) {
+		e.mu.Unlock()
+		return nil
+	}
 	cfg, code, err := e.check(ctx, j, p)
 	if err != nil {
+		e.preflight.failures++
+		e.preflight.until = e.now().Add(min(30*time.Second, time.Second*time.Duration(1<<min(e.preflight.failures-1, 5))))
 		e.mu.Unlock()
 		return err
 	}
+	e.preflight = preflightRetry{}
 	if code != "" {
 		if code == "approval_required" {
 			_, err = e.Store.Transition(j.ID, "queued", "awaiting_approval")
@@ -820,4 +832,10 @@ func (e *Engine) Reconcile(conv, txn, state, reported string) error {
 		return err
 	}
 	return e.Store.UpdateMessageStatus(conv, txn, state)
+}
+
+type preflightRetry struct {
+	job      string
+	until    time.Time
+	failures int
 }

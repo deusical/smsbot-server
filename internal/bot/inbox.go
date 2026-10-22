@@ -183,6 +183,12 @@ func (e *Engine) observe(ctx context.Context, m transport.Incoming, epoch uint64
 	if m.ID == "" || m.ConversationID == "" || (m.Text == "" && len(m.Attachments) == 0) || (!m.Historical && e.now().Sub(m.At) > 2*time.Minute) || m.At.After(e.now().Add(5*time.Second)) {
 		return nil
 	}
+	resource := store.Hash(m.ConversationID + "\x00" + m.ID)
+	release, err := e.captureReads.acquire(ctx, resource)
+	if err != nil {
+		return err
+	}
+	defer release()
 	e.mu.Lock()
 	s, err := e.InboxSettings()
 	consent := e.captureConsent.Load()
@@ -213,6 +219,20 @@ func (e *Engine) observe(ctx context.Context, m transport.Incoming, epoch uint64
 		if !found {
 			return nil
 		}
+	}
+	connection := e.captureConnectionEpoch()
+	digest, err := e.captureDigest(m, consent)
+	if err != nil {
+		return err
+	}
+	mutation, err := e.Store.ActiveMutation(m.ConversationID, m.ID)
+	if err != nil {
+		return err
+	}
+	// Outgoing aliases and active mutation reconciliation may have changed
+	// independently of message contents. Always run their normal verification.
+	if !m.Outgoing && mutation == "" && e.captureReads.matches(resource, digest) && connection == e.captureConnectionEpoch() {
+		return nil
 	}
 	c, err := e.lookupConversation(ctx, m.ConversationID)
 	if err != nil {
@@ -262,7 +282,15 @@ func (e *Engine) observe(ctx context.Context, m transport.Incoming, epoch uint64
 	if err = e.Store.SaveArchive(a, current.ArchiveRetentionDays); err != nil {
 		return err
 	}
-	return e.Store.SaveObservedFiles(c.ID, m.ID, m.TransactionID, dir, m.Text, "phone", m.Status, m.At, m.Attachments, m.Interaction)
+	if err := e.Store.SaveObservedFiles(c.ID, m.ID, m.TransactionID, dir, m.Text, "phone", m.Status, m.At, m.Attachments, m.Interaction); err != nil {
+		return err
+	}
+	// Saving may change local message state. Bind the reusable result to the
+	// resulting watermark so history, file or receipt updates invalidate it.
+	if digest, err = e.captureDigest(m, consent); err == nil && connection == e.captureConnectionEpoch() {
+		e.captureReads.remember(resource, digest)
+	}
+	return nil
 }
 func (e *Engine) InboxPage(ctx context.Context, conv, cursor, search string, limit int) (store.InboxPage, error) {
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)

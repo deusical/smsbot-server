@@ -88,6 +88,7 @@ func connectionFailure(event any) (name, reason string, hard bool, err error, ok
 	return
 }
 func (g *Google) noteFailure(reason string, hard bool) {
+	g.identityEpoch.Add(1)
 	r := &g.recovery
 	r.mu.Lock()
 	r.epoch++
@@ -270,6 +271,7 @@ func (g *Google) finishRecovery(result recoveryResult, now time.Time) (recovered
 	return true, false
 }
 func (g *Google) invalidateIdentities() {
+	g.identityEpoch.Add(1)
 	g.listMu.Lock()
 	g.mu.Lock()
 	g.listed = time.Time{}

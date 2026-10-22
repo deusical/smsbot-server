@@ -51,6 +51,7 @@ func (g *Google) InteractionOwner(conv, expectedPeer string) (string, error) {
 // A changed identity must retain the old baseline until pause and the next
 // verified lookup. Publishing it early could undermine the transport send check.
 func (g *Google) rememberConversationEvent(c *gmproto.Conversation) bool {
+	g.identityEpoch.Add(1)
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	old := g.conversations[c.GetConversationID()]

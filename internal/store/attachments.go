@@ -46,6 +46,14 @@ func (s *Store) saveAttachments(tx *sql.Tx, id string, files []media.File) error
 		}
 		for i := range files {
 			for _, old := range existing {
+				// A repeated phone descriptor must not erase a worker's retry
+				// deadline. A changed source remains immediately eligible.
+				if SameFileSource(old, files[i]) && old.RetryAt != "" && files[i].RetryAt == "" {
+					files[i].RetryAt = old.RetryAt
+					files[i].Failures = old.Failures
+					files[i].ArchiveState = old.ArchiveState
+					files[i].ArchiveError = old.ArchiveError
+				}
 				if old.MessageID != "" && !old.SizeUnverified && old.Size > 0 && SameFileSource(old, files[i]) {
 					// A completed original read measured these bytes; an upstream
 					// snapshot may still carry an earlier, smaller reported size.

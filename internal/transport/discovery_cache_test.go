@@ -132,6 +132,53 @@ func ageCachedPage(cache *conversationPageCache, by time.Duration) {
 		cache.changedAt = cache.changedAt.Add(-by)
 	}
 }
+
+func TestDiscoveryFailureSpacingCancellationAndInvalidation(t *testing.T) {
+	var cache conversationPageCache
+	var calls atomic.Int32
+	fetch := func(context.Context) (ConversationPage, error) {
+		calls.Add(1)
+		return ConversationPage{}, errors.New("synthetic_failure")
+	}
+	var wg sync.WaitGroup
+	for range 16 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := cache.get(context.Background(), "", fetch); err == nil {
+				t.Error("failure hidden")
+			}
+		}()
+	}
+	wg.Wait()
+	if calls.Load() != 1 {
+		t.Fatal("failed read was repeated by waiters")
+	}
+	cache.markChanged(time.Now())
+	cache.get(context.Background(), "", fetch)
+	if calls.Load() != 1 {
+		t.Fatal("activity bypassed failure spacing")
+	}
+	cache.mu.Lock()
+	cache.failures[""] = time.Now().Add(-time.Second)
+	cache.mu.Unlock()
+	cache.get(context.Background(), "", fetch)
+	if calls.Load() != 2 {
+		t.Fatal("expired failure was not retried")
+	}
+	cache.invalidate()
+	cache.get(context.Background(), "", fetch)
+	if calls.Load() != 3 {
+		t.Fatal("hard invalidation did not allow retry")
+	}
+	cache.invalidate()
+	ctx, cancel := context.WithCancel(context.Background())
+	cache.get(ctx, "", func(context.Context) (ConversationPage, error) { cancel(); return ConversationPage{}, context.Canceled })
+	cache.get(context.Background(), "", fetch)
+	if calls.Load() != 4 {
+		t.Fatal("caller cancellation poisoned shared cache")
+	}
+}
 func TestDiscoveryCacheRetriesPartialPages(t *testing.T) {
 	var cache conversationPageCache
 	calls := 0

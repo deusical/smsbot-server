@@ -51,6 +51,7 @@ type Google struct {
 	phonePurposes       phoneRequests
 	relayMetrics        relayMetrics
 	activity            activityState
+	identityEpoch       atomic.Uint64
 }
 
 func NewGoogle(v *vault.Vault, path string) *Google {

@@ -78,6 +78,10 @@ func (e *Engine) LocalArchiveAttachment(conv, message, attachment string) (media
 // Repair old imported previews before considering any blob an original. Saved
 // web uploads are excluded; replacement uses the normal consent/identity CAS.
 func (h archiveFileHost) Repair(ctx context.Context, c transport.Conversation, message string, file media.File) (bool, error) {
+	ctx = transport.WithPhonePurpose(ctx, "original")
+	if retry, _ := time.Parse(time.RFC3339Nano, file.RetryAt); h.e.now().Before(retry) {
+		return false, nil
+	}
 	// Upgrade descriptors written before measured original sizes were tracked.
 	if _, ok := h.e.Transport.(transport.FileRefresher); ok && file.MessageID != "" && !file.SizeUnverified && file.ArchiveState != "saved" {
 		revision, err := h.Authorize(ctx, c)
@@ -94,7 +98,8 @@ func (h archiveFileHost) Repair(ctx context.Context, c transport.Conversation, m
 	if !legacy {
 		return false, nil
 	}
-	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	parent := ctx
+	ctx, cancel := context.WithTimeout(parent, 20*time.Second)
 	defer cancel()
 	revision, err := h.Authorize(ctx, c)
 	if err != nil {
@@ -102,8 +107,25 @@ func (h archiveFileHost) Repair(ctx context.Context, c transport.Conversation, m
 	}
 	refreshed, err := h.e.Transport.(transport.FileRefresher).RefreshFile(ctx, c.ID, message, at, file)
 	if err != nil {
-		return false, err
+		if parent.Err() != nil {
+			return false, err
+		}
+		// The read's own deadline also needs backoff. Use a fresh bounded
+		// verification context to persist it, while honoring caller cancellation.
+		persist, persistCancel := context.WithTimeout(parent, 20*time.Second)
+		defer persistCancel()
+		failed := file
+		failed.Failures++
+		failed.RetryAt = h.e.now().Add(time.Duration(1<<min(failed.Failures, 8)) * 5 * time.Second).UTC().Format(time.RFC3339Nano)
+		failed.ArchiveState = "failed"
+		failed.ArchiveError = "original_unavailable"
+		if persistErr := h.CommitFile(persist, c, revision, message, file, failed); persistErr != nil {
+			return false, persistErr
+		}
+		return false, errors.New("original_unavailable")
 	}
+	refreshed.RetryAt = ""
+	refreshed.Failures = 0
 	if err = h.CommitFile(ctx, c, revision, message, file, refreshed); err != nil {
 		return false, err
 	}

@@ -179,6 +179,28 @@ func TestTamperCancellationAndFailedWritesDoNotPublish(t *testing.T) {
 
 type failingWriter struct{}
 
+type repairCountingHost struct {
+	*fileHost
+	repairs int
+}
+
+func (h *repairCountingHost) Repair(context.Context, transport.Conversation, string, media.File) (bool, error) {
+	h.repairs++
+	return false, nil
+}
+func TestFileRetryDeadlinePrecedesRepair(t *testing.T) {
+	s, manager := setup(t)
+	file := media.File{Info: media.Info{ID: "retry", ArchiveState: "failed"}, RemoteID: "synthetic", RetryAt: time.Now().Add(time.Hour).Format(time.RFC3339Nano)}
+	seed(t, s, []media.File{file})
+	h := &repairCountingHost{fileHost: &fileHost{s: s}}
+	manager.Host = h
+	manager.Tick(context.Background())
+	manager.Tick(context.Background())
+	if h.repairs != 0 || h.authorizations != 0 {
+		t.Fatal("future retry performed phone work")
+	}
+}
+
 func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("synthetic disk exhausted") }
 
 type repeatedReader struct{ remaining int64 }
