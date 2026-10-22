@@ -162,6 +162,8 @@ func TestArchiveDiscoveryRecoversExpiredCursor(t *testing.T) {
 	if err != nil || len(cursor) != 0 {
 		t.Fatal("bad discovery cursor retained", err)
 	}
+	// A new worker retries the reset cursor; the running worker backs off failed discovery.
+	e.History = history.New(e.Store, archiveHost{e})
 	e.History.Tick(context.Background())
 	if _, err = e.Store.Archive("demo-chat"); err != nil {
 		t.Fatal("discovery did not recover", err)

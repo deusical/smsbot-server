@@ -12,6 +12,7 @@ import (
 type archiveFileHost struct{ e *Engine }
 
 func (h archiveFileHost) Authorize(ctx context.Context, c transport.Conversation) (int64, error) {
+	ctx = transport.WithPhonePurpose(ctx, "original")
 	verified, err := h.e.lookupConversation(ctx, c.ID)
 	if err != nil || verified.ParticipantID != c.ParticipantID || verified.Group {
 		return 0, errors.New("archive_access_changed")
@@ -32,6 +33,7 @@ func (h archiveFileHost) Open(ctx context.Context, file media.File) (io.ReadClos
 	return source.OpenFile(ctx, file)
 }
 func (h archiveFileHost) CommitFile(ctx context.Context, c transport.Conversation, revision int64, message string, expected, updated media.File) error {
+	ctx = transport.WithPhonePurpose(ctx, "original")
 	verified, err := h.e.lookupConversation(ctx, c.ID)
 	if err != nil || verified.ParticipantID != c.ParticipantID || verified.Group {
 		return errors.New("archive_access_changed")

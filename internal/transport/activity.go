@@ -126,12 +126,13 @@ func (g *Google) TypingConversations() []string {
 }
 
 func (g *Google) MarkRead(ctx context.Context, conv, expectedPeer string, through time.Time) error {
+	ctx = WithPhonePurpose(ctx, "read")
 	if !g.Ready() {
 		return ErrUnavailable
 	}
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	g.countPhone(phoneLookup)
+	g.countPhone(ctx, phoneLookup)
 	c, err := g.client.GetConversation(ctx, conv)
 	if err != nil || !eligible(c) || peer(c) != expectedPeer || c.GetIsGroupChat() {
 		return errors.New("ineligible_conversation")
@@ -139,7 +140,7 @@ func (g *Google) MarkRead(ctx context.Context, conv, expectedPeer string, throug
 	if !c.GetUnread() {
 		return nil
 	}
-	g.countPhone(phoneMessages)
+	g.countPhone(ctx, phoneMessages)
 	res, err := g.client.FetchMessages(ctx, conv, 1, nil)
 	if err != nil {
 		return errors.New("read_failed")
@@ -157,11 +158,11 @@ func (g *Google) MarkRead(ctx context.Context, conv, expectedPeer string, throug
 		return ErrNewerMessage
 	}
 	// The conversation may have changed identity while the messages were fetched.
-	g.countPhone(phoneLookup)
+	g.countPhone(ctx, phoneLookup)
 	if again, err := g.client.GetConversation(ctx, conv); err != nil || !eligible(again) || peer(again) != expectedPeer {
 		return errors.New("conversation_identity_changed")
 	}
-	g.countPhone(phoneMarkRead)
+	g.countPhone(ctx, phoneMarkRead)
 	if err := g.client.MarkRead(ctx, conv, latest.GetMessageID()); err != nil {
 		return errors.New("read_failed")
 	}

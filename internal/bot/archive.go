@@ -344,3 +344,9 @@ func (e *Engine) RequestArchiveRefresh(ctx context.Context, conv, from, to strin
 	}
 	return a, err
 }
+
+// Discovery continues page-by-page until a complete inbox pass is exhausted.
+func (h archiveHost) DiscoveryPending() bool {
+	cursor, err := h.e.Store.GetSecretSetting("archive_discovery", "archive-discovery")
+	return err == nil && len(cursor) > 0
+}

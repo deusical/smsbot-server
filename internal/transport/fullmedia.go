@@ -125,17 +125,18 @@ func readBackOriginal(ctx context.Context, schedule []time.Duration, fetch func(
 }
 
 func (g *Google) fullSizeFile(ctx context.Context, f media.File) (media.File, error) {
+	ctx = WithPhonePurpose(ctx, "original")
 	// The phone may already have uploaded the original, without emitting another
 	// push. Read back the exact part as well as observing the requested update.
 	return g.fullMedia.get(ctx, f, func(ctx context.Context, message, action string) error {
-		g.countPhone(phoneFullSize)
+		g.countPhone(ctx, phoneFullSize)
 		if _, err := g.client.GetFullSizeImage(ctx, message, action); err != nil {
 			return err
 		}
 		if f.ConversationID != "" && f.Timestamp > 0 {
 			cursor := &gmproto.Cursor{LastItemTimestamp: time.UnixMicro(f.Timestamp).Add(time.Millisecond).UnixMilli()}
 			go readBackOriginal(ctx, fullMediaReadBack, func(ctx context.Context) ([]*gmproto.Message, error) {
-				g.countPhone(phoneMessages)
+				g.countPhone(ctx, phoneMessages)
 				res, err := g.client.FetchMessages(ctx, f.ConversationID, fullMediaReadCount, cursor)
 				return res.GetMessages(), err
 			}, func(m *gmproto.Message) {
@@ -160,7 +161,7 @@ func (g *Google) RefreshFile(ctx context.Context, conv, id string, at time.Time,
 	}
 	cursor := &gmproto.Cursor{LastItemTimestamp: at.Add(time.Millisecond).UnixMilli()}
 	for page := 0; page < 4; page++ {
-		g.countPhone(phoneMessages)
+		g.countPhone(ctx, phoneMessages)
 		res, err := g.client.FetchMessages(ctx, conv, 50, cursor)
 		if err != nil {
 			return media.File{}, errors.New("original_unavailable")

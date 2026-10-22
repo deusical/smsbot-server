@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"context"
 	"sync"
 	"time"
 )
@@ -65,11 +66,14 @@ func (p *phoneRequests) add(kind string, now time.Time) {
 }
 
 func (p *phoneRequests) snapshot(now time.Time) map[string]PhoneRequestCount {
+	return p.snapshotKinds(now, phoneKinds)
+}
+func (p *phoneRequests) snapshotKinds(now time.Time, kinds []string) map[string]PhoneRequestCount {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	out := make(map[string]PhoneRequestCount, len(phoneKinds))
+	out := make(map[string]PhoneRequestCount, len(kinds))
 	current := now.Unix() / 60
-	for _, kind := range phoneKinds {
+	for _, kind := range kinds {
 		var count PhoneRequestCount
 		if c := p.kinds[kind]; c != nil {
 			count.Total = c.total
@@ -84,8 +88,40 @@ func (p *phoneRequests) snapshot(now time.Time) map[string]PhoneRequestCount {
 	return out
 }
 
-func (g *Google) countPhone(kind string) { g.phoneRequests.add(kind, time.Now()) }
+func (g *Google) countPhone(ctx context.Context, kind string) {
+	g.phoneRequests.add(kind, time.Now())
+	g.phonePurposes.add(phonePurpose(ctx), time.Now())
+}
 
 func (g *Google) PhoneRequests() map[string]PhoneRequestCount {
 	return g.phoneRequests.snapshot(time.Now())
+}
+
+type phonePurposeKey struct{}
+
+var phonePurposes = []string{"other", "discovery", "capture", "recent", "backfill", "view", "gap", "original", "readiness", "send", "reaction", "read"}
+
+func WithPhonePurpose(ctx context.Context, purpose string) context.Context {
+	for _, allowed := range phonePurposes {
+		if purpose == allowed {
+			return context.WithValue(ctx, phonePurposeKey{}, purpose)
+		}
+	}
+	return context.WithValue(ctx, phonePurposeKey{}, "other")
+}
+func phonePurpose(ctx context.Context) string {
+	if p, ok := ctx.Value(phonePurposeKey{}).(string); ok {
+		return p
+	}
+	return "other"
+}
+
+// Purpose counts are adapter RPC attempts, not radio wakes or libgm's internal
+// control RPCs. Existing operation counters remain backward compatible.
+type PhonePurposeReporter interface {
+	PhoneRequestPurposes() map[string]PhoneRequestCount
+}
+
+func (g *Google) PhoneRequestPurposes() map[string]PhoneRequestCount {
+	return g.phonePurposes.snapshotKinds(time.Now(), phonePurposes)
 }

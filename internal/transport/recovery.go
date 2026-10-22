@@ -152,6 +152,7 @@ func recoveryDelay(attempt int) time.Duration {
 	return min(300*time.Second, base+time.Duration(rand.Int64N(int64(base/4)+1)))
 }
 func (g *Google) startRecovery(ctx context.Context, now time.Time, results chan<- recoveryResult) {
+	ctx = WithPhonePurpose(ctx, "readiness")
 	if g.client == nil && g.recoveryProbe == nil {
 		return
 	}
@@ -187,7 +188,7 @@ func (g *Google) startRecovery(ctx context.Context, now time.Time, results chan<
 			}
 			if err == nil {
 				var responding bool
-				g.countPhone(phoneProbe)
+				g.countPhone(ctx, phoneProbe)
 				response, probeErr := g.client.IsBugleDefault(call)
 				responding = probeErr == nil && response.GetSuccess()
 				if probeErr != nil {

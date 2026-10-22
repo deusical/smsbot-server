@@ -367,6 +367,7 @@ func (e *Engine) check(ctx context.Context, j store.Job, p store.Plan) (Configur
 	return cfg, "", nil
 }
 func (e *Engine) Dispatch(ctx context.Context) error {
+	ctx = transport.WithPhonePurpose(ctx, "send")
 	e.dispatchMu.Lock()
 	defer e.dispatchMu.Unlock()
 	e.mu.Lock()

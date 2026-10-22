@@ -20,6 +20,12 @@ func TestVerifiedRecoverySingleFlightAndFreshness(t *testing.T) {
 	release := make(chan struct{})
 	var calls atomic.Int32
 	g.recoveryProbe = func(ctx context.Context) error {
+		if phonePurpose(ctx) != "readiness" {
+			t.Error("recovery probe purpose missing")
+		}
+		if _, bounded := ctx.Deadline(); !bounded {
+			t.Error("recovery probe deadline missing")
+		}
 		calls.Add(1)
 		select {
 		case <-release:

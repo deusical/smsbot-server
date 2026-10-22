@@ -1187,7 +1187,7 @@ components:
       properties:
         phone_requests:
           type: object
-          description: Owner-only in-memory counts of requests sent to the paired phone, by kind, since the service started and in the last hour. No identifiers or content. Absent for transports that do not report it.
+          description: Owner-only in-memory adapter RPC attempt counts by kind, since the service started and in the last hour. Excludes internal libgm control requests; see phone_relay_requests. No identifiers or content. Absent for transports that do not report it.
           additionalProperties:
             type: object
             required:
@@ -1200,6 +1200,28 @@ components:
               last_hour:
                 type: integer
                 minimum: 0
+        phone_request_purposes:
+          type: object
+          description: Adapter RPC attempts grouped by a bounded purpose label. Values have the same total/last_hour fields as phone_requests. No identifiers or content.
+          additionalProperties:
+            type: object
+            properties:
+              total: {type: integer, minimum: 0}
+              last_hour: {type: integer, minimum: 0}
+        phone_request_coverage:
+          type: string
+          enum: [adapter_attempts_only]
+          description: Coverage of phone_requests and phone_request_purposes; neither is a physical wake counter.
+        phone_relay_requests:
+          type: object
+          description: Outbound SendMessage HTTP attempts including libgm control RPCs and HTTP retries, grouped by action. Accepted means Google returned HTTP 2xx, not execution on the phone. In-flight calls appear when the HTTP attempt finishes. Relay acknowledgments and media uploads/downloads are excluded. No payloads or identifiers are retained.
+          additionalProperties:
+            type: object
+            properties:
+              attempts: {type: integer, minimum: 0}
+              accepted: {type: integer, minimum: 0}
+              failed: {type: integer, minimum: 0}
+              last_hour: {type: integer, minimum: 0}
         conversations_revision:
           type: string
           description: Owner-only counter that changes when the phone reports activity or a message is saved; the dashboard refetches its conversation list only when it changes.

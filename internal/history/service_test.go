@@ -133,7 +133,6 @@ func TestIndependentRecentAndBackfillRetries(t *testing.T) {
 	if err = s.SaveArchive(a, 0); err != nil {
 		t.Fatal(err)
 	}
-	worker.recent["chat"] = time.Time{}
 	h.fail[""] = false
 	worker.Tick(context.Background())
 	a, _ = s.Archive("chat")

@@ -176,6 +176,7 @@ func (e *Engine) Observe(ctx context.Context, m transport.Incoming) error {
 	return e.observe(ctx, m, 0)
 }
 func (e *Engine) observe(ctx context.Context, m transport.Incoming, epoch uint64) error {
+	ctx = transport.WithPhonePurpose(ctx, "capture")
 	if m.Outgoing && m.Interaction != nil {
 		m.Historical = true
 	}

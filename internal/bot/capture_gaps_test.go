@@ -366,3 +366,28 @@ func TestSameRangeOwnerRequestPromotesAutomaticJob(t *testing.T) {
 		t.Fatal("repeat owner request restarted the active job")
 	}
 }
+
+func TestGapScheduleRespectsRetryAndUnknownScope(t *testing.T) {
+	e, _ := setup(t)
+	enableInbox(t, e)
+	seedGap(t, e, time.Now())
+	gaps, _ := e.Store.CaptureGaps()
+	g := gaps[0]
+	due := time.Now().Add(time.Minute)
+	g.State = "retrying"
+	g.RetryAt = due.Format(time.RFC3339Nano)
+	if err := e.Store.SaveCaptureGap(g); err != nil {
+		t.Fatal(err)
+	}
+	at, pending := (archiveHost{e}).NextGapAttempt()
+	if !pending || !at.Equal(due) {
+		t.Fatal("lost retry deadline")
+	}
+	g.State = "scope_unknown"
+	if err := e.Store.SaveCaptureGap(g); err != nil {
+		t.Fatal(err)
+	}
+	if _, pending := (archiveHost{e}).NextGapAttempt(); pending {
+		t.Fatal("unknown scope keeps fast worker alive")
+	}
+}

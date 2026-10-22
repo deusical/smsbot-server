@@ -104,10 +104,11 @@ func (g *Google) SendReply(ctx context.Context, conv, txn, text, target string, 
 }
 
 func (g *Google) React(ctx context.Context, conv, expectedPeer, target, emoji, operation string) error {
+	ctx = WithPhonePurpose(ctx, "reaction")
 	if !g.Ready() || target == "" {
 		return ErrNotSubmitted
 	}
-	g.countPhone(phoneLookup)
+	g.countPhone(ctx, phoneLookup)
 	c, err := g.client.GetConversation(ctx, conv)
 	if err != nil || c.GetConversationID() != conv || !eligible(c) || peer(c) != expectedPeer || !rcsProtocol(c.GetType().String()) {
 		return ErrNotSubmitted
@@ -136,7 +137,7 @@ func (g *Google) React(ctx context.Context, conv, expectedPeer, target, emoji, o
 	default:
 		return ErrNotSubmitted
 	}
-	g.countPhone(phoneReact)
+	g.countPhone(ctx, phoneReact)
 	res, err := g.client.SendReaction(ctx, &gmproto.SendReactionRequest{MessageID: target, ReactionData: gmproto.MakeReactionData(emoji), Action: action, SIMPayload: sim})
 	if err != nil {
 		return ErrUnknown

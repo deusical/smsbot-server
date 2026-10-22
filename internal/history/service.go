@@ -4,9 +4,11 @@ package history
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"smsbot-server/internal/store"
 	"smsbot-server/internal/transport"
+	"sort"
 	"sync"
 	"time"
 )
@@ -27,12 +29,16 @@ type Host interface {
 	Commit(context.Context, store.Archive, Policy, transport.HistoryPage, bool) error
 }
 type Service struct {
-	backgroundIndex int
+	backgroundAfter string
+	fallbackAfter   string
+	savedSchedule   string
+	nextDiscovery   time.Time
+	nextFallback    time.Time
+	now             func() time.Time
 	fetchTimeout    time.Duration
 	Store           *store.Store
 	Host            Host
 	tickMu          sync.Mutex
-	recent          map[string]time.Time
 	wake            chan struct{}
 }
 
@@ -41,14 +47,29 @@ const (
 	idleInterval   = 15 * time.Minute
 )
 
-func New(s *store.Store, h Host) *Service {
-	return &Service{
+func New(s *store.Store, h Host) *Service { return newService(s, h, time.Now) }
+func newService(s *store.Store, h Host, now func() time.Time) *Service {
+	worker := &Service{
 		Store:        s,
 		Host:         h,
-		recent:       map[string]time.Time{},
 		fetchTimeout: 20 * time.Second,
+		now:          now,
 		wake:         make(chan struct{}, 1),
 	}
+	var saved struct {
+		After       string
+		RecentAfter string
+		Fallback    time.Time
+	}
+	if b, err := s.GetSecretSetting("history_schedule", "history-schedule"); err == nil && json.Unmarshal(b, &saved) == nil {
+		worker.savedSchedule = string(b)
+		worker.backgroundAfter = saved.After
+		worker.fallbackAfter = saved.RecentAfter
+		if !saved.Fallback.After(now().Add(idleInterval)) {
+			worker.nextFallback = saved.Fallback
+		}
+	}
+	return worker
 }
 
 func (s *Service) Wake() {
@@ -61,68 +82,57 @@ func (s *Service) Wake() {
 	}
 }
 
+// Each lane owns its own deadline. An active import is not permission to poll
+// every completed conversation on each fast turn.
 func (s *Service) nextInterval() time.Duration {
-	if checker, ok := s.Host.(interface{ HasPendingGap() bool }); ok && checker.HasPendingGap() {
-		return activeInterval
+	now := s.now()
+	next := now.Add(idleInterval)
+	consider := func(at time.Time) {
+		if at.IsZero() || at.Before(now) {
+			at = now
+		}
+		if at.Before(next) {
+			next = at
+		}
+	}
+	if !s.nextDiscovery.IsZero() {
+		consider(s.nextDiscovery)
+	}
+	if !s.nextFallback.IsZero() {
+		consider(s.nextFallback)
+	}
+	if checker, ok := s.Host.(interface{ NextGapAttempt() (time.Time, bool) }); ok {
+		if at, pending := checker.NextGapAttempt(); pending {
+			consider(at)
+		}
+	} else if checker, ok := s.Host.(interface{ HasPendingGap() bool }); ok && checker.HasPendingGap() {
+		consider(now)
 	}
 	archives, err := s.Store.Archives()
 	if err != nil {
 		return idleInterval
 	}
-	now := time.Now()
-	var earliestRetry time.Time
 	for _, a := range archives {
-		if a.RefreshState == "queued" || a.RefreshState == "running" {
-			return activeInterval
+		if _, err := s.Host.Policy(a.Conversation); err != nil {
+			continue
 		}
-		if a.RefreshState == "retrying" {
-			if retryReady(a.RefreshRetryAt) {
-				return activeInterval
-			}
-			if at, err := time.Parse(time.RFC3339Nano, a.RefreshRetryAt); err == nil && at.After(now) {
-				if earliestRetry.IsZero() || at.Before(earliestRetry) {
-					earliestRetry = at
-				}
-			}
+		if activeState(a.RefreshState) {
+			consider(parseTime(a.RefreshRetryAt))
 		}
-		if a.State == "queued" || a.State == "running" {
-			return activeInterval
+		if activeState(a.State) {
+			consider(parseTime(a.RetryAt))
 		}
-		if a.State == "retrying" {
-			if retryReady(a.RetryAt) {
-				return activeInterval
-			}
-			if at, err := time.Parse(time.RFC3339Nano, a.RetryAt); err == nil && at.After(now) {
-				if earliestRetry.IsZero() || at.Before(earliestRetry) {
-					earliestRetry = at
-				}
-			}
-		}
-		if a.RecentStarted != "" {
-			return activeInterval
-		}
-		if a.RecentRetryAt != "" {
-			if retryReady(a.RecentRetryAt) {
-				return activeInterval
-			}
-			if at, err := time.Parse(time.RFC3339Nano, a.RecentRetryAt); err == nil && at.After(now) {
-				if earliestRetry.IsZero() || at.Before(earliestRetry) {
-					earliestRetry = at
-				}
-			}
+		if a.RecentStarted != "" || a.RecentRetryAt != "" {
+			consider(parseTime(a.RecentRetryAt))
 		}
 	}
-	if !earliestRetry.IsZero() {
-		delay := earliestRetry.Sub(now)
-		if delay < activeInterval {
-			return activeInterval
-		}
-		if delay < idleInterval {
-			return delay
-		}
-	}
-	return idleInterval
+	return max(activeInterval, next.Sub(now))
 }
+func activeState(state string) bool {
+	return state == "queued" || state == "running" || state == "retrying"
+}
+func parseTime(value string) time.Time   { at, _ := time.Parse(time.RFC3339Nano, value); return at }
+func (s *Service) due(value string) bool { return !s.now().Before(parseTime(value)) }
 
 func (s *Service) Run(ctx context.Context) {
 	timer := time.NewTimer(0)
@@ -149,120 +159,156 @@ func (s *Service) Run(ctx context.Context) {
 func (s *Service) Tick(ctx context.Context) {
 	s.tickMu.Lock()
 	defer s.tickMu.Unlock()
+	defer func() {
+		b, err := json.Marshal(struct {
+			After       string
+			RecentAfter string
+			Fallback    time.Time
+		}{s.backgroundAfter, s.fallbackAfter, s.nextFallback})
+		if err == nil && string(b) != s.savedSchedule {
+			if s.Store.SetSecretSetting("history_schedule", "history-schedule", b) == nil {
+				s.savedSchedule = string(b)
+			}
+		}
+	}()
 	if ctx.Err() != nil {
 		return
 	}
 	_ = s.Host.Prune(ctx)
-	// Active views do not wait for a discovery pass or a large inbox sweep.
-	archives, _ := s.Store.Archives()
-	var focus *store.Archive
-	var focusedAt time.Time
-	for i := range archives {
-		a := &archives[i]
-		active := a.RefreshState == "queued" || a.RefreshState == "running" || a.RefreshState == "retrying"
-		at, _ := time.Parse(time.RFC3339Nano, a.FocusAt)
-		if active && retryReady(a.RefreshRetryAt) && (focus == nil || at.After(focusedAt)) {
-			focus = a
-			focusedAt = at
-		}
-	}
-	if focus != nil && !focus.Conversation.Group && focus.Conversation.Writable && focus.Conversation.ParticipantID != "" {
-		if p, err := s.Host.Policy(focus.Conversation); err == nil {
-			// A failed view refresh must not starve explicit imports or repairs.
-			_ = s.refreshStep(ctx, *focus, p)
-		}
-	}
-	// Explicit imports get one bounded page before routine discovery. Rotate by
-	// last attempt so one large request cannot monopolize other owner requests.
-	archives, _ = s.Store.Archives()
-	var manual *store.Archive
-	var manualPolicy Policy
-	for i := range archives {
-		a := &archives[i]
-		explicit := a.RequestedAt != "" || a.RequestSource == "owner" || (a.RequestSource == "" && a.Since != "")
-		if !explicit || !retryReady(a.RetryAt) || (a.State != "queued" && a.State != "running" && a.State != "retrying") {
-			continue
-		}
-		if a.Conversation.Group || !a.Conversation.Writable || a.Conversation.ParticipantID == "" {
-			continue
-		}
-		candidatePolicy, err := s.Host.Policy(a.Conversation)
-		if err != nil {
-			continue
-		}
-		if manual == nil || a.LastAttemptAt < manual.LastAttemptAt || (a.LastAttemptAt == manual.LastAttemptAt && a.RequestedAt < manual.RequestedAt) {
-			manual = a
-			manual.RequestSource = "owner"
-			manualPolicy = candidatePolicy
-		}
-	}
-	if manual != nil {
-		_ = s.step(ctx, *manual, manualPolicy, manual.Cursor, false)
-	}
-	if repair, ok := s.Host.(interface{ RepairCaptureGap(context.Context) error }); ok {
-		_ = repair.RepairCaptureGap(ctx)
-	}
-	call, cancel := context.WithTimeout(ctx, 20*time.Second)
-	list, err := s.Host.Discover(call)
-	cancel()
+	archives, err := s.Store.Archives()
 	if err != nil {
 		return
 	}
-	// Visit one background conversation per turn; recent and deep lanes both
-	// advance without making an active view wait behind the whole inbox.
-	for turn := 0; turn < len(list); turn++ {
-		c := list[s.backgroundIndex%len(list)]
-		s.backgroundIndex++
-		if ctx.Err() != nil {
-			return
-		}
-		if c.Group || !c.Writable || c.ParticipantID == "" {
+	// Owner views and explicit imports keep independent, bounded opportunities.
+	var focus, manual *store.Archive
+	for i := range archives {
+		a := &archives[i]
+		if !eligibleArchive(*a) {
 			continue
 		}
-		p, err := s.Host.Policy(c)
-		if err != nil {
+		if _, err := s.Host.Policy(a.Conversation); err != nil {
 			continue
 		}
-		a, err := s.Store.Archive(c.ID)
-		if err != nil {
-			if !errors.Is(err, sql.ErrNoRows) {
-				continue
-			}
-			a = store.Archive{Conversation: c, State: "queued", Generation: 1}
-			if err = s.Host.Commit(ctx, a, p, transport.HistoryPage{}, true); err != nil {
-				continue
-			}
+		if activeState(a.RefreshState) && s.due(a.RefreshRetryAt) && (focus == nil || a.FocusAt > focus.FocusAt) {
+			focus = a
 		}
-		if a.Conversation.ParticipantID != c.ParticipantID {
-			continue
+		explicit := isExplicitArchive(*a)
+		if explicit && activeState(a.State) && s.due(a.RetryAt) && (manual == nil || a.LastAttemptAt < manual.LastAttemptAt || (a.LastAttemptAt == manual.LastAttemptAt && a.Conversation.ID < manual.Conversation.ID)) {
+			manual = a
 		}
-		// Recent reconciliation always gets a turn, even during a deep backfill.
-		if retryReady(a.RecentRetryAt) && (a.RecentStarted != "" || time.Since(s.recent[c.ID]) > 30*time.Second) {
-			s.recent[c.ID] = time.Now()
-			if err = s.step(ctx, a, p, a.RecentCursor, true); err != nil {
-				// Give new focus work a turn before another transport attempt.
-				return
+	}
+	if focus != nil {
+		if p, err := s.Host.Policy(focus.Conversation); err == nil {
+			_ = s.refreshStep(ctx, *focus, p)
+		}
+	}
+	if manual != nil {
+		// Reload: a view may have advanced this archive's independent checkpoint.
+		if a, err := s.Store.Archive(manual.Conversation.ID); err == nil {
+			if p, err := s.Host.Policy(a.Conversation); err == nil {
+				a.RequestSource = "owner"
+				_ = s.step(ctx, a, p, a.Cursor, false)
 			}
 		}
-		a, err = s.Store.Archive(c.ID)
+	}
+	if repair, ok := s.Host.(interface{ RepairCaptureGap(context.Context) error }); ok {
+		_ = repair.RepairCaptureGap(transport.WithPhonePurpose(ctx, "gap"))
+	}
+	// Saved jobs must advance even when discovery is unavailable. Discovery has
+	// its own cadence; a new page may seed jobs, never reorder the work rotation.
+	if !s.now().Before(s.nextDiscovery) {
+		s.nextDiscovery = s.now().Add(idleInterval)
+		call, cancel := context.WithTimeout(transport.WithPhonePurpose(ctx, "discovery"), 20*time.Second)
+		list, err := s.Host.Discover(call)
+		cancel()
 		if err != nil {
-			continue
-		}
-		if a.State == "available_pages_exhausted" || a.State == "cutoff_reached" {
-			if a.DeepCheckedAt == "" {
-				// Completed archives without a timestamp record completion time.
-				a.DeepCheckedAt = time.Now().UTC().Format(time.RFC3339Nano)
-				if s.Host.Commit(ctx, a, p, transport.HistoryPage{}, true) != nil {
-					return
+			s.nextDiscovery = s.now().Add(30 * time.Second)
+		} else {
+			if paged, ok := s.Host.(interface{ DiscoveryPending() bool }); ok && paged.DiscoveryPending() {
+				s.nextDiscovery = s.now().Add(activeInterval)
+			}
+			for _, c := range list {
+				a := store.Archive{Conversation: c, State: "queued", Generation: 1}
+				if !eligibleArchive(a) {
+					continue
+				}
+				p, err := s.Host.Policy(c)
+				if err != nil {
+					continue
+				}
+				if _, err := s.Store.Archive(c.ID); errors.Is(err, sql.ErrNoRows) {
+					_ = s.Host.Commit(ctx, a, p, transport.HistoryPage{}, true)
 				}
 			}
 		}
-		if (manual == nil || manual.Conversation.ID != c.ID) && retryReady(a.RetryAt) && (a.State == "queued" || a.State == "running" || a.State == "retrying") {
-			_ = s.step(ctx, a, p, a.Cursor, false)
-		}
+	}
+	archives, err = s.Store.Archives()
+	if err != nil {
 		return
 	}
+	sort.Slice(archives, func(i, j int) bool { return archives[i].Conversation.ID < archives[j].Conversation.ID })
+	// Routine reconciliation and deep imports have separate stable rotations:
+	// a small unfinished backlog must not trap fallback coverage in those IDs.
+	if manual != nil && s.nextFallback.IsZero() {
+		s.nextFallback = s.now().Add(idleInterval)
+	}
+	fallback := !s.now().Before(s.nextFallback)
+	start := sort.Search(len(archives), func(i int) bool { return archives[i].Conversation.ID > s.fallbackAfter })
+	for n := 0; n < len(archives); n++ {
+		a := archives[(start+n)%len(archives)]
+		if !eligibleArchive(a) || !s.due(a.RecentRetryAt) {
+			continue
+		}
+		if a.RecentStarted == "" && a.RecentRetryAt == "" && !fallback {
+			continue
+		}
+		p, err := s.Host.Policy(a.Conversation)
+		if err != nil {
+			continue
+		}
+		s.fallbackAfter = a.Conversation.ID
+		if fallback {
+			s.nextFallback = s.now().Add(idleInterval)
+		}
+		if err := s.step(ctx, a, p, a.RecentCursor, true); err != nil {
+			return
+		}
+		break
+	}
+	if fallback {
+		s.nextFallback = s.now().Add(idleInterval)
+	}
+	// Reload after a recent scan so publishing a deep page cannot erase its state.
+	archives, err = s.Store.Archives()
+	if err != nil {
+		return
+	}
+	sort.Slice(archives, func(i, j int) bool { return archives[i].Conversation.ID < archives[j].Conversation.ID })
+	start = sort.Search(len(archives), func(i int) bool { return archives[i].Conversation.ID > s.backgroundAfter })
+	for n := 0; n < len(archives); n++ {
+		a := archives[(start+n)%len(archives)]
+		explicit := isExplicitArchive(a)
+		if explicit || !eligibleArchive(a) || !activeState(a.State) || !s.due(a.RetryAt) {
+			continue
+		}
+		p, err := s.Host.Policy(a.Conversation)
+		if err != nil {
+			continue
+		}
+		s.backgroundAfter = a.Conversation.ID
+		_ = s.step(ctx, a, p, a.Cursor, false)
+		break
+	}
+
 }
+func isExplicitArchive(a store.Archive) bool {
+	return a.RequestedAt != "" || a.RequestSource == "owner" || (a.RequestSource == "" && a.Since != "")
+}
+
+func eligibleArchive(a store.Archive) bool {
+	return !a.Conversation.Group && a.Conversation.Writable && a.Conversation.ParticipantID != ""
+}
+
 func (s *Service) step(ctx context.Context, a store.Archive, p Policy, cursor string, recent bool) error {
 	call, cancel := context.WithTimeout(ctx, s.fetchTimeout)
 	defer cancel()
@@ -277,21 +323,25 @@ func (s *Service) step(ctx context.Context, a store.Archive, p Policy, cursor st
 		}
 		p.Deep = true
 		a.State = "running"
-		a.LastAttemptAt = time.Now().UTC().Format(time.RFC3339Nano)
+		a.LastAttemptAt = s.now().UTC().Format(time.RFC3339Nano)
 		if err := s.Host.Commit(ctx, a, p, transport.HistoryPage{}, true); err != nil {
 			return err
 		}
 	}
-	page, err := s.Host.Fetch(call, a.Conversation, cursor)
+	purpose := "backfill"
+	if recent {
+		purpose = "recent"
+	}
+	page, err := s.Host.Fetch(transport.WithPhonePurpose(call, purpose), a.Conversation, cursor)
 	if err != nil {
 		if recent {
 			a.RecentError = "history_fetch_failed"
 			a.RecentFailures++
-			a.RecentRetryAt = retryAfter(a.RecentFailures)
+			a.RecentRetryAt = s.retryAfter(a.RecentFailures)
 		} else {
 			a.Error = "history_fetch_failed"
 			a.Failures++
-			a.RetryAt = retryAfter(a.Failures)
+			a.RetryAt = s.retryAfter(a.Failures)
 			a.State = "retrying"
 		}
 		_ = s.Host.Commit(ctx, a, p, transport.HistoryPage{}, true)
@@ -299,10 +349,10 @@ func (s *Service) step(ctx context.Context, a store.Archive, p Policy, cursor st
 	}
 	if recent {
 		if a.RecentStarted == "" {
-			a.RecentStarted = time.Now().UTC().Format(time.RFC3339Nano)
+			a.RecentStarted = s.now().UTC().Format(time.RFC3339Nano)
 			since, err := time.Parse(time.RFC3339Nano, a.LastSync)
 			if err != nil {
-				since = time.Now()
+				since = s.now()
 			}
 			a.RecentSince = since.Add(-30 * time.Minute).UTC().Format(time.RFC3339Nano)
 		}
@@ -322,7 +372,7 @@ func (s *Service) step(ctx context.Context, a store.Archive, p Policy, cursor st
 	}
 	if !recent {
 		a.Pages++
-		a.LastProgressAt = time.Now().UTC().Format(time.RFC3339Nano)
+		a.LastProgressAt = s.now().UTC().Format(time.RFC3339Nano)
 		for _, m := range page.Messages {
 			if m.At.IsZero() {
 				continue
@@ -347,7 +397,7 @@ func (s *Service) step(ctx context.Context, a store.Archive, p Policy, cursor st
 		}
 	}
 	if !recent && (a.State == "available_pages_exhausted" || a.State == "cutoff_reached") {
-		a.DeepCheckedAt = time.Now().UTC().Format(time.RFC3339Nano)
+		a.DeepCheckedAt = s.now().UTC().Format(time.RFC3339Nano)
 	}
 	if recent {
 		a.RecentError, a.RecentRetryAt, a.RecentFailures = "", "", 0
@@ -359,13 +409,9 @@ func (s *Service) step(ctx context.Context, a store.Archive, p Policy, cursor st
 	return s.Host.Commit(persist, a, p, page, false)
 }
 
-func retryReady(value string) bool {
-	retry, _ := time.Parse(time.RFC3339Nano, value)
-	return !time.Now().Before(retry)
-}
-func retryAfter(failures int) string {
+func (s *Service) retryAfter(failures int) string {
 	delay := time.Duration(1<<min(failures, 6)) * 5 * time.Second
-	return time.Now().Add(delay).UTC().Format(time.RFC3339Nano)
+	return s.now().Add(delay).UTC().Format(time.RFC3339Nano)
 }
 
 func (s *Service) refreshStep(ctx context.Context, a store.Archive, p Policy) error {
@@ -376,12 +422,12 @@ func (s *Service) refreshStep(ctx context.Context, a store.Archive, p Policy) er
 		return err
 	}
 	p.Snapshot = &snapshot
-	page, err := s.Host.Fetch(call, a.Conversation, a.RefreshCursor)
+	page, err := s.Host.Fetch(transport.WithPhonePurpose(call, "view"), a.Conversation, a.RefreshCursor)
 	if err != nil {
 		a.RefreshState = "retrying"
 		a.RefreshError = "history_fetch_failed"
 		a.RefreshFailures++
-		a.RefreshRetryAt = retryAfter(a.RefreshFailures)
+		a.RefreshRetryAt = s.retryAfter(a.RefreshFailures)
 		_ = s.Host.Commit(ctx, a, p, transport.HistoryPage{}, true)
 		return errors.New("history_fetch_failed")
 	}
@@ -404,7 +450,7 @@ func (s *Service) refreshStep(ctx context.Context, a store.Archive, p Policy) er
 	if done {
 		a.RefreshState = "checked_available"
 		a.RefreshCursor = ""
-		a.RefreshCheckedAt = time.Now().UTC().Format(time.RFC3339Nano)
+		a.RefreshCheckedAt = s.now().UTC().Format(time.RFC3339Nano)
 	}
 	persist, stop := context.WithTimeout(ctx, 5*time.Second)
 	defer stop()

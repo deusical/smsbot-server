@@ -232,12 +232,18 @@ Unknown scope is explicitly unverified and cannot be automatically declared repa
 
 ## Phone wake budget
 
-Every request to the paired phone wakes its radio and CPU, so phone reads are
-driven by activity and owner attention rather than timers. The history worker
-runs every 3 seconds only while it has work (queued or running imports and
-refreshes, ready retries, unfinished recent checks or pending capture gaps); when
-idle it sleeps up to 15 minutes, or until the next scheduled retry. Owner
-requests, capture gaps and enabling collection wake it at once.
+Phone RPCs can activate Messages, but request counts are not physical wake counts.
+History lanes have independent deadlines. A queued import advances from its saved
+checkpoint even if discovery fails; it does not accelerate unrelated recent checks.
+Automatic imports rotate by stable conversation ID, independent of discovery-page
+ordering. Discovery continues pages at the active cadence until the inbox pass ends,
+then waits 15 minutes. Routine fallback reconciliation retains the original idle
+cadence of one conversation per 15-minute turn, with stable rotation; this is not a
+promise to recheck every conversation every 15 minutes. Push capture and viewed-range
+refreshes remain immediate. Unfinished recent scans continue at the active cadence;
+future retry deadlines sleep until eligible. The fallback/rotation hint persists
+in encrypted settings; the durable LastSync still covers the disconnected interval.
+Exact before/after page identity checks, consent and generation checks remain live.
 
 The conversation list is read from the phone when the phone reports activity,
 after reconnection or queue overflow (which clear cached identities), and once
@@ -253,7 +259,11 @@ at once (the phone may already have uploaded it without another push), then at 4
 and 12 seconds, within the 20-second request deadline; the push normally finishes
 the request first. `GET /api/v1/state` reports in-memory counts of phone requests
 by kind, in total and for the last hour, with no identifiers or content. They
-reset on restart.
+reset on restart. `phone_request_purposes` attributes adapter attempts to bounded
+work categories. `phone_relay_requests` also counts libgm control RPCs and HTTP
+retries by action, with accepted/failed HTTP outcomes. HTTP acceptance does not
+mean phone execution or delivery; relay acknowledgments and media transfers are
+excluded. No wire payloads or identifiers are retained.
 
 Archive operations live in the dedicated owner Archive page. It polls the complete
 archive job list independently of paginated conversation discovery and shows scope,

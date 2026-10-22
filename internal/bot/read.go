@@ -57,6 +57,7 @@ func (s InboxSettings) AllowsID(conv string) bool {
 // an exact participant match, runs outside the engine lock, and never sends a
 // message, changes Live/Pause or runs a command.
 func (e *Engine) MarkConversationRead(ctx context.Context, conv string, through time.Time) error {
+	ctx = transport.WithPhonePurpose(ctx, "read")
 	marker, ok := e.Transport.(transport.ReadMarker)
 	if !ok {
 		return errors.New("read_unavailable")

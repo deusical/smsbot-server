@@ -158,28 +158,40 @@ func (e *Engine) CaptureGapStatus() ([]store.CaptureGap, bool) {
 	return gaps, unknown
 }
 
-func (h archiveHost) HasPendingGap() bool {
+func (h archiveHost) HasPendingGap() bool { _, pending := h.NextGapAttempt(); return pending }
+
+// NextGapAttempt exposes retry eligibility, not merely a visible warning.
+func (h archiveHost) NextGapAttempt() (time.Time, bool) {
 	e := h.e
 	e.gapMu.Lock()
-	hasMemoryGaps := len(e.pendingGaps) > 0
+	pending := len(e.pendingGaps) > 0 || len(e.flushingGaps) > 0
 	e.gapMu.Unlock()
-	if hasMemoryGaps {
-		return true
+	if pending {
+		return time.Time{}, true
 	}
 	e.mu.Lock()
-	settings, settingsErr := e.InboxSettings()
-	gaps, err := e.Store.CaptureGaps()
-	e.mu.Unlock()
-	if settingsErr != nil || !settings.Enabled || err != nil {
-		return false
+	defer e.mu.Unlock()
+	settings, err := e.InboxSettings()
+	if err != nil || !settings.Enabled {
+		return time.Time{}, false
 	}
-	for i := range gaps {
-		g := &gaps[i]
-		if settings.AllowsID(g.Conversation) && g.Conversation != "" && g.State != "checked_available" && g.State != "scope_unknown" {
-			return true
+	gaps, err := e.Store.CaptureGaps()
+	if err != nil {
+		return time.Time{}, false
+	}
+	var next time.Time
+	found := false
+	for _, g := range gaps {
+		if !settings.AllowsID(g.Conversation) || g.Conversation == "" || g.State == "checked_available" || g.State == "scope_unknown" {
+			continue
+		}
+		at, _ := time.Parse(time.RFC3339Nano, g.RetryAt)
+		if !found || at.Before(next) {
+			next = at
+			found = true
 		}
 	}
-	return false
+	return next, found
 }
 
 func (h archiveHost) RepairCaptureGap(ctx context.Context) error {
@@ -215,7 +227,7 @@ func (h archiveHost) RepairCaptureGap(ctx context.Context) error {
 		if !allowed {
 			continue
 		}
-		if g.Conversation == "" || g.State == "checked_available" || !store.GapRetryReady(*g) {
+		if g.Conversation == "" || g.State == "checked_available" || g.State == "scope_unknown" || !store.GapRetryReady(*g) {
 			continue
 		}
 		if selected == nil || g.RetryAt < selected.RetryAt || (g.RetryAt == selected.RetryAt && g.Since < selected.Since) {
