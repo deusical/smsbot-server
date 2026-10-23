@@ -281,9 +281,9 @@ participant checks, command freshness and Live/Pause semantics are unchanged.
 
 Offline checks run once per pull request commit and on main pushes. Superseded
 pull request runs are cancelled. A shared fixture build feeds backend checks and
-three browser shards in parallel, split by measured spec duration; each browser
-runner keeps one worker and its own fixture database. The required `service` check
-passes only when the build, backend checks and every browser shard succeed. Race tests, vet, Go vulnerability scanning,
+one browser job in parallel; it keeps one worker and its own fixture database. The
+build, backend and browser jobs must all succeed before merging; there is no
+separate aggregate job. Race tests, vet, Go vulnerability scanning,
 production dependency auditing and the complete browser suite remain required.
 
 

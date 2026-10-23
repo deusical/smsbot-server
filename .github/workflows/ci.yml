@@ -59,10 +59,21 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.27.3'
-          # Keep race-test cache entries separate from the fixture build's cache.
-          cache-dependency-path: |
-            go.sum
-            .github/workflows/ci.yml
+          cache: false
+      # Rolling race-test cache: every run restores the newest one (pull requests
+      # read main's) and only main pushes save, so cold runs are rare and the cache
+      # does not go stale.
+      - name: Restore Go build cache
+        id: gocache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-race-1.27.3-${{ hashFiles('go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            go-race-1.27.3-${{ hashFiles('go.sum') }}-
+            go-race-1.27.3-
       - uses: actions/download-artifact@v4
         with:
           name: fixture-build
@@ -80,6 +91,14 @@ jobs:
         timeout-minutes: 5
         env:
           GOTOOLCHAIN: go1.27.3
+      - name: Save Go build cache
+        if: github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ steps.gocache.outputs.cache-primary-key }}
   browser:
     needs: build
     runs-on: ubuntu-24.04
@@ -89,10 +108,6 @@ jobs:
     container:
       image: mcr.microsoft.com/playwright:v1.64.0-noble@sha256:06a9939e57531807f8d5fd76ce44b53165ffb7d7501d87ab10e285c20b1e971f
       options: --ipc=host
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [1, 2, 3]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -115,35 +130,17 @@ jobs:
           ../bin/smsbot --version
         timeout-minutes: 1
         working-directory: web
-      # Keep one worker per fixture database; shards run on separate runners.
-      # web/tests/shards.ts maps SMSBOT_SHARD to spec files by measured duration.
+      # One worker per fixture database. A single job pays container start-up once;
+      # hosted runners bill each job in whole minutes.
       - name: Browser tests
         run: npm test
-        env:
-          SMSBOT_SHARD: ${{ matrix.shard }}
-        timeout-minutes: 8
+        timeout-minutes: 10
         working-directory: web
       - name: Preserve failed browser diagnostics
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: browser-failure-${{ matrix.shard }}-${{ github.run_attempt }}
+          name: browser-failure-${{ github.run_attempt }}
           path: web/test-results/
           retention-days: 7
           if-no-files-found: ignore
-  # Preserve the required check name and fail closed if any prerequisite fails or skips.
-  service:
-    if: always()
-    needs: [build, backend, browser]
-    runs-on: ubuntu-24.04
-    timeout-minutes: 2
-    steps:
-      - name: Require every offline check
-        env:
-          BUILD_RESULT: ${{ needs.build.result }}
-          BACKEND_RESULT: ${{ needs.backend.result }}
-          BROWSER_RESULT: ${{ needs.browser.result }}
-        run: |
-          test "$BUILD_RESULT" = success
-          test "$BACKEND_RESULT" = success
-          test "$BROWSER_RESULT" = success

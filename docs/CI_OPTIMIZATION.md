@@ -1,9 +1,10 @@
 # CI performance
 
-The required `service` check continues to require build, backend and every browser
-shard. Race tests run with `-count=1`; vet, formatting, frontend unit tests,
-production builds and both vulnerability scans remain enabled. Browser shards
-have separate synthetic fixture databases and one worker each.
+Merge only after the build, backend and browser jobs all pass. There is no
+separate gate job: it billed a minute per run, and this private repository has no
+branch protection that could require it. Race tests run with `-count=1`; vet, formatting, frontend unit tests,
+production builds and both vulnerability scans remain enabled. The browser job
+uses its own synthetic fixture database and one worker.
 
 ## Baseline (2026-10-22)
 
@@ -25,7 +26,7 @@ Build/backend runners use Ubuntu 24.04 to align with the image's distro generati
 
 When upgrading Playwright, update package.json, package-lock.json, the container
 version/digest and the workflow version assertion together. Verify the digest
-against the official Microsoft registry and run both shards. The image has its
+against the official Microsoft registry and run the full suite. The image has its
 own pull cost; measure the entire job, including container initialization, rather
 than reporting only the removed installation step.
 
@@ -42,15 +43,41 @@ advance the Go server; tests that exercise server timing retain real time.
 Do not shorten production intervals or add retries to conceal flakes. Increasing
 workers requires separate fixture state and ports first.
 
-## Browser shard balance
+## Actions minutes
 
-Playwright shards by test count, which left one shard with about 123 s of tests
-and the other with about 89 s once the clock-driven specs landed. The browser
-job now runs three shards selected by `SMSBOT_SHARD` (see `web/tests/shards.ts`):
-shards 1 and 2 run the spec files pinned there, and shard 3 runs every other file,
-so a new spec file is always run. Re-measure file durations (`npx playwright
-test --reporter=json`) and adjust the pinned lists when a shard drifts more than
-about 20 s from the others. A local `npm test` without `SMSBOT_SHARD` runs everything.
+Hosted runners bill every job in whole minutes, and each browser job spends about
+60-75 s on container start-up and setup before any test runs. Three balanced shards
+(PR 38) cut wall time to about 3m15 but billed roughly 14 minutes per run; they
+duplicated that overhead three times and each shard rounded up to 3 minutes.
+The browser suite is now one job (about 3.5 minutes of tests), which should bill
+about 5 minutes, at the price of roughly 5.5 minutes of wall time. These figures
+are estimates until hosted runs confirm them.
+
+The Go race-test cache is a rolling `actions/cache`: every run restores the newest
+entry (pull requests read main's), and only pushes to main save a new one. This
+avoids the cold 265-270 s backend runs that happened whenever `ci.yml` or `go.sum`
+changed under the earlier fixed-key cache, and keeps the cache from going stale.
+
+If wall time matters more than minutes again, shard the browser job. PR 38
+(`b1289c5`) has a working version that selects spec files by measured duration.
+
+## Measured results (2026-10-23)
+
+Wall time is build plus the slowest dependent job; hosted runners vary.
+
+| Run | Build | Backend | Browser jobs | Wall |
+|---|---|---|---|---|
+| 39873327485, baseline (2 shards) | 39 s | 111 s | 220 s, 154 s | 4m30 |
+| fc311ee, pinned image + controlled clock | 48 s | 103 s | 149 s, 178 s | ~3m54 |
+| PR 38, three duration-based shards | 51 s | 128 s | 127 s, 125 s, 140 s | ~3m15 (about 14 billed minutes) |
+| 39904521461, main after PR 38 | 42 s | 265 s | 128 s, 129 s, 120 s | 5m20 |
+
+The controlled-clock tests removed most of the phone-sync spec's waiting, and the
+pinned image removed the rare 470-570 s browser-install stalls at the cost of
+about 35-45 s of container initialization per browser job. With balanced shards the
+backend job became the critical path, and its duration varied between 93 and 270 s
+depending only on whether the Go cache was warm: race tests took 65-89 s warm and
+118-171 s cold, and `go vet` 0 s warm and 37-59 s cold.
 
 ## Validation and comparison
 
