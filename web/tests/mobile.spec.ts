@@ -1,6 +1,5 @@
 import { test, expect, devices, type Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
-import type { Conversation } from "../src/api";
 
 function ownerToken() {
   const descriptor = JSON.parse(
@@ -97,22 +96,17 @@ test.describe("phone layout", () => {
     page,
   }) => {
     await login(page);
-    const origin = new URL(page.url()).origin;
-    const rows: Conversation[] = (
-      await (await page.request.get("/api/v1/inbox/conversations")).json()
-    ).conversations;
-    const demo = rows.find((c) => c.id === "demo-chat")!;
-    if (!demo.enrolled)
-      await page.request.post("/api/v1/enrollment", {
-        headers: { Origin: origin },
-        data: {
-          conversation_id: demo.id,
-          participant_id: demo.participant_id,
-        },
-      });
     const nav = page.getByRole("navigation", { name: "Main navigation" });
     await nav.getByRole("button", { name: "Conversations" }).tap();
     await expect(nav).toBeVisible();
+    // The list only refreshes on events, so enroll through the UI rather than the API.
+    const enroll = page.getByRole("switch", {
+      name: "Bot replies for Demo conversation",
+    });
+    if (!(await enroll.isChecked())) {
+      await enroll.tap();
+      await expect(enroll).toBeChecked();
+    }
     await page
       .getByRole("button", { name: /Demo conversation/ })
       .first()

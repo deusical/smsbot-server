@@ -92,7 +92,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2]
+        shard: [1, 2, 3]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -116,8 +116,11 @@ jobs:
         timeout-minutes: 1
         working-directory: web
       # Keep one worker per fixture database; shards run on separate runners.
+      # web/tests/shards.ts maps SMSBOT_SHARD to spec files by measured duration.
       - name: Browser tests
-        run: npm test -- --shard=${{ matrix.shard }}/2
+        run: npm test
+        env:
+          SMSBOT_SHARD: ${{ matrix.shard }}
         timeout-minutes: 8
         working-directory: web
       - name: Preserve failed browser diagnostics

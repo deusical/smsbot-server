@@ -1,7 +1,7 @@
 # CI performance
 
-The required `service` check continues to require build, backend and both browser
-shards. Race tests run with `-count=1`; vet, formatting, frontend unit tests,
+The required `service` check continues to require build, backend and every browser
+shard. Race tests run with `-count=1`; vet, formatting, frontend unit tests,
 production builds and both vulnerability scans remain enabled. Browser shards
 have separate synthetic fixture databases and one worker each.
 
@@ -39,9 +39,18 @@ Next, replace wall-clock waiting in mocked frontend polling tests with browser
 clock advancement. Preserve before-deadline silence, eventual retry, settled
 silence, focus/visibility and read-receipt assertions. Browser clocks do not
 advance the Go server; tests that exercise server timing retain real time.
-Do not shorten production intervals or add retries to conceal flakes. Rebalance
-independent files only after measuring the new shard distribution. Increasing
+Do not shorten production intervals or add retries to conceal flakes. Increasing
 workers requires separate fixture state and ports first.
+
+## Browser shard balance
+
+Playwright shards by test count, which left one shard with about 123 s of tests
+and the other with about 89 s once the clock-driven specs landed. The browser
+job now runs three shards selected by `SMSBOT_SHARD` (see `web/tests/shards.ts`):
+shards 1 and 2 run the spec files pinned there, and shard 3 runs every other file,
+so a new spec file is always run. Re-measure file durations (`npx playwright
+test --reporter=json`) and adjust the pinned lists when a shard drifts more than
+about 20 s from the others. A local `npm test` without `SMSBOT_SHARD` runs everything.
 
 ## Validation and comparison
 

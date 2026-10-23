@@ -92,6 +92,8 @@ export function useWorkspace(
   );
   const lastInbox = useRef(inboxSaved);
   const [loads, setLoads] = useState(0);
+  const savedRef = useRef(saved);
+  savedRef.current = saved;
   useEffect(() => {
     if (!signedIn) {
       setConfig(null);
@@ -110,8 +112,12 @@ export function useWorkspace(
       .then(([c, m, k, p]) => {
         if (!active) return;
         const value = normalize(c);
+        // A reload that lands after the user starts typing must not erase the draft.
+        const previous = savedRef.current;
         setSaved(value);
-        setConfig(value);
+        setConfig((draft) =>
+          draft && previous && !same(draft, previous) ? draft : value,
+        );
         setModels(m ?? []);
         setOpenRouterConfigured(k.configured);
         setCompatible(p);

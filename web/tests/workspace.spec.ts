@@ -103,6 +103,35 @@ test("drafts survive navigation and discard restores saved configuration", async
   await description.fill("Synthetic greeting");
   await expect(savebar).toHaveCount(0);
 });
+test("a late configuration reload does not erase a draft being typed", async ({
+  page,
+}) => {
+  await setup(page);
+  const commands = page.getByRole("button", { name: "Commands", exact: true });
+  const description = page.getByLabel("Description", { exact: true });
+  // Let the first load finish so the editor is already showing saved values.
+  await commands.click();
+  await expect(description).toHaveValue("Synthetic greeting");
+  await page.getByRole("button", { name: "Activity", exact: true }).click();
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  await page.route("**/api/v1/config", async (route) => {
+    await held;
+    await route.fallback();
+  });
+  // Opening Commands reloads the saved configuration; keep that reload in flight.
+  await commands.click();
+  await description.fill("Typed during reload");
+  const savebar = page.getByRole("region", { name: "Unsaved changes" });
+  await expect(savebar).toBeVisible();
+  const reloaded = page.waitForResponse(
+    (r) => r.url().endsWith("/api/v1/config") && r.request().method() === "GET",
+  );
+  release();
+  await reloaded;
+  await expect(description).toHaveValue("Typed during reload");
+  await expect(savebar).toBeVisible();
+});
 test("command templates and duplicates remain disabled with unique names", async ({
   page,
 }) => {
