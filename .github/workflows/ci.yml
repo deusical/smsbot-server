@@ -1,8 +1,22 @@
 name: Offline checks
+# Skip runs whose every changed file is documentation or repository metadata.
+# A change that also touches code or this workflow still runs everything.
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - '.gitignore'
+      - '.gitattributes'
   pull_request:
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - '.gitignore'
+      - '.gitattributes'
   workflow_dispatch:
 permissions:
   contents: read

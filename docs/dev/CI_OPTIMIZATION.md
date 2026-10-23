@@ -58,6 +58,10 @@ entry (pull requests read main's), and only pushes to main save a new one. This
 avoids the cold 265-270 s backend runs that happened whenever `ci.yml` or `go.sum`
 changed under the earlier fixed-key cache, and keeps the cache from going stale.
 
+Runs are skipped when every changed file is a Markdown file, under `docs/`, or one of
+`LICENSE`, `.gitignore` and `.gitattributes` (`paths-ignore` in the workflow). A change
+that also touches code, tests, the API spec or the workflow itself runs everything.
+
 If wall time matters more than minutes again, shard the browser job. PR 38
 (`b1289c5`) has a working version that selects spec files by measured duration.
 
