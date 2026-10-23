@@ -5,8 +5,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/deusical/smsbot-server/internal/media"
 	"io"
-	"smsbot-server/internal/media"
 	"strings"
 	"sync"
 

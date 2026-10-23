@@ -79,11 +79,11 @@ never change Live/Pause.
 State lives in a data directory (`smsbot.db`, the encrypted Google session, archived
 originals); the master key lives outside it. A state directory is locked while the
 service or an offline command uses it. Backups and archive exports are offline
-operations described in [BACKUP.md](BACKUP.md).
+operations described in [BACKUP.md](../BACKUP.md).
 
 ## More detail
 
 [DESIGN_NOTES.md](DESIGN_NOTES.md) records the finer design points per subsystem:
 processing, history synchronization, attachments, archive module, reconnection,
 sync scheduling, storage statistics and instant send. The API contract is
-[api/openapi.yaml](../api/openapi.yaml).
+[api/openapi.yaml](../../api/openapi.yaml).

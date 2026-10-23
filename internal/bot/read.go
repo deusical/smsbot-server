@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"smsbot-server/internal/transport"
+	"github.com/deusical/smsbot-server/internal/transport"
 )
 
 // readThrottle remembers when each conversation was last marked read so a

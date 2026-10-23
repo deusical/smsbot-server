@@ -3,8 +3,8 @@ package store
 import (
 	"database/sql"
 	"errors"
-	"smsbot-server/internal/media"
-	"smsbot-server/internal/transport"
+	"github.com/deusical/smsbot-server/internal/media"
+	"github.com/deusical/smsbot-server/internal/transport"
 	"time"
 )
 

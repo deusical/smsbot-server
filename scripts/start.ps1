@@ -2,8 +2,8 @@ param([ValidateSet('Fixture','Google')][string]$Transport = 'Fixture', [switch]$
 $ErrorActionPreference = 'Stop'
 if ($Pair -and $UpdateCookies) { throw 'Use either -Pair or -UpdateCookies.' }
 if (($Pair -or $UpdateCookies) -and $Transport -ne 'Google') { throw 'Pairing and cookie updates require -Transport Google.' }
-$binary = Join-Path $PSScriptRoot 'bin/smsbot.exe'
-if (-not (Test-Path -LiteralPath $binary)) { throw 'Run build.ps1 first.' }
+$binary = Join-Path (Split-Path -Parent $PSScriptRoot) 'bin/smsbot.exe'
+if (-not (Test-Path -LiteralPath $binary)) { throw 'Run scriptsuild.ps1 first.' }
 $stateRoot = Join-Path $env:LOCALAPPDATA ('SmsBotServer/' + $Transport.ToLowerInvariant())
 $state = Join-Path $stateRoot 'state'
 $secrets = Join-Path $stateRoot 'vault'

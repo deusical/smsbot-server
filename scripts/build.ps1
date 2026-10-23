@@ -5,11 +5,12 @@ param(
     [switch]$DebugSymbols
 )
 $ErrorActionPreference = 'Stop'
-Push-Location $PSScriptRoot
+$root = Split-Path -Parent $PSScriptRoot
+Push-Location $root
 $previousGoTemp = $env:GOTMPDIR
 try {
     New-Item -ItemType Directory -Path '.build-temp' -Force | Out-Null
-    $env:GOTMPDIR = Join-Path $PSScriptRoot '.build-temp'
+    $env:GOTMPDIR = Join-Path $root '.build-temp'
     if (-not $SkipWeb) {
         Push-Location web
         try {

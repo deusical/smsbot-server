@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"smsbot-server/internal/vault"
+	"github.com/deusical/smsbot-server/internal/vault"
 )
 
 const syntheticCookies = `{"SID":"fixture-new","HSID":"fixture-new","SSID":"fixture-new","OSID":"fixture-new","APISID":"fixture-new","SAPISID":"fixture-new"}`

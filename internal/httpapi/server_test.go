@@ -3,13 +3,13 @@ package httpapi
 import (
 	"bytes"
 	"encoding/json"
+	"github.com/deusical/smsbot-server/internal/bot"
+	"github.com/deusical/smsbot-server/internal/store"
+	"github.com/deusical/smsbot-server/internal/transport"
+	"github.com/deusical/smsbot-server/internal/vault"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
-	"smsbot-server/internal/bot"
-	"smsbot-server/internal/store"
-	"smsbot-server/internal/transport"
-	"smsbot-server/internal/vault"
 	"testing"
 )
 

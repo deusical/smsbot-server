@@ -5,9 +5,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/deusical/smsbot-server/internal/media"
 	"go.mau.fi/mautrix-gmessages/pkg/libgm/gmproto"
 	"go.mau.fi/util/variationselector"
-	"smsbot-server/internal/media"
 )
 
 // MessageInteraction is an authoritative snapshot when non-nil. Wire identities

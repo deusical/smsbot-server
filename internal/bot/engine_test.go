@@ -2,10 +2,10 @@ package bot
 
 import (
 	"context"
+	"github.com/deusical/smsbot-server/internal/store"
+	"github.com/deusical/smsbot-server/internal/transport"
+	"github.com/deusical/smsbot-server/internal/vault"
 	"path/filepath"
-	"smsbot-server/internal/store"
-	"smsbot-server/internal/transport"
-	"smsbot-server/internal/vault"
 	"testing"
 	"time"
 )

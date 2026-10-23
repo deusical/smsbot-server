@@ -2,8 +2,8 @@ package store
 
 import (
 	"database/sql"
+	"github.com/deusical/smsbot-server/internal/vault"
 	"os"
-	"smsbot-server/internal/vault"
 	"testing"
 	"time"
 )

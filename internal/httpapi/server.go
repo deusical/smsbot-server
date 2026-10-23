@@ -1,19 +1,18 @@
 package httpapi
 
 import (
-	"context"
 	"embed"
 	"encoding/json"
+	"github.com/deusical/smsbot-server/internal/bot"
+	"github.com/deusical/smsbot-server/internal/media"
+	"github.com/deusical/smsbot-server/internal/store"
+	"github.com/deusical/smsbot-server/internal/transport"
 	"io"
 	"io/fs"
 	"math"
 	"mime"
 	"net/http"
 	"net/url"
-	"smsbot-server/internal/bot"
-	"smsbot-server/internal/media"
-	"smsbot-server/internal/store"
-	"smsbot-server/internal/transport"
 	"strings"
 	"time"
 )
@@ -340,7 +339,6 @@ func (s *Server) incoming(w http.ResponseWriter, r *http.Request) {
 	}
 	s.json(w, 200, map[string]any{"accepted": accepted, "id": m.ID})
 }
-func Shutdown(ctx context.Context, h *http.Server) error { return h.Shutdown(ctx) }
 
 func (s *Server) fixtureTyping(w http.ResponseWriter, r *http.Request) {
 	fixture, ok := s.Engine.Transport.(*transport.Fixture)

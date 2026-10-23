@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"smsbot-server/internal/transport"
+	"github.com/deusical/smsbot-server/internal/transport"
 	"strconv"
 	"strings"
 	"time"
@@ -233,13 +233,6 @@ func (s *Store) Changes(conv, after, search string) (Changes, error) {
 		return out, err
 	}
 	return out, nil
-}
-func MatchMessage(m Message, q string) bool {
-	v := m.Text
-	for _, a := range m.Attachments {
-		v += "\n" + a.Name
-	}
-	return strings.Contains(strings.ToLower(v), strings.ToLower(q))
 }
 func ParseArchiveSince(s string) (time.Time, error) {
 	if s == "" {

@@ -28,7 +28,7 @@ conversations you choose.
   AI uses OpenRouter or any OpenAI-compatible endpoint you configure.
 - **Careful by design.** Exact participant enrollment, groups excluded, history never
   runs commands, every start is paused, and an uncertain send is never retried
-  automatically. See [Architecture](docs/ARCHITECTURE.md).
+  automatically. See [Architecture](docs/dev/ARCHITECTURE.md).
 
 ![Conversations](docs/images/conversations.png)
 
@@ -37,8 +37,8 @@ conversations you choose.
 You need Go 1.27.3 and Node.js 24.15 or newer in the 24.x series. On Windows:
 
 ```powershell
-.\build.ps1          # builds the dashboard and the service, runs the checks
-.\start.ps1          # offline demo with synthetic conversations, starts paused
+.\scripts\build.ps1  # builds the dashboard and the service, runs the checks
+.\scripts\start.ps1  # offline demo with synthetic conversations, starts paused
 ```
 
 Open <http://127.0.0.1:8787>, read the owner credential file from the path the
@@ -65,8 +65,8 @@ HTTPS address such as Tailscale, and updating cookies without pairing again.
 | [Backup and recovery](docs/BACKUP.md) | Offline backup and restore, archive export |
 | [Security](docs/SECURITY.md) | What is stored, threat model, reporting problems |
 | [Known limitations](docs/LIMITATIONS.md) | What is unverified or unsupported |
-| [Architecture](docs/ARCHITECTURE.md) | Components, flows and safety rules |
-| [Design notes](docs/DESIGN_NOTES.md) | Detailed per-subsystem design |
+| [Architecture](docs/dev/ARCHITECTURE.md) | Components, flows and safety rules |
+| [Design notes](docs/dev/DESIGN_NOTES.md) | Detailed per-subsystem design |
 | [API](api/openapi.yaml) | OpenAPI contract for the owner API |
 | [Changelog](CHANGELOG.md) | Release notes |
 | [Contributing](CONTRIBUTING.md) | Development workflow and checks |
@@ -75,8 +75,8 @@ HTTPS address such as Tailscale, and updating cookies without pairing again.
 ## Develop and test
 
 ```powershell
-.\build.ps1                       # install, build, frontend/Go tests and vet
-.\security-check.ps1              # Go and npm vulnerability scans
+.\scripts\build.ps1               # install, build, frontend/Go tests and vet
+.\scripts\security-check.ps1      # Go and npm vulnerability scans
 cd web; npm run test:unit         # fast frontend tests; no fixture server needed
 npx playwright install chromium; npm test  # from web/: browser tests
 ```
@@ -85,7 +85,7 @@ Use `npm run test:unit:watch` from `web/` for frontend test feedback while editi
 See [Contributing](CONTRIBUTING.md#frontend-tests) for test placement and focused runs.
 Playwright starts its own isolated fixture service with synthetic data and never
 contacts Google, carriers or AI providers. Pass `-SkipInstall -SkipChecks` to
-`build.ps1` for a quick rebuild. `smsbot --version` prints the build version.
+`scripts\build.ps1` for a quick rebuild. `smsbot --version` prints the build version.
 
 ## License
 

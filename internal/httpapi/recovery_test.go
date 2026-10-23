@@ -2,7 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
-	"smsbot-server/internal/transport"
+	"github.com/deusical/smsbot-server/internal/transport"
 	"testing"
 )
 

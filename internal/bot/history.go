@@ -3,7 +3,7 @@ package bot
 import (
 	"context"
 	"errors"
-	"smsbot-server/internal/transport"
+	"github.com/deusical/smsbot-server/internal/transport"
 	"time"
 )
 

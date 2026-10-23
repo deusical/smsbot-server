@@ -1,11 +1,11 @@
 package main
 
 import (
+	"github.com/deusical/smsbot-server/internal/media"
+	"github.com/deusical/smsbot-server/internal/store"
+	"github.com/deusical/smsbot-server/internal/vault"
 	"os"
 	"path/filepath"
-	"smsbot-server/internal/media"
-	"smsbot-server/internal/store"
-	"smsbot-server/internal/vault"
 	"strings"
 	"testing"
 )

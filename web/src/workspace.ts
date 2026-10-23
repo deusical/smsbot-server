@@ -40,7 +40,7 @@ export function failure(e: unknown) {
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 
 /** Returns a reason the draft cannot be saved, or "" when it looks valid. */
-export function validate(c: Configuration): string {
+function validate(c: Configuration): string {
   const names = new Set<string>();
   for (const [i, command] of c.commands.entries()) {
     const label = command.name ? `!${command.name}` : `Command ${i + 1}`;

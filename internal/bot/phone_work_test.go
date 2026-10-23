@@ -3,9 +3,9 @@ package bot
 import (
 	"context"
 	"errors"
-	"smsbot-server/internal/media"
-	"smsbot-server/internal/store"
-	"smsbot-server/internal/transport"
+	"github.com/deusical/smsbot-server/internal/media"
+	"github.com/deusical/smsbot-server/internal/store"
+	"github.com/deusical/smsbot-server/internal/transport"
 	"sync"
 	"sync/atomic"
 	"testing"

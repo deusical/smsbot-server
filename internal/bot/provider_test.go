@@ -3,9 +3,9 @@ package bot
 import (
 	"context"
 	"encoding/json"
+	"github.com/deusical/smsbot-server/internal/store"
 	"net/http"
 	"net/http/httptest"
-	"smsbot-server/internal/store"
 	"strings"
 	"testing"
 )

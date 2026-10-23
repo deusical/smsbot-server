@@ -2,9 +2,9 @@ package store
 
 import (
 	"bytes"
+	"github.com/deusical/smsbot-server/internal/vault"
 	"os"
 	"path/filepath"
-	"smsbot-server/internal/vault"
 	"testing"
 )
 

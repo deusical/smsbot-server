@@ -8,9 +8,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/deusical/smsbot-server/internal/media"
+	"github.com/deusical/smsbot-server/internal/vault"
 	_ "modernc.org/sqlite"
-	"smsbot-server/internal/media"
-	"smsbot-server/internal/vault"
 	"time"
 )
 

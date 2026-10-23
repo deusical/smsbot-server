@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"smsbot-server/internal/store"
+	"github.com/deusical/smsbot-server/internal/store"
 	"sync/atomic"
 	"testing"
 	"time"

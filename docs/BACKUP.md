@@ -93,4 +93,4 @@ jobs or collection consent. Archives are stopped and sending is paused. Review a
 enable collection locally if desired. Existing Windows DPAPI identity limitations
 still apply; encrypted archives are not a portable key-transfer mechanism.
 
-How the local archive stays current is described in [DESIGN_NOTES.md](DESIGN_NOTES.md#local-history-synchronization).
+How the local archive stays current is described in [DESIGN_NOTES.md](dev/DESIGN_NOTES.md#local-history-synchronization).

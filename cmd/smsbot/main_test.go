@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/deusical/smsbot-server/internal/vault"
 	"github.com/gofrs/flock"
-	"smsbot-server/internal/vault"
 )
 
 func TestCookieUpdateCLI(t *testing.T) {

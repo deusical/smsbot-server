@@ -8,7 +8,7 @@ import {sortConversations} from "./conversationOrder";
 import {Avatar, Field, Group, Notice, StatusPill} from "./ui";
 import type {Workspace} from "./workspace";
 type StorageStats = {original_bytes:number;original_files:number;database_bytes:number;export_bytes:number;temporary_bytes:number;total_bytes:number;messages:number;quota_bytes:number;measured_at:string};
-export function formatBytes(value:number):string {
+function formatBytes(value:number):string {
   if (!value) return "0 B";
   const unit=Math.min(4,Math.floor(Math.log(value)/Math.log(1024)));
   return `${(value/1024**unit).toLocaleString(undefined,{maximumFractionDigits:1})} ${["B","KiB","MiB","GiB","TiB"][unit]}`;

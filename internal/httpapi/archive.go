@@ -2,8 +2,8 @@ package httpapi
 
 import (
 	"context"
+	"github.com/deusical/smsbot-server/internal/store"
 	"net/http"
-	"smsbot-server/internal/store"
 	"time"
 )
 

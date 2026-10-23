@@ -6,7 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"smsbot-server/internal/media"
+	"github.com/deusical/smsbot-server/internal/media"
 	"time"
 )
 

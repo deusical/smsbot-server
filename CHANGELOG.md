@@ -43,7 +43,7 @@ First public beta. Experimental; see [Known limitations](docs/LIMITATIONS.md).
   partial menu.
 - The API accepts owner browser sessions only.
 - Documentation rewritten: README, getting started, user guide, architecture, security
-  and known limitations. Detailed design notes moved to `docs/DESIGN_NOTES.md`.
+  and known limitations. Detailed design notes moved to `docs/dev/DESIGN_NOTES.md`.
 
 ### Removed
 - The Android client and everything that existed only for it: bearer client

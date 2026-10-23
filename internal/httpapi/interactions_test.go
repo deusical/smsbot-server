@@ -4,9 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/deusical/smsbot-server/internal/store"
+	"github.com/deusical/smsbot-server/internal/transport"
 	"net/http/httptest"
-	"smsbot-server/internal/store"
-	"smsbot-server/internal/transport"
 	"testing"
 	"time"
 )

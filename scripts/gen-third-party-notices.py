@@ -46,7 +46,7 @@ def go_modules():
         if not line.strip():
             continue
         path, version, directory = line.split('\t')
-        if path != 'smsbot-server':
+        if path != 'github.com/deusical/smsbot-server':
             mods[path] = (version, directory)
     return dict(sorted(mods.items()))
 

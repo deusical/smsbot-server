@@ -9,8 +9,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"smsbot-server/internal/store"
-	"smsbot-server/internal/transport"
+	"github.com/deusical/smsbot-server/internal/store"
+	"github.com/deusical/smsbot-server/internal/transport"
 )
 
 type MessageActions struct {

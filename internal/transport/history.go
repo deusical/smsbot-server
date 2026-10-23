@@ -4,9 +4,9 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"github.com/deusical/smsbot-server/internal/media"
 	"go.mau.fi/mautrix-gmessages/pkg/libgm/gmproto"
 	"google.golang.org/protobuf/proto"
-	"smsbot-server/internal/media"
 	"time"
 )
 

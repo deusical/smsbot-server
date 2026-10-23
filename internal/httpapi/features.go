@@ -2,8 +2,8 @@ package httpapi
 
 import (
 	"encoding/json"
+	"github.com/deusical/smsbot-server/internal/bot"
 	"net/http"
-	"smsbot-server/internal/bot"
 	"strconv"
 )
 

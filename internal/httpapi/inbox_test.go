@@ -3,9 +3,9 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"github.com/deusical/smsbot-server/internal/transport"
 	"net/http"
 	"net/http/httptest"
-	"smsbot-server/internal/transport"
 	"strings"
 	"testing"
 	"time"

@@ -1,7 +1,7 @@
 package transport
 
 import (
-	"smsbot-server/internal/media"
+	"github.com/deusical/smsbot-server/internal/media"
 	"strings"
 	"testing"
 	"time"

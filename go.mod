@@ -1,4 +1,4 @@
-module smsbot-server
+module github.com/deusical/smsbot-server
 
 go 1.26.0
 

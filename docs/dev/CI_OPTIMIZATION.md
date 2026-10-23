@@ -90,7 +90,7 @@ queue time, image setup, dependency installation, test time and total elapsed ti
 Initial acceptance is removal of apt-related outliers with identical test coverage;
 any improvement to the normal 4m30s run must be measured, not assumed.
 
-Run [39881904666](run 39881904666)
+Run 39881904666 (private repository)
 passed all five checks in both attempts on the same implementation commit:
 
 | Measurement | Attempt 1 | Attempt 2 |

@@ -2,8 +2,8 @@ package store
 
 import (
 	"fmt"
+	"github.com/deusical/smsbot-server/internal/vault"
 	"path/filepath"
-	"smsbot-server/internal/vault"
 	"testing"
 )
 

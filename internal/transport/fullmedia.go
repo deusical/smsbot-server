@@ -5,8 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"github.com/deusical/smsbot-server/internal/media"
 	"go.mau.fi/mautrix-gmessages/pkg/libgm/gmproto"
-	"smsbot-server/internal/media"
 	"sync"
 	"time"
 )

@@ -141,7 +141,7 @@ export type Command = {
   allowed_conversations: string[];
   generation?: Generation;
 };
-export type Profile = {
+type Profile = {
   id: string;
   name: string;
   model: string;

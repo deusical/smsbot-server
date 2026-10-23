@@ -39,7 +39,7 @@ npm run build        # tsc --noEmit and Vite build
 npm test             # Playwright against an isolated fixture service
 ```
 
-Rebuild the Go binary with the new assets first (`../build.ps1 -SkipInstall`, or
+Rebuild the Go binary with the new assets first (`../scripts/build.ps1 -SkipInstall`, or
 `node ../scripts/sync-web-assets.mjs` and `go build ./cmd/smsbot` from the repository
 root), because Playwright starts the embedded fixture server from `../bin`. Tests use
 synthetic data only and never contact Google, carriers or AI providers. Set

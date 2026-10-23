@@ -2,7 +2,7 @@ package store
 
 import (
 	"bytes"
-	"smsbot-server/internal/transport"
+	"github.com/deusical/smsbot-server/internal/transport"
 	"testing"
 	"time"
 )

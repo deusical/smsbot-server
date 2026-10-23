@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"smsbot-server/internal/media"
+	"github.com/deusical/smsbot-server/internal/media"
 	"strings"
 	"testing"
 	"time"

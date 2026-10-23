@@ -5,8 +5,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"smsbot-server/internal/media"
-	"smsbot-server/internal/transport"
+	"github.com/deusical/smsbot-server/internal/media"
+	"github.com/deusical/smsbot-server/internal/transport"
 	"time"
 )
 

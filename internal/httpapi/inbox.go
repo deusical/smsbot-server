@@ -2,13 +2,13 @@ package httpapi
 
 import (
 	"bytes"
+	"github.com/deusical/smsbot-server/internal/bot"
+	"github.com/deusical/smsbot-server/internal/media"
+	"github.com/deusical/smsbot-server/internal/store"
+	"github.com/deusical/smsbot-server/internal/transport"
 	"io"
 	"mime"
 	"net/http"
-	"smsbot-server/internal/bot"
-	"smsbot-server/internal/media"
-	"smsbot-server/internal/store"
-	"smsbot-server/internal/transport"
 	"strconv"
 	"time"
 )

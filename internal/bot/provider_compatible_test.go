@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"smsbot-server/internal/store"
+	"github.com/deusical/smsbot-server/internal/store"
 )
 
 func TestCompatibleProviderModelsAndGeneration(t *testing.T) {

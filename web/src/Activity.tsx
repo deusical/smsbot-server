@@ -3,7 +3,7 @@ import { api, type Conversation, type Job } from "./api";
 import { Icon } from "./Icon";
 import { Segmented, timeAgo } from "./ui";
 
-export const pendingStates = ["queued", "generating", "awaiting_approval"],
+const pendingStates = ["queued", "generating", "awaiting_approval"],
   completedStates = ["submitted", "delivered", "read", "reaction_confirmed"];
 const stateLabels: Record<string, string> = {
   queued: "Queued",
@@ -17,9 +17,9 @@ const stateLabels: Record<string, string> = {
   unknown_submission: "Uncertain",
   cancelled: "Cancelled",
 };
-export const stateLabel = (s: string) =>
+const stateLabel = (s: string) =>
   stateLabels[s] ?? s.replaceAll("_", " ");
-export function stateTone(s: string) {
+function stateTone(s: string) {
   if (s === "awaiting_approval") return "wait";
   if (pendingStates.includes(s) || s === "submitting") return "busy";
   if (completedStates.includes(s)) return "ok";

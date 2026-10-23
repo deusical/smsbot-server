@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import type { Attachment } from "./api";
 import { Icon } from "./Icon";
 
-export function fileSize(size: number) {
+function fileSize(size: number) {
   return size <= 0 ? "Size unknown" : size >= 1024 * 1024
     ? `${(size / 1024 / 1024).toFixed(1)} MB`
     : `${Math.ceil(size / 1024)} KB`;

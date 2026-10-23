@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"smsbot-server/internal/store"
+	"github.com/deusical/smsbot-server/internal/store"
 )
 
 const compatibleProviderID = "compatible"

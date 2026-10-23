@@ -3,7 +3,7 @@ package transport
 import (
 	"context"
 	"errors"
-	"smsbot-server/internal/media"
+	"github.com/deusical/smsbot-server/internal/media"
 	"sync"
 	"time"
 )

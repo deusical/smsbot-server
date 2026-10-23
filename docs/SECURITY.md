@@ -62,7 +62,7 @@ Run it on a private host, behind Tailscale or similar, as a dedicated non-root u
 Keep the state and key directories private and on local storage, back them up with
 [the offline tools](BACKUP.md), and never paste cookies, owner credentials or message
 content into issues, chat tools or screenshots. Check dependencies before you build
-(`security-check.ps1` runs `govulncheck` and `npm audit`). The service must not import
+(`scripts\security-check.ps1` runs `govulncheck` and `npm audit`). The service must not import
 `golang.org/x/crypto/openpgp`, which has an open advisory with no fix.
 
 ## Reporting a vulnerability

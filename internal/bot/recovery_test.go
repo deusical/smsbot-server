@@ -2,7 +2,7 @@ package bot
 
 import (
 	"context"
-	"smsbot-server/internal/store"
+	"github.com/deusical/smsbot-server/internal/store"
 	"testing"
 	"time"
 )

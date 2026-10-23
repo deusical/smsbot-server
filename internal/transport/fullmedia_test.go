@@ -3,9 +3,9 @@ package transport
 import (
 	"context"
 	"errors"
+	"github.com/deusical/smsbot-server/internal/media"
 	"go.mau.fi/mautrix-gmessages/pkg/libgm"
 	"go.mau.fi/mautrix-gmessages/pkg/libgm/gmproto"
-	"smsbot-server/internal/media"
 	"sync/atomic"
 	"testing"
 	"time"

@@ -11,8 +11,8 @@
 **Windows (PowerShell)**
 
 ```powershell
-.\build.ps1                          # npm ci, dashboard build, frontend/Go tests and vet, binary
-.\build.ps1 -SkipInstall -SkipChecks # quick rebuild with unchanged dependencies
+.\scripts\build.ps1                          # npm ci, dashboard build, frontend/Go tests and vet, binary
+.\scripts\build.ps1 -SkipInstall -SkipChecks # quick rebuild with unchanged dependencies
 ```
 
 **Linux or macOS**
@@ -28,7 +28,7 @@ Or build a container image: `docker build -t smsbot .` (see [Hosting](HOSTING.md
 ## Try the offline demo
 
 ```powershell
-.\start.ps1
+.\scripts\start.ps1
 ```
 
 This runs the **fixture** transport: synthetic conversations, no Google connection and
@@ -54,11 +54,11 @@ This follows the [upstream pairing guide](https://docs.mau.fi/bridges/go/gmessag
    stdin; they are never placed on a command line:
 
    ```powershell
-   .\start.ps1 -Transport Google -Pair
+   .\scripts\start.ps1 -Transport Google -Pair
    ```
 
 4. Approve the emoji shown in the terminal on your phone. Then clear your clipboard.
-5. Start the service: `.\start.ps1 -Transport Google`. It starts paused.
+5. Start the service: `.\scripts\start.ps1 -Transport Google`. It starts paused.
 6. In the dashboard, enable **Bot replies** (and, optionally, collection under
    **Settings > Messages & privacy**) for **one designated test conversation** and try it
    before widening anything.
@@ -81,7 +81,7 @@ service, copy a fresh `/web/config` request from the same private browser sessio
 Google account, and run:
 
 ```powershell
-.\start.ps1 -Transport Google -UpdateCookies
+.\scripts\start.ps1 -Transport Google -UpdateCookies
 ```
 
 This offline command takes the state lock, saves an encrypted backup beside the session

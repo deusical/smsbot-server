@@ -3,8 +3,8 @@ package archive
 import (
 	"bytes"
 	"context"
-	"smsbot-server/internal/store"
-	"smsbot-server/internal/transport"
+	"github.com/deusical/smsbot-server/internal/store"
+	"github.com/deusical/smsbot-server/internal/transport"
 	"testing"
 	"time"
 )
