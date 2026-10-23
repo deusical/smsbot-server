@@ -16,3 +16,7 @@ web/.test-state/
 
 # Local implementation handoff
 docs/CHECKPOINT.md
+
+# Local agent instructions and planning notes (not published)
+AGENTS.md
+docs/dev/*_PLAN.md
