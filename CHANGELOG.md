@@ -2,7 +2,7 @@
 
 Notable changes. Versions before 0.1.0 were internal milestones.
 
-## 0.1.0-beta (unreleased)
+## 0.1.0-beta (2026-10-23)
 
 First public beta. Experimental; see [Known limitations](docs/LIMITATIONS.md).
 
