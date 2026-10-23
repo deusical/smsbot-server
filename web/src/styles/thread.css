@@ -1,0 +1,90 @@
+/* ---------- conversation list: recency, pinned, unread ---------- */
+.conversation-text { flex: 1; }
+.conversation.unread .conversation-text strong { font-weight: 700; color: var(--text); }
+.conversation-meta {
+  flex: none;
+  display: grid;
+  justify-items: end;
+  gap: 4px;
+  font-size: 11.5px;
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+.conversation.unread .conversation-meta time { color: var(--signal); font-weight: 600; }
+.conversation-flags { display: flex; align-items: center; gap: 6px; min-height: 12px; color: var(--faint); }
+.unread-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--signal); }
+
+/* ---------- thread: jump to latest and drop target ---------- */
+.jump-latest {
+  position: absolute;
+  bottom: 120px;
+  right: 22px;
+  z-index: 5;
+  width: 38px;
+  height: 38px;
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow-pop);
+  animation: open 0.15s var(--ease);
+}
+.jump-latest:hover:not(:disabled) { background: var(--raised); border-color: var(--signal); }
+.composer-box.dragging { border-color: var(--signal); box-shadow: 0 0 0 3px var(--signal-soft); }
+
+/* ---------- selected image thumbnails, pending sends ---------- */
+.selected-attachment.has-thumb {
+  position: relative;
+  flex-direction: column;
+  align-items: stretch;
+  width: 132px;
+  padding: 6px;
+}
+.selected-attachment.has-thumb img {
+  width: 100%;
+  height: 92px;
+  border-radius: 8px;
+}
+.selected-attachment.has-thumb > button {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  border: 1px solid var(--line);
+}
+.selected-attachment.has-thumb strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bubble.pending { opacity: 0.8; }
+.bubble.pending .spinner { width: 11px; height: 11px; border-width: 2px; }
+.bubble.send-failed { outline: 1px solid var(--rose); }
+.pending-thumb { display: block; max-width: 220px; max-height: 180px; border-radius: 10px; margin-bottom: 6px; object-fit: cover; }
+.pending-file { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; margin: 0 6px 6px 0; }
+.pending-state { display: inline-flex; align-items: center; gap: 6px; }
+.pending-error { color: var(--rose); font-weight: 550; }
+.pending-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+
+/* ---------- previews, typing, read receipts ---------- */
+.preview-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
+.conversation.unread .preview-text { color: var(--text); }
+.typing-text { color: var(--signal); font-style: italic; }
+.conversation-text small { min-width: 0; }
+.typing-bubble {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  width: fit-content;
+  padding: 10px 14px;
+  border-radius: 16px;
+  background: var(--bubble-in);
+  color: var(--muted);
+}
+.typing-bubble span { width: 6px; height: 6px; border-radius: 50%; background: currentColor; animation: pulse-dot 1.2s ease-in-out infinite; }
+.typing-bubble span:nth-child(2) { animation-delay: 0.2s; }
+.typing-bubble span:nth-child(3) { animation-delay: 0.4s; }
+@media (prefers-reduced-motion: reduce) { .typing-bubble span { animation: none; } }

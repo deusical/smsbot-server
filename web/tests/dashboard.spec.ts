@@ -1,6 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
-import type { Configuration, Job, State, Conversation } from "../src/api";
+import type { Configuration, Job, State, Conversation } from "../src/lib/api";
 async function login(page: Page) {
   const descriptor = JSON.parse(
     readFileSync(".test-state/connection.json", "utf8"),

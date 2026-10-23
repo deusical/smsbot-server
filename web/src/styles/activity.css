@@ -1,0 +1,130 @@
+/* ---------- activity feed ---------- */
+.feed {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.feed-row {
+  border-top: 1px solid var(--line);
+}
+.feed-row:first-child {
+  border-top: 0;
+}
+.feed-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.feed-main {
+  flex: 1;
+  min-width: 0;
+  justify-content: flex-start;
+  gap: 12px;
+  height: 52px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  font-weight: 400;
+  text-align: left;
+}
+.feed.compact .feed-main {
+  cursor: default;
+}
+.feed.compact .feed-main:hover {
+  background: transparent;
+}
+.state-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--faint);
+}
+.tone-ok .state-dot {
+  background: var(--signal);
+}
+.tone-wait .state-dot {
+  background: var(--amber);
+  box-shadow: 0 0 0 4px var(--amber-soft);
+}
+.tone-busy .state-dot {
+  background: var(--violet);
+}
+.tone-bad .state-dot {
+  background: var(--rose);
+}
+.feed-who {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--muted);
+}
+.feed-main time {
+  margin-left: auto;
+  color: var(--faint);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.status {
+  flex: none;
+  min-width: 104px;
+  text-align: right;
+  font-size: 12.5px;
+  font-weight: 550;
+  color: var(--muted);
+}
+.tone-ok .status {
+  color: var(--signal);
+}
+.tone-wait .status {
+  color: var(--amber);
+}
+.tone-bad .status {
+  color: var(--rose);
+}
+.feed-actions {
+  display: flex;
+  gap: 6px;
+  flex: none;
+}
+.feed-detail {
+  display: grid;
+  gap: 10px;
+  margin: 0 0 14px 26px;
+  padding: 14px 16px;
+  border-radius: 10px;
+  background: var(--raised);
+  animation: open 0.18s var(--ease);
+}
+@keyframes open {
+  from {
+    opacity: 0;
+    translate: 0 -4px;
+  }
+}
+.feed-detail dl,
+.facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 6px 20px;
+  margin: 0;
+  font-size: 13px;
+}
+.feed-detail dt,
+.facts dt {
+  color: var(--muted);
+}
+.feed-detail dd,
+.facts dd {
+  margin: 0;
+  min-width: 0;
+}
+.note {
+  font-size: 13px;
+  color: var(--muted);
+}
+.note.warn {
+  color: var(--amber);
+}
+

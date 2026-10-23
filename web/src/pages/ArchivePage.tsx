@@ -1,12 +1,12 @@
 import {useEffect, useRef, useState} from "react";
-import {api, inboxAllows, type Conversation, type InboxSettings, type State} from "./api";
-import {ArchiveSettings} from "./ArchiveSettings";
-import {CaptureChecks} from "./CaptureChecks";
-import {HistorySync, importLabel, stateTone, type Archive} from "./HistorySync";
-import {Icon} from "./Icon";
-import {sortConversations} from "./conversationOrder";
-import {Avatar, Field, Group, Notice, StatusPill} from "./ui";
-import type {Workspace} from "./workspace";
+import {api, inboxAllows, type Conversation, type InboxSettings, type State} from "../lib/api";
+import {ArchiveSettings} from "../components/ArchiveSettings";
+import {CaptureChecks} from "../components/CaptureChecks";
+import {HistorySync, importLabel, stateTone, type Archive} from "../components/HistorySync";
+import {Icon} from "../components/Icon";
+import {sortConversations} from "../lib/conversationOrder";
+import {Avatar, Field, Group, Notice, StatusPill} from "../components/ui";
+import type {Workspace} from "../lib/workspace";
 type StorageStats = {original_bytes:number;original_files:number;database_bytes:number;export_bytes:number;temporary_bytes:number;total_bytes:number;messages:number;quota_bytes:number;measured_at:string};
 function formatBytes(value:number):string {
   if (!value) return "0 B";

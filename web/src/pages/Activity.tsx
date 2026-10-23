@@ -1,7 +1,7 @@
 import { useState } from "react";
-import { api, type Conversation, type Job } from "./api";
-import { Icon } from "./Icon";
-import { Segmented, timeAgo } from "./ui";
+import { api, type Conversation, type Job } from "../lib/api";
+import { Icon } from "../components/Icon";
+import { Segmented, timeAgo } from "../components/ui";
 
 const pendingStates = ["queued", "generating", "awaiting_approval"],
   completedStates = ["submitted", "delivered", "read", "reaction_confirmed"];

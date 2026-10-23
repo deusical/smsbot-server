@@ -1,6 +1,6 @@
-import {MessageActions} from "./MessageActions";
+import {MessageActions} from "../components/MessageActions";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { useViewedHistoryRefresh } from "./useViewedHistoryRefresh";
+import { useViewedHistoryRefresh } from "../lib/useViewedHistoryRefresh";
 import {
   useEffect,
   useLayoutEffect,
@@ -18,16 +18,16 @@ import {
   type Message,
   type State,
   type InboxSettings,
-} from "./api";
-import { Icon } from "./Icon";
-import { markSeen } from "./conversationOrder";
-import { Avatar } from "./ui";
+} from "../lib/api";
+import { Icon } from "../components/Icon";
+import { markSeen } from "../lib/conversationOrder";
+import { Avatar } from "../components/ui";
 import {
   MessageAttachment,
   PendingFile,
   SelectedAttachment,
   encodeFile,
-} from "./Attachments";
+} from "../components/Attachments";
 import {
   addPending,
   enqueue,
@@ -37,7 +37,7 @@ import {
   usePending,
   useSubmittedSignal,
   type Pending,
-} from "./pendingSends";
+} from "../lib/pendingSends";
 type Props = {
   conversation: Conversation;
   state: State | null;

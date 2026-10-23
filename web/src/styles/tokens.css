@@ -1,0 +1,60 @@
+/* SmsBot dashboard. Aubergine slate with a mint "bot voice"; the !command chip is the signature. */
+:root {
+  --display: "Bahnschrift", "DIN Alternate", "D-DIN", "Barlow",
+    "Segoe UI Variable Display", system-ui, sans-serif;
+  --body: "Segoe UI Variable Text", "Segoe UI", -apple-system,
+    BlinkMacSystemFont, system-ui, sans-serif;
+  --mono: "Cascadia Code", "SF Mono", ui-monospace, Consolas, monospace;
+  --r-panel: 14px;
+  --r-control: 9px;
+  --rail-w: 220px;
+  --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+
+  color-scheme: dark;
+  --bg: #17141f;
+  --rail: #121019;
+  --surface: #201c2b;
+  --raised: #2a2537;
+  --hover: #2f2a3e;
+  --line: #342e42;
+  --line-strong: #4a4160;
+  --text: #eeeaf6;
+  --muted: #a49cb5;
+  --faint: #716a85;
+  --signal: #7fe3d2;
+  --signal-ink: #0d2925;
+  --signal-soft: rgb(127 227 210 / 0.12);
+  --amber: #f2c46d;
+  --amber-soft: rgb(242 196 109 / 0.13);
+  --rose: #ff8196;
+  --rose-soft: rgb(255 129 150 / 0.12);
+  --violet: #bfaeff;
+  --violet-soft: rgb(191 174 255 / 0.13);
+  --bubble-in: #2c2739;
+  --shadow-pop: 0 18px 50px rgb(5 3 10 / 0.55);
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f5f3fa;
+  --rail: #ece8f4;
+  --surface: #ffffff;
+  --raised: #f4f1f9;
+  --hover: #ede9f5;
+  --line: #e2ddec;
+  --line-strong: #c9c0da;
+  --text: #1e1a29;
+  --muted: #625a74;
+  --faint: #978fa9;
+  --signal: #0e7c70;
+  --signal-ink: #ffffff;
+  --signal-soft: rgb(14 124 112 / 0.1);
+  --amber: #93640a;
+  --amber-soft: rgb(222 160 40 / 0.16);
+  --rose: #c0324f;
+  --rose-soft: rgb(192 50 79 / 0.09);
+  --violet: #6448d4;
+  --violet-soft: rgb(100 72 212 / 0.1);
+  --bubble-in: #efebf6;
+  --shadow-pop: 0 18px 50px rgb(40 26 70 / 0.16);
+}
+

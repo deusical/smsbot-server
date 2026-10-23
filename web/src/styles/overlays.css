@@ -1,0 +1,87 @@
+/* ---------- save bar, toasts, dialogs ---------- */
+.savebar {
+  position: fixed;
+  left: calc(50% + var(--rail-w) / 2);
+  bottom: 22px;
+  translate: -50% 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: calc(100vw - var(--rail-w) - 40px);
+  padding: 8px 8px 8px 18px;
+  border: 1px solid var(--line-strong);
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: var(--shadow-pop);
+  animation: rise 0.22s var(--ease);
+}
+@keyframes rise {
+  from {
+    opacity: 0;
+    translate: -50% 12px;
+  }
+}
+.savebar-text {
+  margin-right: 10px;
+  font-weight: 550;
+  min-width: 0;
+}
+.savebar-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--rose);
+  font-weight: 500;
+}
+.toasts {
+  position: fixed;
+  bottom: 22px;
+  right: 22px;
+  z-index: 60;
+  display: grid;
+  gap: 8px;
+  justify-items: end;
+}
+.toast {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: var(--text);
+  color: var(--bg);
+  font-weight: 550;
+  font-size: 13px;
+  box-shadow: var(--shadow-pop);
+  animation: open 0.2s var(--ease);
+}
+.modal {
+  width: min(420px, calc(100vw - 32px));
+  padding: 22px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow-pop);
+}
+.modal::backdrop {
+  background: rgb(10 6 18 / 0.55);
+  backdrop-filter: blur(3px);
+}
+.modal h2 {
+  font-size: 18px;
+  margin-bottom: 8px;
+}
+.modal p {
+  color: var(--muted);
+  font-size: 13.5px;
+  line-height: 1.55;
+}
+.modal .actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 20px;
+}
+

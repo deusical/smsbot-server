@@ -7,19 +7,19 @@ import {
   type Conversation,
   type Job,
   type InboxSettings as InboxConfig,
-} from "./api";
-import { ActivityFeed, ActivityPage } from "./Activity";
-import { CommandsPage } from "./Commands";
-import { Confirmation } from "./Confirmation";
-import { ArchivePage } from "./ArchivePage";
-import { ConversationsPage } from "./Conversations";
-import { clearSeen } from "./conversationOrder";
-import { clearPending, usePendingFollower } from "./pendingSends";
-import { Icon } from "./Icon";
-import { SettingsPage } from "./Settings";
-import { Avatar, Switch } from "./ui";
-import { useWorkspace } from "./workspace";
-import "./style.css";
+} from "./lib/api";
+import { ActivityFeed, ActivityPage } from "./pages/Activity";
+import { CommandsPage } from "./pages/Commands";
+import { Confirmation } from "./components/Confirmation";
+import { ArchivePage } from "./pages/ArchivePage";
+import { ConversationsPage } from "./pages/Conversations";
+import { clearSeen } from "./lib/conversationOrder";
+import { clearPending, usePendingFollower } from "./lib/pendingSends";
+import { Icon } from "./components/Icon";
+import { SettingsPage } from "./pages/Settings";
+import { Avatar, Switch } from "./components/ui";
+import { useWorkspace } from "./lib/workspace";
+import "./styles/index.css";
 
 const pages = [
   "Home",

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { api, type Conversation } from "./api";
+import { api, type Conversation } from "../lib/api";
 import { Field, Group, Notice, StatusPill, Switch } from "./ui";
 type Policy={enabled:boolean;max_file_mb:number;quota_mb:number};
 type Job={id:string;state:string;error?:string;scope:{plaintext?:boolean};counts:{messages:number;saved_files:number;missing_files:number;bytes:number}};

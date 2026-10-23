@@ -1,4 +1,4 @@
-import type {CaptureGap} from "./api";
+import type {CaptureGap} from "../lib/api";
 export function CaptureChecks({gaps, ready}: {gaps: CaptureGap[]; ready: boolean}) {
  if (!gaps.length) return null;
  return <div className="capture-checks">{gaps.map(g => <div key={g.conversation}>

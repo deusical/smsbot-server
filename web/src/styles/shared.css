@@ -1,0 +1,33 @@
+/* ---------- shared status pill, notices and key/value lists ---------- */
+.status-pill .state-dot { width: 7px; height: 7px; box-shadow: none; }
+.status-pill.tone-idle { background: var(--raised); color: var(--muted); }
+.status-pill.tone-ok { background: var(--signal-soft); color: var(--signal); }
+.status-pill.tone-ok .state-dot { background: var(--signal); }
+.status-pill.tone-busy { background: var(--violet-soft); color: var(--violet); }
+.status-pill.tone-busy .state-dot { background: var(--violet); animation: pulse-dot 1.4s ease-in-out infinite; }
+.status-pill.tone-wait { background: var(--amber-soft); color: var(--amber); }
+.status-pill.tone-wait .state-dot { background: var(--amber); }
+.status-pill.tone-bad { background: var(--rose-soft); color: var(--rose); }
+.status-pill.tone-bad .state-dot { background: var(--rose); }
+@keyframes pulse-dot { 50% { opacity: 0.35; } }
+.banner.notice-bad { background: var(--rose-soft); color: var(--rose); }
+.banner.notice-ok { background: var(--signal-soft); color: var(--signal); }
+.group .banner { margin-bottom: 0; }
+.field-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 16px; }
+.action-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.hint-line { font-size: 12.5px; line-height: 1.5; }
+.kv-list { display: grid; margin: 0; border: 1px solid var(--line); border-radius: var(--r-control); }
+.kv-list > div { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 16px; padding: 10px 14px; border-top: 1px solid var(--line); font-size: 13px; }
+.kv-list > div:first-child { border-top: 0; }
+.kv-list dt { color: var(--muted); }
+.kv-list dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+.progress-bar { position: relative; height: 6px; overflow: hidden; border-radius: 99px; background: var(--raised); }
+.progress-bar > span { position: absolute; inset: 0; border-radius: inherit; background: var(--signal); }
+.progress-bar.indeterminate > span { right: auto; width: 35%; background: linear-gradient(90deg, transparent, var(--violet), transparent); animation: progress-slide 1.6s var(--ease) infinite; }
+@keyframes progress-slide { from { translate: -100%; } to { translate: 290%; } }
+@media (prefers-reduced-motion: reduce) {
+  .progress-bar.indeterminate > span, .status-pill.tone-busy .state-dot { animation: none; }
+}
+.archive-page details > summary { cursor: pointer; font-weight: 550; }
+.details-body { display: grid; gap: 14px; padding-top: 14px; }
+

@@ -9,7 +9,7 @@ import {
   type ReactElement,
   type ReactNode,
 } from "react";
-import type { Model } from "./api";
+import type { Model } from "../lib/api";
 import { Icon } from "./Icon";
 
 export function Field({

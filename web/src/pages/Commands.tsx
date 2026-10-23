@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { api, ApiError, type Command, type Conversation } from "./api";
-import { GenerationEditor } from "./Generation";
-import { Icon } from "./Icon";
-import { Field, ModelPicker, modelName, Segmented, Switch } from "./ui";
-import { defaultGeneration, failure, type Workspace } from "./workspace";
+import { api, ApiError, type Command, type Conversation } from "../lib/api";
+import { GenerationEditor } from "../components/Generation";
+import { Icon } from "../components/Icon";
+import { Field, ModelPicker, modelName, Segmented, Switch } from "../components/ui";
+import { defaultGeneration, failure, type Workspace } from "../lib/workspace";
 
 const builtins = [
   { name: "ping", detail: "Check the bot is listening" },

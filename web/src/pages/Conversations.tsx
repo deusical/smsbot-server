@@ -5,12 +5,12 @@ import {
   type Conversation,
   type InboxSettings,
   type State,
-} from "./api";
+} from "../lib/api";
 import { ConversationHistory } from "./ConversationHistory";
-import { formatListTime, sortConversations, useSeen } from "./conversationOrder";
-import { useTyping } from "./typing";
-import { Icon } from "./Icon";
-import { Avatar, Segmented, Switch } from "./ui";
+import { formatListTime, sortConversations, useSeen } from "../lib/conversationOrder";
+import { useTyping } from "../lib/typing";
+import { Icon } from "../components/Icon";
+import { Avatar, Segmented, Switch } from "../components/ui";
 
 type Filter = "all" | "enrolled" | "available";
 export function ConversationsPage({

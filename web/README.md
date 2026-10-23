@@ -5,18 +5,15 @@ For what each page does, see the [user guide](../docs/USER_GUIDE.md).
 
 ## Layout
 
-| File | Purpose |
+| Path | Purpose |
 |---|---|
 | `src/main.tsx` | App shell: session, polling lanes, page routing |
-| `src/api.ts` | Typed `fetch` wrapper and API types |
-| `src/Conversations.tsx`, `ConversationHistory.tsx` | Conversation list and thread |
-| `src/conversationOrder.ts` | Ordering, relative times, in-memory seen state |
-| `src/pendingSends.ts` | In-memory pending messages and the job follower |
-| `src/typing.ts` | Typing indicator polling |
-| `src/ArchivePage.tsx`, `HistorySync.tsx`, `ArchiveSettings.tsx`, `CaptureChecks.tsx` | Archive page |
-| `src/Commands.tsx`, `Generation.tsx` | Command studio |
-| `src/Settings.tsx`, `Activity.tsx`, `workspace.ts` | Settings, activity feed, shared draft state |
-| `src/ui.tsx`, `Icon.tsx`, `style.css` | Shared components, icons and styles |
+| `src/pages/` | `Conversations`, `ConversationHistory` (list and thread), `ArchivePage`, `Commands`, `Settings`, `Activity` |
+| `src/components/` | Shared pieces: `ui`, `Icon`, `Confirmation`, `Attachments`, `MessageActions`, `Generation`, and the archive widgets `HistorySync`, `ArchiveSettings`, `CaptureChecks` |
+| `src/lib/` | No-UI code: `api` (typed `fetch` wrapper and API types), `workspace` (shared draft state), `conversationOrder`, `pendingSends`, `pendingActions`, `typing`, `useViewedHistoryRefresh` |
+| `src/styles/` | Stylesheet split by area; `index.css` imports the parts in cascade order, so keep that order |
+| `src/test/` | Vitest setup; unit tests sit next to their source files |
+| `tests/` | Playwright browser specs |
 
 ## Conventions
 
@@ -25,8 +22,9 @@ For what each page does, see the [user guide](../docs/USER_GUIDE.md).
 - Polling never overlaps, pauses while the tab is hidden, and discards results from a
   previous conversation or search. Enable/Pause applies the mutation response
   immediately so older polls cannot overwrite it.
-- The conversation list is refetched only when `conversations_revision` in state
-  changes (30-second fallback).
+- The conversation list is refetched when `conversations_revision` in state changes,
+  when the tab becomes visible again, and to complete a stale or partial page; there
+  is no timed refresh.
 - Commands, profiles, settings and inbox preferences share one draft that survives page
   changes; a save bar commits it.
 - The service worker caches only static files, never `/api/` responses.

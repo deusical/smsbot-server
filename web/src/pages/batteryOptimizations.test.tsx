@@ -1,9 +1,9 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Conversation, Message, State } from "./api";
+import type { Conversation, Message, State } from "../lib/api";
 import { ConversationHistory } from "./ConversationHistory";
-import { MessageActions } from "./MessageActions";
+import { MessageActions } from "../components/MessageActions";
 
 describe("MessageActions on-demand loading and error isolation", () => {
   const message: Message = {

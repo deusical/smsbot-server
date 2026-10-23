@@ -9,12 +9,12 @@ import {
   type Model,
   type Settings as BotSettings,
   type State,
-} from "./api";
-import { Confirmation } from "./Confirmation";
-import { GenerationEditor } from "./Generation";
-import { Icon } from "./Icon";
-import { Field, Group, ModelPicker, Segmented, Switch } from "./ui";
-import { defaultGeneration, normalize, type Workspace } from "./workspace";
+} from "../lib/api";
+import { Confirmation } from "../components/Confirmation";
+import { GenerationEditor } from "../components/Generation";
+import { Icon } from "../components/Icon";
+import { Field, Group, ModelPicker, Segmented, Switch } from "../components/ui";
+import { defaultGeneration, normalize, type Workspace } from "../lib/workspace";
 
 const sections = [
   { id: "models", label: "AI models", icon: "cpu" },

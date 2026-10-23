@@ -1,5 +1,5 @@
 import {useEffect, useRef, useState} from "react";
-import {api, type Conversation} from "./api";
+import {api, type Conversation} from "../lib/api";
 import {Field, Notice, StatusPill, type Tone} from "./ui";
 export type Archive = {conversation: Conversation; state: string; imported: number; since: string; last_sync: string; oldest: string; requested_at?: string; request_source?: string; checked?: number; pages?: number; updated?: number; scanned_through?: string; last_progress_at?: string; retry_at?: string; error?: string; recent_error?: string; recent_retry_at?: string; refresh_state?: string; refresh_checked_at?: string; refresh_error?: string};
 export function HistorySync({record, ready, onUpdate, onBusy}: {record: Archive; ready: boolean; onUpdate: (record: Archive) => void; onBusy: (busy: boolean) => void}) {

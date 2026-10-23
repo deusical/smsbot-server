@@ -1,9 +1,9 @@
 import "./messageActions.css";
 import {useEffect, useLayoutEffect, useRef, useState} from "react";
 import {createPortal} from "react-dom";
-import {api, ApiError, type Message, type MessageCapabilities} from "./api";
+import {api, ApiError, type Message, type MessageCapabilities} from "../lib/api";
 import {Icon} from "./Icon";
-import {actionKey, reactionEpoch, reactionAttempt, setReactionAttempt, useReactionAttempt, type ReactionAttempt} from "./pendingActions";
+import {actionKey, reactionEpoch, reactionAttempt, setReactionAttempt, useReactionAttempt, type ReactionAttempt} from "../lib/pendingActions";
 
 const commonEmoji = ["👍", "❤️", "😂", "😮", "😢", "😡"];
 const moreEmoji = ["👎", "😍", "🎉", "🙏", "🤔", "🥰", "👏", "🔥", "💯", "😊", "✅", "👀", "👍🏻", "👍🏼", "👍🏽", "👍🏾", "👍🏿", "🫶", "🤝", "👩‍💻", "👨‍👩‍👧", "🏳️‍🌈", "🇺🇸", "☕"];

@@ -1,0 +1,196 @@
+/* ---------- shell ---------- */
+.shell {
+  background: linear-gradient(
+    90deg,
+    var(--rail) calc(var(--rail-w) - 1px),
+    var(--line) 0 var(--rail-w),
+    transparent 0
+  );
+  display: grid;
+  grid-template-columns: var(--rail-w) minmax(0, 1fr);
+  min-height: 100vh;
+}
+.skip-link {
+  position: absolute;
+  left: -999px;
+  top: 8px;
+  z-index: 100;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--signal);
+  color: var(--signal-ink);
+}
+.skip-link:focus {
+  left: 8px;
+}
+.rail {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  padding: 18px 12px;
+  background: var(--rail);
+  border-right: 1px solid var(--line);
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 2px 8px;
+  font-family: var(--display);
+  font-weight: 600;
+  font-size: 18px;
+}
+.rail nav {
+  display: grid;
+  gap: 2px;
+}
+.rail nav button {
+  justify-content: flex-start;
+  gap: 11px;
+  height: 38px;
+  padding: 0 10px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13.5px;
+  font-weight: 500;
+}
+.rail nav button:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--text);
+}
+.rail nav button.selected {
+  background: var(--surface);
+  color: var(--text);
+}
+.rail nav button.selected svg {
+  color: var(--signal);
+}
+.nav-count {
+  margin-left: auto;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 99px;
+  display: grid;
+  place-items: center;
+  background: var(--amber);
+  color: #241a05;
+  font-size: 11px;
+  font-weight: 700;
+}
+.rail-foot {
+  margin-top: auto;
+  padding: 0 8px;
+}
+.link-state {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--faint);
+}
+.link-state.ready .dot {
+  background: var(--signal);
+}
+.link-state.down .dot {
+  background: var(--rose);
+}
+.workspace {
+  min-width: 0;
+  padding: 0 32px 120px;
+}
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 68px;
+  margin: 0 -32px 20px;
+  padding: 0 32px;
+  background: color-mix(in srgb, var(--bg) 86%, transparent);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid transparent;
+}
+.topbar h1 {
+  font-size: 22px;
+}
+.topbar-gap {
+  flex: 1;
+}
+
+/* power switch: the one bold control */
+.power {
+  gap: 10px;
+  height: 40px;
+  padding: 0 16px 0 6px;
+  border-radius: 99px;
+  font-family: var(--display);
+  font-size: 14px;
+  font-weight: 600;
+}
+.power-track {
+  position: relative;
+  width: 46px;
+  height: 28px;
+  border-radius: 99px;
+  background: var(--line-strong);
+  transition: background 0.2s var(--ease);
+}
+.power-knob {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--text);
+  transition: translate 0.22s var(--ease);
+}
+.power.on {
+  border-color: transparent;
+  background: var(--signal-soft);
+  color: var(--signal);
+}
+.power.on:hover:not(:disabled) {
+  background: var(--signal-soft);
+  border-color: var(--signal);
+}
+.power.on .power-track {
+  background: var(--signal);
+}
+.power.on .power-knob {
+  translate: 18px 0;
+  background: var(--signal-ink);
+}
+:root[data-theme="light"] .power.on .power-knob {
+  background: #fff;
+}
+.power-label {
+  min-width: 48px;
+  text-align: left;
+}
+
+.banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+  padding: 10px 14px;
+  border-radius: var(--r-control);
+  background: var(--amber-soft);
+  color: var(--amber);
+  font-size: 13px;
+}
+

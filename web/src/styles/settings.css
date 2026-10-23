@@ -1,0 +1,155 @@
+/* ---------- settings ---------- */
+.settings {
+  display: grid;
+  grid-template-columns: 210px minmax(0, 1fr);
+  gap: 24px;
+  align-items: start;
+}
+.settings-nav {
+  position: sticky;
+  top: 84px;
+  display: grid;
+  gap: 2px;
+}
+.settings-nav button {
+  justify-content: flex-start;
+  gap: 10px;
+  height: 36px;
+  padding: 0 10px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-weight: 500;
+}
+.settings-nav button:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--text);
+}
+.settings-nav button[aria-current="page"] {
+  background: var(--surface);
+  color: var(--text);
+}
+.settings-nav button[aria-current="page"] svg {
+  color: var(--signal);
+}
+.settings-nav .signout {
+  margin-top: 16px;
+  color: var(--faint);
+}
+.settings-body {
+  display: grid;
+  gap: 16px;
+  max-width: 820px;
+}
+.group {
+  display: grid;
+  gap: 18px;
+}
+.group .panel-head {
+  margin-bottom: 0;
+}
+.nested {
+  display: grid;
+  gap: 16px;
+  margin-left: 48px;
+  padding-left: 16px;
+  border-left: 2px solid var(--line);
+}
+.group form {
+  display: grid;
+  gap: 16px;
+}
+.group form.inline-form {
+  display: flex;
+}
+.inline-form {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+}
+.inline-form .field {
+  flex: 1;
+}
+.credential {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border-radius: 12px;
+  background: var(--signal-soft);
+}
+.credential > div:first-child {
+  display: grid;
+}
+.credential small {
+  color: var(--muted);
+}
+.credential-row {
+  display: flex;
+  gap: 8px;
+}
+.device-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.device-list li {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 52px;
+  border-top: 1px solid var(--line);
+}
+.device-list li.muted {
+  font-size: 13px;
+}
+.device-list button {
+  margin-left: auto;
+}
+.device-icon {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: var(--raised);
+  color: var(--muted);
+}
+.recipe-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.tile {
+  justify-content: stretch;
+  height: auto;
+  display: grid;
+  justify-items: start;
+  gap: 4px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--raised);
+  text-align: left;
+  white-space: normal;
+  font-weight: 400;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+.tile:hover {
+  border-color: var(--line-strong);
+}
+.tile:focus-within {
+  outline: 2px solid var(--signal);
+}
+.tile svg {
+  color: var(--signal);
+  margin-bottom: 6px;
+}
+.tile small {
+  color: var(--muted);
+}
+.tile.disabled {
+  opacity: 0.5;
+  pointer-events: none;
+}
+

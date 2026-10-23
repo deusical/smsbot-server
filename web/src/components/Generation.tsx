@@ -1,4 +1,4 @@
-import type { Generation, Model } from "./api";
+import type { Generation, Model } from "../lib/api";
 import { Field, Segmented } from "./ui";
 
 export function GenerationEditor({

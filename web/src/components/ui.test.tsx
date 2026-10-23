@@ -1,7 +1,7 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { expect, it, vi } from "vitest";
-import type { Model } from "./api";
+import type { Model } from "../lib/api";
 import { ModelPicker } from "./ui";
 
 const models: Model[] = ["Alpha", "Beta"].map(name => ({

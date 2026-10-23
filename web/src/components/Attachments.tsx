@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { Attachment } from "./api";
+import type { Attachment } from "../lib/api";
 import { Icon } from "./Icon";
 
 function fileSize(size: number) {

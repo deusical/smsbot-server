@@ -1,6 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
-import type { Configuration } from "../src/api";
+import type { Configuration } from "../src/lib/api";
 const initial: Configuration = {
   settings: {
     default_model: "fixture/model",
