@@ -1,6 +1,6 @@
 # Contributing
 
-Read AGENTS.md, README.md and docs/dev/ARCHITECTURE.md. Use focused feature branches and reviewed PRs, squash merging after required checks pass. Do not push or publish merely because a local feature is complete.
+Read README.md and docs/dev/ARCHITECTURE.md. Use focused feature branches and reviewed PRs, squash merging after required checks pass. Do not push or publish merely because a local feature is complete.
 
 Every slice includes implementation, synthetic tests, migration updates and relevant docs. Keep API additions backward compatible and update api/openapi.yaml. Credentials, real participants and real message content never enter source, tests, screenshots or PRs.
 
