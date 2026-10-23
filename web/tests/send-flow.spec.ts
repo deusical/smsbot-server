@@ -146,14 +146,20 @@ test("a send whose job never appears stops saying Sending and asks the owner to 
 });
 
 test("a pending send is still followed while another page is open", async ({page}) => {
+  await page.clock.install();
   const world = await prepare(page);
+  // Timers advance only when driven, so the follower cannot race the driven poll.
+  await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1000));
   await page.getByLabel("Message", {exact: true}).fill("Synthetic followed text");
   await page.getByRole("button", {name: "Send message", exact: true}).click();
   await expect.poll(() => world.composeCalls.length).toBe(1);
   await page.getByRole("button", {name: "Home", exact: true}).click();
   world.messages = [{id: "txn-9", direction: "outgoing", text: "Synthetic followed text", at: new Date().toISOString(), origin: "web", status: "submitted"}];
   world.job = job("submitted", {transaction_id: "txn-9"});
-  await page.waitForTimeout(2500);
+  // The follower polls the job while Home is open; run its turn instead of waiting.
+  const followed = page.waitForResponse(async response => new URL(response.url()).pathname === "/api/v1/activity" && (await response.text()).includes('"submitted"'));
+  await page.clock.runFor(1000);
+  await followed;
   await page.getByRole("button", {name: "Conversations", exact: true}).click();
   await page.locator(".conversation").getByRole("button", {name: /Send chat/}).click();
   await expect(page.locator(".bubble.outgoing").filter({hasText: "Synthetic followed text"})).toHaveCount(1);

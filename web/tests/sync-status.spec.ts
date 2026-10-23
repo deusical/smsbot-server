@@ -8,6 +8,7 @@ async function open(page: Page) {
  await page.locator(".conversation").filter({hasText:"Demo conversation"}).getByRole("button",{name:/Demo conversation/}).click();
 }
 test("saved import date, independent progress and gap repair status stay understandable",async({page})=>{
+ await page.clock.install();
  let gapState="queued",ready=true,reason="capture_delayed";
  let record={conversation:{id:"demo-chat"},state:"queued",since:"2026-07-16T07:00:00Z",requested_at:"2026-10-16T12:00:00Z",checked:0,pages:0,imported:0,updated:0,scanned_through:"",last_progress_at:"",last_sync:"2026-10-16T11:00:00Z",oldest:"",refresh_state:"checked_available",refresh_checked_at:"2026-10-16T12:00:00Z"};
  await page.route("**/api/v1/state",async route=>{
@@ -36,20 +37,33 @@ test("saved import date, independent progress and gap repair status stay underst
  await expect(page.getByText("Range to recheck:",{exact:false})).toBeVisible();
  await page.getByLabel("History from",{exact:true}).fill("2026-06-01");
  await expect(page.getByText("Unsaved date selection.",{exact:false})).toBeVisible();
- await page.waitForTimeout(3200);
+ // From here timers advance only when driven: each turn runs one archive and state poll.
+ await page.clock.pauseAt(await page.evaluate(()=>Date.now()+1000));
+ const turn=async()=>{
+  const polled=page.waitForResponse(response=>new URL(response.url()).pathname==="/api/v1/inbox/archive");
+  await page.clock.runFor(3000);
+  await polled;
+ };
+ // Run one archive poll that visibly changes progress, then confirm the draft survived it.
+ record={...record,state:"running",checked:37,pages:1};
+ await turn();
+ await expect(page.getByRole("status",{name:"Import progress"})).toContainText("37 messages checked");
  await expect(page.getByLabel("History from",{exact:true})).toHaveValue("2026-06-01");
  await page.getByRole("button",{name:"Import from selected date",exact:true}).click();
  await expect(page.getByText("Unsaved date selection.",{exact:false})).toHaveCount(0);
  record={...record,state:"running",checked:100,pages:2,updated:4,scanned_through:"2026-08-01T12:00:00Z",last_progress_at:"2026-10-16T12:10:00Z"};
  gapState="checking";
+ await turn();
  await expect(page.getByRole("status",{name:"Import progress"})).toContainText("100 messages checked2 pages0 newly saved4 updated");
  await expect(page.getByText("Checking available phone history for this range.",{exact:false})).toBeVisible();
  gapState="checked_available";
+ await turn();
  await expect(page.getByText("Available history in this range rechecked",{exact:false})).toBeVisible();
  await expect(page.getByText("Some messages may have been missed",{exact:false})).toHaveCount(0);
  await page.getByRole("button",{name:"Cancel history import",exact:true}).click();
  await expect(page.getByRole("status",{name:"Import progress"})).toContainText("Import cancelled");
  ready=false;gapState="queued";reason="phone_unavailable";
+ await turn();
  await expect(page.getByText("the phone was unavailable when a message update arrived",{exact:false})).toBeVisible();
  await expect(page.getByText("Waiting for phone connection and enabled conversation access;",{exact:false})).toBeVisible();
  await page.getByRole("button",{name:"Switch to dark theme"}).click();
