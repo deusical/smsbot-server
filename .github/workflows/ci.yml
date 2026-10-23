@@ -11,7 +11,8 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -22,7 +23,21 @@ jobs:
           node-version: '24'
           cache: npm
           cache-dependency-path: web/package-lock.json
-      - run: npm ci && npm run test:unit && npm run build && npm audit --omit=dev
+      - name: Install frontend dependencies
+        run: npm ci
+        timeout-minutes: 5
+        working-directory: web
+      - name: Frontend unit tests
+        run: npm run test:unit
+        timeout-minutes: 3
+        working-directory: web
+      - name: Build dashboard
+        run: npm run build
+        timeout-minutes: 3
+        working-directory: web
+      - name: Audit production frontend dependencies
+        run: npm audit --omit=dev
+        timeout-minutes: 3
         working-directory: web
       - run: node --test scripts/sync-web-assets.test.mjs
       - run: node scripts/sync-web-assets.mjs
@@ -37,7 +52,8 @@ jobs:
           compression-level: 1
   backend:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -51,16 +67,28 @@ jobs:
         with:
           name: fixture-build
       - run: cp -r web/dist/* internal/httpapi/assets/
-      - run: go test -race -count=1 ./...
-      - run: go vet ./...
+      - name: Backend race tests
+        run: go test -race -count=1 ./...
+        timeout-minutes: 8
+      - name: Go vet
+        run: go vet ./...
+        timeout-minutes: 3
       - name: gofmt
         run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
-      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
+      - name: Audit Go dependencies
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
+        timeout-minutes: 5
         env:
           GOTOOLCHAIN: go1.27.3
   browser:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    # Keep the image and compatibility check aligned with web/package-lock.json.
+    # The digest pins the published multi-platform v1.64.0-noble image.
+    container:
+      image: mcr.microsoft.com/playwright:v1.64.0-noble@sha256:06a9939e57531807f8d5fd76ce44b53165ffb7d7501d87ab10e285c20b1e971f
+      options: --ipc=host
     strategy:
       fail-fast: false
       matrix:
@@ -76,12 +104,21 @@ jobs:
         with:
           name: fixture-build
       - run: chmod +x bin/smsbot
-      - run: npm ci
+      - name: Install browser test dependencies
+        run: npm ci
+        timeout-minutes: 5
         working-directory: web
-      - run: npx playwright install --with-deps --only-shell chromium
+      - name: Verify browser image and fixture compatibility
+        run: |
+          test "$(node -p 'require("./package-lock.json").packages["node_modules/@playwright/test"].version')" = "1.64.0"
+          npx playwright --version
+          ../bin/smsbot --version
+        timeout-minutes: 1
         working-directory: web
       # Keep one worker per fixture database; shards run on separate runners.
-      - run: npm test -- --shard=${{ matrix.shard }}/2
+      - name: Browser tests
+        run: npm test -- --shard=${{ matrix.shard }}/2
+        timeout-minutes: 8
         working-directory: web
       - name: Preserve failed browser diagnostics
         if: failure()
@@ -95,7 +132,8 @@ jobs:
   service:
     if: always()
     needs: [build, backend, browser]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
     steps:
       - name: Require every offline check
         env:
