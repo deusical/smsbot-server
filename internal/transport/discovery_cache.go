@@ -3,18 +3,30 @@ package transport
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync"
 	"time"
 )
 
 type cachedConversationPage struct {
 	page ConversationPage
-	at   time.Time
+	at   time.Time // when the page was last known current
+	read time.Time // when the page was last read from the phone
 }
+
+// pageRecheckAfter bounds how long a page may be confirmed without being read:
+// changes that do not reorder the list (a rename or deletion further down)
+// are picked up within a day.
+const pageRecheckAfter = 24 * time.Hour
 
 // Pages that are not partial stay valid until the phone reports activity. Phone reads after
 // activity are spaced by listInvalidateGap; a page older than the latest
 // activity is returned marked stale within that gap so callers ask again.
+//
+// The list is ordered by recent activity, and activity only moves a
+// conversation to the front. So when a re-read page comes back identical to
+// its cached copy, with the same next cursor, every later page is unchanged
+// too: those are confirmed without asking the phone.
 type conversationPageCache struct {
 	mu         sync.Mutex
 	pages      map[string]cachedConversationPage
@@ -22,16 +34,25 @@ type conversationPageCache struct {
 	failures   map[string]time.Time
 	generation uint64
 	changedAt  time.Time
+	resetAt    time.Time // pages from before this must be read again before use
 }
 
 func cloneConversationPage(p ConversationPage) ConversationPage {
 	p.Conversations = append([]Conversation{}, p.Conversations...)
 	return p
 }
+
+// invalidate makes every page stale, so the next pass re-reads from the front.
+// The old pages stay only as the comparison that lets an unchanged tail be
+// confirmed.
 func (c *conversationPageCache) invalidate() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.pages = nil
+	now := time.Now()
+	if now.After(c.changedAt) {
+		c.changedAt = now
+	}
+	c.resetAt = now
 	c.failures = nil
 	c.generation++
 }
@@ -52,7 +73,7 @@ func (c *conversationPageCache) get(ctx context.Context, key string, fetch func(
 			c.mu.Unlock()
 			return ConversationPage{}, errors.New("discovery_unavailable")
 		}
-		if cached, ok := c.pages[key]; ok {
+		if cached, ok := c.pages[key]; ok && cached.at.After(c.resetAt) {
 			current := cached.at.After(c.changedAt)
 			// A partial page is never kept as complete: it is read again after
 			// partialRetryGap, or after listInvalidateGap once activity arrives.
@@ -118,7 +139,11 @@ func (c *conversationPageCache) get(ctx context.Context, key string, fetch func(
 					break
 				}
 			}
-			c.pages[key] = cachedConversationPage{cloneConversationPage(page), started}
+			old, had := c.pages[key]
+			c.pages[key] = cachedConversationPage{cloneConversationPage(page), started, started}
+			if had && samePage(old.page, page) {
+				c.confirmAfterLocked(page.NextCursor, started)
+			}
 		}
 		out := cloneConversationPage(page)
 		out.Stale = err == nil && !started.After(c.changedAt)
@@ -128,5 +153,22 @@ func (c *conversationPageCache) get(ctx context.Context, key string, fetch func(
 	}
 }
 
-// Preserve order and return a visibly partial page when one conversation has
-// vanished. Discovery never grants send or capture permissions.
+func samePage(a, b ConversationPage) bool {
+	return !a.Partial && !b.Partial && a.NextCursor == b.NextCursor && slices.Equal(a.Conversations, b.Conversations)
+}
+
+// confirmAfterLocked marks the cached pages following cursor current as of at,
+// stopping at a missing page or one not read from the phone recently.
+func (c *conversationPageCache) confirmAfterLocked(cursor string, at time.Time) {
+	for range len(c.pages) {
+		p, ok := c.pages[cursor]
+		if cursor == "" || !ok || p.page.Partial || time.Since(p.read) >= pageRecheckAfter {
+			return
+		}
+		if at.After(p.at) {
+			p.at = at
+			c.pages[cursor] = p
+		}
+		cursor = p.page.NextCursor
+	}
+}
