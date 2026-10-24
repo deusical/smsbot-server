@@ -16,19 +16,18 @@ func (e *Engine) ImportHistory(ctx context.Context, conv, cursor string) (map[st
 	if !ok {
 		return nil, errors.New("history_import_unavailable")
 	}
-	c, err := e.lookupConversation(ctx, conv)
-	if err != nil || c.Group || !c.Writable || !e.Store.Enrolled(conv, c.ParticipantID) {
-		return nil, errors.New("enrollment_required")
+	// Enrollment is this route's only grant; collection consent plays no part.
+	enrolled := historyAccess{
+		allows: func(c transport.Conversation) bool {
+			return !c.Group && c.Writable && e.Store.Enrolled(conv, c.ParticipantID)
+		},
+		denied: errors.New("enrollment_required"),
 	}
-	trustedPeer := c.ParticipantID
-	page, err := source.FetchHistory(ctx, conv, trustedPeer, cursor)
+	verified, page, _, err := e.readHistoryPage(ctx, source, conv, cursor, enrolled)
 	if err != nil {
 		return nil, err
 	}
-	verified, err := e.lookupConversation(ctx, conv)
-	if err != nil || verified.Group || !verified.Writable || verified.ParticipantID != trustedPeer {
-		return nil, errors.New("conversation_identity_changed")
-	}
+	trustedPeer := verified.ParticipantID
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if err = ctx.Err(); err != nil {
