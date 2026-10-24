@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"go.mau.fi/mautrix-gmessages/pkg/libgm/gmproto"
+	"google.golang.org/protobuf/proto"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -96,53 +97,6 @@ func TestConversationDetailsRejectsIncompleteIdentityAndFailure(t *testing.T) {
 	}
 }
 
-func TestCachedConversationDetailsReusedAndExpired(t *testing.T) {
-	g := NewGoogle(nil, "")
-	c := &gmproto.Conversation{
-		ConversationID:    "chat-1",
-		DefaultOutgoingID: "self-1",
-		Participants:      []*gmproto.Participant{{ID: &gmproto.SmallInfo{ParticipantID: "peer-1"}, IsVisible: true}},
-	}
-	g.cacheDetail(c)
-
-	// Fresh cached detail is returned
-	got := g.cachedDetail("chat-1")
-	if got == nil || got.GetConversationID() != "chat-1" {
-		t.Fatalf("expected cached detail for chat-1, got %v", got)
-	}
-
-	// Missing detail returns nil
-	if g.cachedDetail("unknown") != nil {
-		t.Fatal("expected nil for unknown conversation")
-	}
-
-	// Expired detail (> 10m) returns nil
-	g.mu.Lock()
-	g.conversationFetched["chat-1"] = time.Now().Add(-11 * time.Minute)
-	g.mu.Unlock()
-	if g.cachedDetail("chat-1") != nil {
-		t.Fatal("expected nil for expired conversation detail")
-	}
-
-	// Group conversation is cached and retrievable
-	group := &gmproto.Conversation{
-		ConversationID: "group-1",
-		IsGroupChat:    true,
-		Name:           "Family Group",
-	}
-	g.cacheDetail(group)
-	gotGroup := g.cachedDetail("group-1")
-	if gotGroup == nil || gotGroup.GetConversationID() != "group-1" {
-		t.Fatalf("expected cached detail for group-1, got %v", gotGroup)
-	}
-
-	// Invalidate identities clears both conversations and timestamps
-	g.invalidateIdentities()
-	if len(g.conversationFetched) != 0 || len(g.conversations) != 0 {
-		t.Fatal("invalidateIdentities did not clear cached details and timestamps")
-	}
-}
-
 func TestDiscoveryLookupReusesCache(t *testing.T) {
 	g := NewGoogle(nil, "")
 	c := &gmproto.Conversation{
@@ -177,5 +131,70 @@ func TestDiscoveryLookupReusesCache(t *testing.T) {
 	_, err = g.DiscoveryLookup(context.Background(), "missing")
 	if !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("expected ErrUnavailable for missing detail without phone, got %v", err)
+	}
+}
+
+func TestDiscoveryReuses317DetailsAcrossReconciliationWithoutPhone(t *testing.T) {
+	g := NewGoogle(nil, "")
+	ids := make([]string, 317)
+	for i := range ids {
+		id := fmt.Sprintf("synthetic-%d", i)
+		ids[i] = id
+		g.cacheDetail(&gmproto.Conversation{
+			ConversationID: id, DefaultOutgoingID: "self",
+			Participants: []*gmproto.Participant{{ID: &gmproto.SmallInfo{ParticipantID: "peer"}, IsVisible: true}},
+		})
+	}
+	for range 4 {
+		g.noteActivity() // Ordinary message activity must not discard details.
+		g.forceDiscoveryRefresh(time.Now().Add(time.Hour))
+		conversations, partial := discoveryConversations(context.Background(), ids, g.DiscoveryLookup)
+		if partial || len(conversations) != len(ids) {
+			t.Fatal("unchanged discovery required phone detail reads")
+		}
+	}
+	// Discovery hints cannot authorize a protected lookup without the phone.
+	if _, err := g.LookupConversation(context.Background(), ids[0]); !errors.Is(err, ErrUnavailable) {
+		t.Fatal("discovery hint bypassed live lookup")
+	}
+	if _, err := g.DiscoveryLookup(context.Background(), "new-conversation"); !errors.Is(err, ErrUnavailable) {
+		t.Fatal("unknown ID did not require live lookup")
+	}
+	g.invalidateIdentities()
+	if _, err := g.DiscoveryLookup(context.Background(), ids[0]); !errors.Is(err, ErrUnavailable) {
+		t.Fatal("connection invalidation retained discovery hints")
+	}
+}
+
+func TestDiscoveryInvalidatesOnlyChangedConversation(t *testing.T) {
+	g := NewGoogle(nil, "")
+	c := &gmproto.Conversation{
+		ConversationID: "changed", DefaultOutgoingID: "self",
+		Participants: []*gmproto.Participant{{ID: &gmproto.SmallInfo{ParticipantID: "peer"}, IsVisible: true}},
+	}
+	g.cacheDetail(c)
+	unrelated := proto.Clone(c).(*gmproto.Conversation)
+	unrelated.ConversationID = "unrelated"
+	g.cacheDetail(unrelated)
+	changed := proto.Clone(c).(*gmproto.Conversation)
+	changed.IsGroupChat = true
+	if !g.rememberConversationEvent(changed) {
+		t.Fatal("identity change did not require pause")
+	}
+	if g.discoveryDetail("changed") != nil || g.conversations["changed"] != c {
+		t.Fatal("identity change reused hint or replaced send baseline")
+	}
+	if _, err := g.DiscoveryLookup(context.Background(), "unrelated"); err != nil {
+		t.Fatal("unrelated conversation was invalidated", err)
+	}
+	// An ordinary conversation event updates display hints immediately.
+	unrelated = proto.Clone(unrelated).(*gmproto.Conversation)
+	unrelated.Name = "Synthetic new label"
+	if g.rememberConversationEvent(unrelated) {
+		t.Fatal("label update changed identity")
+	}
+	got, err := g.DiscoveryLookup(context.Background(), "unrelated")
+	if err != nil || got.Label != unrelated.Name {
+		t.Fatal("conversation update did not refresh display", err)
 	}
 }

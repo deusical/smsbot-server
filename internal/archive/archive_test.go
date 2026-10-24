@@ -321,6 +321,7 @@ type fileHost struct {
 	release        chan struct{}
 	revoked        bool
 	authorizations int
+	opens          int
 	mu             sync.Mutex
 }
 
@@ -337,6 +338,7 @@ func (h *fileHost) Authorize(ctx context.Context, c transport.Conversation) (int
 	return 1, nil
 }
 func (h *fileHost) Open(ctx context.Context, f media.File) (io.ReadCloser, error) {
+	h.opens++
 	if h.opened != nil {
 		close(h.opened)
 		select {

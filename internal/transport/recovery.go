@@ -277,7 +277,7 @@ func (g *Google) invalidateIdentities() {
 	g.listed = time.Time{}
 	g.list = nil
 	g.conversations = make(map[string]*gmproto.Conversation)
-	g.conversationFetched = make(map[string]time.Time)
+	g.discoveryDetails = nil
 	g.mu.Unlock()
 	g.listMu.Unlock()
 	g.discovery.invalidate()
