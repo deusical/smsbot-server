@@ -3,6 +3,7 @@ package transport
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -188,4 +189,126 @@ func TestDiscoveryCacheRetriesPartialPages(t *testing.T) {
 	if calls != 3 {
 		t.Fatal("activity on a partial page waited for the longer retry gap")
 	}
+}
+
+// pagedInbox serves a fixed chain of pages and counts phone reads.
+type pagedInbox struct {
+	pages map[string]ConversationPage
+	reads map[string]int
+}
+
+func newPagedInbox(n int) *pagedInbox {
+	b := &pagedInbox{pages: map[string]ConversationPage{}, reads: map[string]int{}}
+	for i := range n {
+		key, next := fmt.Sprint("p", i), fmt.Sprint("p", i+1)
+		if i == 0 {
+			key = ""
+		}
+		if i == n-1 {
+			next = ""
+		}
+		b.pages[key] = ConversationPage{Conversations: []Conversation{{ID: fmt.Sprint("c", i), LastMessageAt: "2026-10-01T00:00:00Z"}}, NextCursor: next}
+	}
+	return b
+}
+
+// pass walks the whole chain like a discovery pass and returns phone reads.
+func (b *pagedInbox) pass(t *testing.T, cache *conversationPageCache) int {
+	t.Helper()
+	before := 0
+	for _, n := range b.reads {
+		before += n
+	}
+	cursor := ""
+	for range len(b.pages) + 1 {
+		key := cursor
+		page, err := cache.get(context.Background(), key, func(context.Context) (ConversationPage, error) {
+			b.reads[key]++
+			return b.pages[key], nil
+		})
+		if err != nil || page.Stale {
+			t.Fatal("pass got an unusable page", err)
+		}
+		if cursor = page.NextCursor; cursor == "" {
+			break
+		}
+	}
+	after := 0
+	for _, n := range b.reads {
+		after += n
+	}
+	return after - before
+}
+
+func TestUnchangedPageConfirmsTheRestOfTheInbox(t *testing.T) {
+	var cache conversationPageCache
+	inbox := newPagedInbox(16)
+	if n := inbox.pass(t, &cache); n != 16 {
+		t.Fatalf("first pass read %d pages", n)
+	}
+	// Activity in the front conversation changes only the first page.
+	cache.markChanged(time.Now())
+	backdate(&cache, listInvalidateGap)
+	first := inbox.pages[""]
+	first.Conversations = []Conversation{{ID: "c0", LastMessageAt: "2026-10-24T00:00:00Z"}}
+	inbox.pages[""] = first
+	if n := inbox.pass(t, &cache); n != 2 {
+		t.Fatalf("want the changed page and one unchanged page, read %d", n)
+	}
+	// A reconnect makes everything stale; an unchanged front confirms the rest.
+	cache.invalidate()
+	backdate(&cache, listInvalidateGap)
+	if n := inbox.pass(t, &cache); n != 1 {
+		t.Fatalf("reconnect with no changes read %d pages", n)
+	}
+}
+
+func TestMovedConversationRereadsUpToWhereItLeft(t *testing.T) {
+	var cache conversationPageCache
+	inbox := newPagedInbox(8)
+	inbox.pass(t, &cache)
+	cache.markChanged(time.Now())
+	backdate(&cache, listInvalidateGap)
+	// A conversation from page 4 moves to the front: pages 0-4 shift.
+	for i := 0; i <= 4; i++ {
+		key := fmt.Sprint("p", i)
+		if i == 0 {
+			key = ""
+		}
+		p := inbox.pages[key]
+		p.Conversations = []Conversation{{ID: fmt.Sprint("shifted", i)}}
+		inbox.pages[key] = p
+	}
+	if n := inbox.pass(t, &cache); n != 6 {
+		t.Fatalf("want pages 0-5 read, read %d", n)
+	}
+}
+
+func TestPagesAreReadAtLeastDaily(t *testing.T) {
+	var cache conversationPageCache
+	inbox := newPagedInbox(4)
+	inbox.pass(t, &cache)
+	cache.mu.Lock()
+	for k, p := range cache.pages {
+		p.read = p.read.Add(-pageRecheckAfter)
+		cache.pages[k] = p
+	}
+	cache.mu.Unlock()
+	cache.invalidate()
+	backdate(&cache, listInvalidateGap)
+	if n := inbox.pass(t, &cache); n != 4 {
+		t.Fatalf("pages unread for a day were confirmed: read %d", n)
+	}
+}
+
+// backdate ages every cached page and the activity mark.
+func backdate(cache *conversationPageCache, by time.Duration) {
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	for k, p := range cache.pages {
+		p.at = p.at.Add(-by)
+		cache.pages[k] = p
+	}
+	cache.changedAt = cache.changedAt.Add(-by)
+	cache.resetAt = cache.resetAt.Add(-by)
 }

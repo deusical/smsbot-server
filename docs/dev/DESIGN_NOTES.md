@@ -336,6 +336,16 @@ from discovery. Inbox list records become the send baselines, as lookups did;
 sending, capture, history and original-file access still verify identity with a
 live lookup.
 
+Discovery pages are cached until phone activity or a reconnect makes them stale.
+The list is ordered by recent activity, and activity only moves a conversation to
+the front, so a pass re-reads pages from the front until one comes back identical
+to its cached copy (same conversations and next cursor); the pages after it are
+then confirmed without a phone read. A message in a recent conversation, or a
+reconnect, typically costs one or two list pages instead of all 16. Changes that do
+not reorder the list (a rename or deletion further down) are still picked up: a
+page is read from the phone at least once a day. A restart starts with an empty
+cache and reads every page once.
+
 Original-file policy blocks survive repeated observations of the same source and
 worker restarts. The worker checks a block locally before repair, authorization or
 download. Its persisted policy token records the limits and usage at the blocked
