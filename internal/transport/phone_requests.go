@@ -88,9 +88,23 @@ func (p *phoneRequests) snapshotKinds(now time.Time, kinds []string) map[string]
 	return out
 }
 
+// PhoneRequestLog is one adapter request to the phone, as written to the
+// service log. It holds only bounded labels: never conversation or message
+// identifiers, content, credentials or upstream errors.
+type PhoneRequestLog struct {
+	At      string `json:"at"`
+	Kind    string `json:"kind"`
+	Purpose string `json:"purpose"`
+}
+
 func (g *Google) countPhone(ctx context.Context, kind string) {
-	g.phoneRequests.add(kind, time.Now())
-	g.phonePurposes.add(phonePurpose(ctx), time.Now())
+	now := time.Now()
+	purpose := phonePurpose(ctx)
+	g.phoneRequests.add(kind, now)
+	g.phonePurposes.add(purpose, now)
+	if g.RequestLog != nil {
+		g.RequestLog(PhoneRequestLog{At: now.UTC().Format(time.RFC3339Nano), Kind: kind, Purpose: purpose})
+	}
 }
 
 func (g *Google) PhoneRequests() map[string]PhoneRequestCount {

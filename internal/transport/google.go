@@ -46,12 +46,14 @@ type Google struct {
 	started          time.Time
 	saveMu           sync.Mutex
 	Diagnostic       func(AuthDiagnostic)
-	discovery        conversationPageCache
-	phoneRequests    phoneRequests
-	phonePurposes    phoneRequests
-	relayMetrics     relayMetrics
-	activity         activityState
-	identityEpoch    atomic.Uint64
+	// RequestLog, when set, receives every request the adapter sends to the phone.
+	RequestLog    func(PhoneRequestLog)
+	discovery     conversationPageCache
+	phoneRequests phoneRequests
+	phonePurposes phoneRequests
+	relayMetrics  relayMetrics
+	activity      activityState
+	identityEpoch atomic.Uint64
 }
 
 func NewGoogle(v *vault.Vault, path string) *Google {

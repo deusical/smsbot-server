@@ -23,7 +23,9 @@ pair a real account.
   directory copied without its key cannot be read, and DPAPI-protected keys do not move
   between Windows accounts or to Linux.
 - **No secrets in logs.** Cookies, message bodies, contacts and raw upstream errors are
-  never logged; libgm logging is discarded. Pairing reads bounded input from stdin and
+  never logged; libgm logging is discarded. Each request to the phone is logged as one
+  line with only its time, kind and purpose (for example `conversation`, `discovery`),
+  never an identifier or content. Pairing reads bounded input from stdin and
   parses a copied cURL request without ever executing it.
 - **Owner only.** There is a single owner and no other credential type. Sign-in uses
   HttpOnly, SameSite=Strict cookies (12 hours, or until sign-out with **Keep me signed
