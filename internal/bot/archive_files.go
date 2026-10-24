@@ -79,7 +79,7 @@ func (e *Engine) LocalArchiveAttachment(conv, message, attachment string) (media
 // web uploads are excluded; replacement uses the normal consent/identity CAS.
 func (h archiveFileHost) Repair(ctx context.Context, c transport.Conversation, message string, file media.File) (bool, error) {
 	ctx = transport.WithPhonePurpose(ctx, "original")
-	if retry, _ := time.Parse(time.RFC3339Nano, file.RetryAt); h.e.now().Before(retry) {
+	if h.e.now().Before(file.OriginalRetryAt()) {
 		return false, nil
 	}
 	// Upgrade descriptors written before measured original sizes were tracked.
@@ -115,8 +115,7 @@ func (h archiveFileHost) Repair(ctx context.Context, c transport.Conversation, m
 		persist, persistCancel := context.WithTimeout(parent, 20*time.Second)
 		defer persistCancel()
 		failed := file
-		failed.Failures++
-		failed.RetryAt = h.e.now().Add(time.Duration(1<<min(failed.Failures, 8)) * 5 * time.Second).UTC().Format(time.RFC3339Nano)
+		failed.BackoffOriginal(h.e.now())
 		failed.ArchiveState = "failed"
 		failed.ArchiveError = "original_unavailable"
 		if persistErr := h.CommitFile(persist, c, revision, message, file, failed); persistErr != nil {

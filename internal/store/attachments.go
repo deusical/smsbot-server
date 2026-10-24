@@ -55,6 +55,7 @@ func (s *Store) saveAttachments(tx *sql.Tx, id string, files []media.File) error
 					files[i].ArchiveState = old.ArchiveState
 					files[i].ArchiveError = old.ArchiveError
 					files[i].RetryPolicy = old.RetryPolicy
+					files[i].RetryBackoffVersion = old.RetryBackoffVersion
 				}
 				if old.MessageID != "" && !old.SizeUnverified && old.Size > 0 && SameFileSource(old, files[i]) {
 					// A completed original read measured these bytes; an upstream
