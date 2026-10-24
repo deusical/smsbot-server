@@ -83,7 +83,10 @@ leave memory off. Model profiles have their own tab.
 Fixed replies can use `{input}`. AI commands send the input and any context you opted into
 to the provider selected by the model. Approvals and queued plans expire after two
 minutes. Requests are counted in rolling-hour and daily limits (manual messages count);
-quiet hours withhold requests instead of deferring them. The daily spend control is a
+quiet hours withhold requests instead of deferring them. With **Commands from your phone**
+on (Settings > Limits & quiet hours), commands you send yourself in a conversation with
+bot replies on run too, whether typed on your phone or in Conversations, and the reply
+goes to that conversation. The daily spend control is a
 conservative reported-spend threshold, not a billing guarantee; unknown pricing blocks
 further AI use once it is on.
 
@@ -121,7 +124,7 @@ messages. Importing and viewing history never run old commands.
 |---|---|
 | AI models | Default model (star favorites in the picker), per-model tuning, catalog refresh |
 | Providers | OpenRouter key and an OpenAI-compatible URL and key (write-only) |
-| Limits & quiet hours | Hourly and daily limits, spend threshold, quiet hours, reply length |
+| Limits & quiet hours | Hourly and daily limits, spend threshold, quiet hours, reply length, commands from your phone |
 | Messages & privacy | Collection, scope, older history, automatic replies, read receipts, attachment limits, retention, memory window |
 | Devices | Phone connection details, **Sign out everywhere** |
 | Import & export | Recipes: share commands, profiles and settings as a file (never keys) |

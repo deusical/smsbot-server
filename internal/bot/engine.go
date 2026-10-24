@@ -179,14 +179,37 @@ func (e *Engine) Accept(ctx context.Context, m transport.Incoming) (bool, error)
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	age := e.now().Sub(m.At)
-	if len(m.Attachments) > 0 || m.ID == "" || m.Outgoing || m.Historical || age > 2*time.Minute || age < -5*time.Second || len(m.Text) > 12000 {
+	if len(m.Attachments) > 0 || m.ID == "" || m.Historical || age > 2*time.Minute || age < -5*time.Second || len(m.Text) > 12000 {
 		return false, nil
 	}
 	paused, err := e.Store.Paused()
 	if err != nil {
 		return false, err
 	}
-	if paused || !e.Transport.Ready() || !e.Store.Enrolled(m.ConversationID, m.ParticipantID) {
+	if paused || !e.Transport.Ready() {
+		return false, nil
+	}
+	cfg, err := e.Configuration()
+	if err != nil {
+		return false, err
+	}
+	// The owner's own messages carry the owner's participant, so the
+	// enrolled peer stands in for every identity check that follows.
+	peer := m.ParticipantID
+	if m.Outgoing {
+		if !cfg.Settings.OwnerCommands {
+			return false, nil
+		}
+		var ok bool
+		if peer, ok = e.Store.EnrolledParticipant(m.ConversationID); !ok {
+			return false, nil
+		}
+		ours, err := e.Store.SentByBot(m.ConversationID, m.TransactionID, m.Text)
+		if err != nil || ours {
+			return false, err
+		}
+	}
+	if !e.Store.Enrolled(m.ConversationID, peer) {
 		return false, nil
 	}
 	inbox, err := e.Collection.Settings()
@@ -196,12 +219,8 @@ func (e *Engine) Accept(ctx context.Context, m transport.Incoming) (bool, error)
 	if !inbox.AutomaticReplies {
 		return false, nil
 	}
-	valid, err := e.validConversation(ctx, m.ConversationID, m.ParticipantID)
+	valid, err := e.validConversation(ctx, m.ConversationID, peer)
 	if err != nil || !valid {
-		return false, err
-	}
-	cfg, err := e.Configuration()
-	if err != nil {
 		return false, err
 	}
 	if quiet(cfg.Settings, e.now()) {
@@ -227,7 +246,7 @@ func (e *Engine) Accept(ctx context.Context, m transport.Incoming) (bool, error)
 	if err != nil || !limitOK {
 		return false, err
 	}
-	p := store.Plan{Participant: m.ParticipantID, MaxChars: cfg.Settings.MaxChars}
+	p := store.Plan{Participant: peer, MaxChars: cfg.Settings.MaxChars, Owner: m.Outgoing}
 	switch name {
 	case "ping":
 		if input != "" {
@@ -308,6 +327,15 @@ func (e *Engine) Accept(ctx context.Context, m transport.Incoming) (bool, error)
 	if err != nil || !accepted {
 		return accepted, err
 	}
+	if m.Outgoing {
+		// The phone's copy of the owner's message is usually saved already,
+		// under the dashboard send when it came from there.
+		known, err := e.Store.MessageKnown(m.ConversationID, m.ID, "outgoing", m.TransactionID)
+		if err != nil || known {
+			return true, err
+		}
+		return true, e.Store.SaveMessage(id, m.ConversationID, "outgoing", text)
+	}
 	return true, e.Store.SaveMessage(id, m.ConversationID, "incoming", text)
 }
 func memoryScope(conv, command, model string) string {
@@ -355,6 +383,9 @@ func (e *Engine) check(ctx context.Context, j store.Job, p store.Plan) (Configur
 		}
 	} else if !e.Store.Enrolled(j.ConversationID, p.Participant) {
 		return cfg, "unenrolled", nil
+	}
+	if p.Owner && !cfg.Settings.OwnerCommands {
+		return cfg, "owner_commands_disabled", nil
 	}
 	valid, err := e.validConversation(ctx, j.ConversationID, p.Participant)
 	if err != nil {

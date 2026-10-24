@@ -39,7 +39,10 @@ pair a real account.
 - **Participant rules.** Enrollment and collection use protocol participant IDs, not
   names. Groups, stale or historical data, outgoing echoes and incomplete attachments
   never run commands, and file-bearing messages never run commands even through a
-  caption.
+  caption. With **Commands from your phone** on, a command you send yourself, from the
+  phone or the dashboard, runs only in a conversation with bot replies on, under the
+  same checks; the bot's own replies (matched by transaction, or by text against its
+  latest replies) and repeat status reports of one message never run commands.
 - **Files.** Previews and downloads recheck consent and exact conversation identity.
   Only allowlisted image, audio and video types render inline; other files download
   with a sandbox policy.

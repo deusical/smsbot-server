@@ -20,7 +20,7 @@ func (e *Engine) Ingest(ctx context.Context, m transport.Incoming) (bool, error)
 	}
 
 	e.Collection.QueueObservation(m)
-	accepted, err := e.Accept(ctx, m)
+	accepted, err := e.Accept(ctx, e.commandSighting(m))
 	if accepted && err == nil {
 		err = e.Store.PublishCommandMessage(store.Hash(m.ConversationID + "\x00" + m.ID))
 	}

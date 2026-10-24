@@ -54,6 +54,8 @@ type Plan struct {
 	MaxChars        int             `json:"max_chars,omitempty"`
 	Manual          bool            `json:"manual,omitempty"`
 	InboxOwnerOnly  bool            `json:"inbox_owner_only,omitempty"`
+	// Owner marks a command the owner sent from their own phone.
+	Owner bool `json:"owner,omitempty"`
 }
 
 func ID() string {

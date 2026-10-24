@@ -321,7 +321,7 @@ export function Group({
   title: string;
   description?: ReactNode;
   aside?: ReactNode;
-  children: ReactNode;
+  children?: ReactNode;
   className?: string;
 }) {
   return (
