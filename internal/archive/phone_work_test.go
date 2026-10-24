@@ -149,7 +149,7 @@ func TestLegacyRepeatedFailuresSkipPhoneUntilCooldownOrSourceChange(t *testing.T
 func TestObservedModernFailureKeepsRetryVersionAndEventuallyRetries(t *testing.T) {
 	s, manager := setup(t)
 	file := media.File{Info: media.Info{ID: "part", Size: 5, ArchiveState: "failed"}, RemoteID: "source", Failures: 14}
-	file.BackoffOriginal(time.Now().Add(-25 * time.Hour))
+	Backoff(&file, time.Now().Add(-25*time.Hour))
 	seed(t, s, []media.File{file})
 	observed := file
 	observed.RetryAt, observed.ArchiveState, observed.Failures, observed.RetryBackoffVersion = "", "", 0, 0

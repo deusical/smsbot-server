@@ -45,29 +45,7 @@ func (s *Store) saveAttachments(tx *sql.Tx, id string, files []media.File) error
 			}
 		}
 		for i := range files {
-			for _, old := range existing {
-				// Repeated observations preserve both timed failures and policy
-				// blocks (which deliberately have no retry deadline).
-				// A changed source remains immediately eligible.
-				if SameFileSource(old, files[i]) && (old.RetryAt != "" || old.ArchiveState == "policy_limited") && files[i].RetryAt == "" {
-					files[i].RetryAt = old.RetryAt
-					files[i].Failures = old.Failures
-					files[i].ArchiveState = old.ArchiveState
-					files[i].ArchiveError = old.ArchiveError
-					files[i].RetryPolicy = old.RetryPolicy
-					files[i].RetryBackoffVersion = old.RetryBackoffVersion
-				}
-				if old.MessageID != "" && !old.SizeUnverified && old.Size > 0 && SameFileSource(old, files[i]) {
-					// A completed original read measured these bytes; an upstream
-					// snapshot may still carry an earlier, smaller reported size.
-					files[i].Size = old.Size
-					files[i].SizeUnverified = false
-				}
-				if old.BlobID != "" && (SameFileSource(old, files[i]) || (old.RemoteID != "" && old.RemoteID == files[i].RemoteID && bytes.Equal(old.Key, files[i].Key))) {
-					files[i] = old
-					break
-				}
-			}
+			files[i] = mergeObserved(existing, files[i])
 		}
 	} else if err != sql.ErrNoRows {
 		return err
@@ -179,6 +157,35 @@ func (s *Store) attachmentRecords(ctx context.Context, query string, args ...any
 	}
 	return out, rows.Err()
 }
+
+// mergeObserved is the one rule for a file the phone reports again. Locally
+// learned state about the same source survives: timed failures and quota
+// blocks with their retry schedule (blocks deliberately have no deadline), and
+// the size a completed original read measured, since an upstream snapshot may
+// still report an earlier, smaller size. A saved original replaces the
+// observation outright. A changed source arrives fresh and is eligible at once.
+func mergeObserved(existing []media.File, observed media.File) media.File {
+	for _, old := range existing {
+		same := SameFileSource(old, observed)
+		if same && (old.RetryAt != "" || old.ArchiveState == "policy_limited") && observed.RetryAt == "" {
+			observed.RetryAt = old.RetryAt
+			observed.Failures = old.Failures
+			observed.ArchiveState = old.ArchiveState
+			observed.ArchiveError = old.ArchiveError
+			observed.RetryPolicy = old.RetryPolicy
+			observed.RetryBackoffVersion = old.RetryBackoffVersion
+		}
+		if same && old.MessageID != "" && !old.SizeUnverified && old.Size > 0 {
+			observed.Size = old.Size
+			observed.SizeUnverified = false
+		}
+		if old.BlobID != "" && (same || (old.RemoteID != "" && old.RemoteID == observed.RemoteID && bytes.Equal(old.Key, observed.Key))) {
+			return old
+		}
+	}
+	return observed
+}
+
 func SameFileSource(a, b media.File) bool {
 	return a.ID == b.ID && a.RemoteID == b.RemoteID && bytes.Equal(a.Key, b.Key) && bytes.Equal(a.Data, b.Data) && a.MessageID == b.MessageID && a.ActionID == b.ActionID && a.ConversationID == b.ConversationID && a.Timestamp == b.Timestamp && bytes.Equal(a.PreviewData, b.PreviewData)
 }

@@ -39,6 +39,13 @@ type FileHost interface {
 	Open(context.Context, media.File) (io.ReadCloser, error)
 	CommitFile(context.Context, transport.Conversation, int64, string, media.File, media.File) error
 }
+
+// FileRepairer is an optional FileHost ability: it upgrades legacy descriptors
+// (old previews, unmeasured sizes) before a file is considered for download.
+// It reports whether it changed the file, which ends the turn.
+type FileRepairer interface {
+	Repair(context.Context, transport.Conversation, string, media.File) (bool, error)
+}
 type Service struct {
 	focusKey     string
 	focusCursor  string
@@ -161,8 +168,7 @@ func (s *Service) Tick(ctx context.Context) {
 			}
 		}
 	}
-	var policyUsed int64
-	var usageRead bool
+	var used usageReading
 	for _, record := range records {
 		if ctx.Err() != nil {
 			return
@@ -180,32 +186,22 @@ func (s *Service) Tick(ctx context.Context) {
 			if ctx.Err() != nil {
 				return
 			}
-			if time.Now().Before(file.OriginalRetryAt()) {
+			// Repair can authorize or refresh against the phone, so local
+			// eligibility comes first.
+			allowed, err := s.phoneWorkAllowed(file, time.Now(), policy, &used)
+			if err != nil {
+				return
+			}
+			if !allowed {
 				continue
 			}
-			// Repair can authorize or refresh against the phone. A blocked
-			// source must pass local eligibility before any of that work.
-			if file.ArchiveState == "policy_limited" {
-				if !usageRead {
-					policyUsed, err = s.usage()
-					if err != nil {
-						return
-					}
-					usageRead = true
-				}
-				if !policyCanRetry(file.RetryPolicy, policy, policyUsed) {
-					continue
-				}
-			}
-			if repairer, ok := s.Host.(interface {
-				Repair(context.Context, transport.Conversation, string, media.File) (bool, error)
-			}); ok {
+			if repairer, ok := s.Host.(FileRepairer); ok {
 				repaired, err := repairer.Repair(ctx, a.Conversation, record.Message, file)
 				if repaired || err != nil {
 					return
 				}
 			}
-			if file.BlobID != "" || (file.ArchiveState == "unavailable" && file.RemoteID == "" && len(file.Data) == 0 && file.ActionID == "") {
+			if !needsDownload(file) {
 				continue
 			}
 			call, cancel := context.WithTimeout(ctx, 90*time.Second)
@@ -334,6 +330,39 @@ func policyCapacity(p Policy, used int64) int64 {
 	return limit
 }
 
+// usageReading measures stored originals at most once per turn.
+type usageReading struct {
+	read  bool
+	bytes int64
+}
+
+// phoneWorkAllowed is the original-file eligibility policy. It consults only
+// local state: a failure still cooling down, or a quota block whose limiting
+// capacity has not improved, causes no repair, authorization or download.
+// Changed sources arrive without this state and are eligible at once.
+func (s *Service) phoneWorkAllowed(f media.File, now time.Time, p Policy, used *usageReading) (bool, error) {
+	if now.Before(RetryAt(f)) {
+		return false, nil
+	}
+	if f.ArchiveState != "policy_limited" {
+		return true, nil
+	}
+	if !used.read {
+		n, err := s.usage()
+		if err != nil {
+			return false, err
+		}
+		used.read, used.bytes = true, n
+	}
+	return policyCanRetry(f.RetryPolicy, p, used.bytes), nil
+}
+
+// needsDownload reports that no original is saved and a source remains to read.
+func needsDownload(f media.File) bool {
+	noSource := f.ArchiveState == "unavailable" && f.RemoteID == "" && len(f.Data) == 0 && f.ActionID == ""
+	return f.BlobID == "" && !noSource
+}
+
 func policyCanRetry(token string, p Policy, used int64) bool {
 	parts := strings.Split(token, ":")
 	if len(parts) != 3 {
@@ -350,7 +379,7 @@ func (s *Service) ingest(ctx context.Context, c transport.Conversation, revision
 	updated := file
 	updated.ArchiveState = "failed"
 	updated.ArchiveError = "download_failed"
-	updated.BackoffOriginal(time.Now())
+	Backoff(&updated, time.Now())
 	limit := p.MaxFileMiB << 20
 	fail := func() {
 		if ctx.Err() == nil {
