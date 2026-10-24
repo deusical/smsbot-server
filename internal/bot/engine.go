@@ -204,7 +204,7 @@ func (e *Engine) Accept(ctx context.Context, m transport.Incoming) (bool, error)
 		if peer, ok = e.Store.EnrolledParticipant(m.ConversationID); !ok {
 			return false, nil
 		}
-		ours, err := e.Store.SentByService(m.ConversationID, m.TransactionID, m.Text)
+		ours, err := e.Store.SentByBot(m.ConversationID, m.TransactionID, m.Text)
 		if err != nil || ours {
 			return false, err
 		}
@@ -327,11 +327,16 @@ func (e *Engine) Accept(ctx context.Context, m transport.Incoming) (bool, error)
 	if err != nil || !accepted {
 		return accepted, err
 	}
-	direction := "incoming"
 	if m.Outgoing {
-		direction = "outgoing"
+		// The phone's copy of the owner's message is usually saved already,
+		// under the dashboard send when it came from there.
+		known, err := e.Store.MessageKnown(m.ConversationID, m.ID, "outgoing", m.TransactionID)
+		if err != nil || known {
+			return true, err
+		}
+		return true, e.Store.SaveMessage(id, m.ConversationID, "outgoing", text)
 	}
-	return true, e.Store.SaveMessage(id, m.ConversationID, direction, text)
+	return true, e.Store.SaveMessage(id, m.ConversationID, "incoming", text)
 }
 func memoryScope(conv, command, model string) string {
 	return store.Hash(conv) + ":" + store.Hash(command+"\x00"+model)

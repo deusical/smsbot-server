@@ -157,3 +157,61 @@ func TestTurningOwnerCommandsOffStopsQueuedReplies(t *testing.T) {
 		t.Fatalf("sent after the setting was turned off: %+v", jobs)
 	}
 }
+
+// A command typed in the dashboard runs once the phone reports it sent, like
+// one typed on the phone, without a second archived copy; the bot's reply to
+// it does not run again.
+func TestDashboardSendRunsAsOwnerCommand(t *testing.T) {
+	e, f := setup(t)
+	arm(t, e)
+	enableInbox(t, e)
+	allowOwnerCommands(t, e, true)
+	if _, err := e.ComposeInbox(context.Background(), "demo-chat", "!echo", "synthetic-request"); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Dispatch(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var txn string
+	for id := range f.Sent {
+		txn = id
+	}
+	echo := ownerCommand("!echo")
+	echo.ID, echo.TransactionID = "phone-copy-of-dashboard-send", txn
+	if ok, err := e.Receive(context.Background(), echo); !ok || err != nil {
+		t.Fatalf("dashboard command not run: accepted=%t error=%v", ok, err)
+	}
+	if err := e.Dispatch(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var reply string
+	for id, text := range f.Sent {
+		if id != txn {
+			reply = id
+			if text != "!ping" {
+				t.Fatal("unexpected reply")
+			}
+		}
+	}
+	if reply == "" {
+		t.Fatal("no reply to the dashboard command")
+	}
+	again := ownerCommand("!ping")
+	again.ID, again.TransactionID = "phone-copy-of-reply", reply
+	if ok, err := e.Receive(context.Background(), again); ok || err != nil {
+		t.Fatalf("answered own reply: accepted=%t error=%v", ok, err)
+	}
+	page, err := e.Store.OwnerMessagePage("demo-chat", "", "", 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commands := 0
+	for _, m := range page.Messages {
+		if m.Text == "!echo" {
+			commands++
+		}
+	}
+	if commands != 1 {
+		t.Fatalf("dashboard command archived %d times", commands)
+	}
+}

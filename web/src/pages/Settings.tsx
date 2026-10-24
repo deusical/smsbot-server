@@ -495,7 +495,7 @@ function LimitsSection({ workspace }: SectionProps) {
       </Group>
       <Group
         title="Commands from your phone"
-        description="Run commands by texting them yourself in a conversation with bot replies on. The reply goes to that conversation, so the other person sees both. Limits and quiet hours still apply."
+        description="Run commands you send yourself, from your phone or from Conversations, in a conversation with bot replies on. The reply goes to that conversation, so the other person sees both. Limits and quiet hours still apply."
         aside={
           <Switch
             label="Commands from your phone"

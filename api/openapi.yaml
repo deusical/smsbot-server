@@ -1369,8 +1369,8 @@ components:
         quiet_enabled: *id001
         owner_commands:
           type: boolean
-          description: Also run commands the owner sends from their own phone
-            in conversations with bot replies on. Off when absent.
+          description: Also run commands the owner sends, from their phone or
+            the dashboard, in conversations with bot replies on. Off when absent.
         timezone: *id002
         favorites:
           type: array

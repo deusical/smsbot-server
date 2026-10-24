@@ -170,7 +170,7 @@ func (e *Engine) ComposeInboxFiles(ctx context.Context, conv, text, requestID st
 // status change, and only the first report may start an owner command.
 func (e *Engine) commandSighting(m transport.Incoming) transport.Incoming {
 	if m.Outgoing && m.ID != "" && !m.Historical && strings.HasPrefix(strings.TrimSpace(m.Text), "!") {
-		first, err := e.Store.FirstObservation(m.ConversationID, m.ID)
+		first, err := e.Store.FirstSighting(m.ConversationID, m.ID)
 		m.Historical = err != nil || !first
 	}
 	return m

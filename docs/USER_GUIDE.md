@@ -84,8 +84,9 @@ Fixed replies can use `{input}`. AI commands send the input and any context you 
 to the provider selected by the model. Approvals and queued plans expire after two
 minutes. Requests are counted in rolling-hour and daily limits (manual messages count);
 quiet hours withhold requests instead of deferring them. With **Commands from your phone**
-on (Settings > Limits & quiet hours), commands you text yourself in a conversation with
-bot replies on run too, and the reply goes to that conversation. The daily spend control is a
+on (Settings > Limits & quiet hours), commands you send yourself in a conversation with
+bot replies on run too, whether typed on your phone or in Conversations, and the reply
+goes to that conversation. The daily spend control is a
 conservative reported-spend threshold, not a billing guarantee; unknown pricing blocks
 further AI use once it is on.
 
