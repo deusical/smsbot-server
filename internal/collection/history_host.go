@@ -394,3 +394,32 @@ func (h HistoryHost) DiscoveryPending() bool {
 	cursor, err := h.svc.Store.GetSecretSetting("archive_discovery", "archive-discovery")
 	return err == nil && len(cursor) > 0
 }
+
+// MissedSince reports when live capture may have missed messages. Token 0 is
+// the service start: nothing was received while it was down, so the newest
+// saved message bounds what arrived. Later tokens follow the transport's
+// finished connection outages.
+func (h HistoryHost) MissedSince(token uint64) (time.Time, uint64, bool) {
+	var latest uint64
+	reporter, reports := h.svc.Transport.(transport.OutageReporter)
+	if reports {
+		_, latest, _ = reporter.OutagesSince(0)
+	}
+	if token == 0 {
+		newest, err := h.svc.Store.LatestMessageTimes(context.Background())
+		var since time.Time
+		if err == nil {
+			for _, at := range newest {
+				if t, err := time.Parse(time.RFC3339Nano, at); err == nil && t.After(since) {
+					since = t
+				}
+			}
+		}
+		return since, latest + 1, !since.IsZero()
+	}
+	if !reports {
+		return time.Time{}, token, false
+	}
+	since, latest, missed := reporter.OutagesSince(token - 1)
+	return since, latest + 1, missed
+}

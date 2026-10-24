@@ -47,7 +47,10 @@ type Google struct {
 	saveMu           sync.Mutex
 	Diagnostic       func(AuthDiagnostic)
 	// RequestLog, when set, receives every request the adapter sends to the phone.
-	RequestLog    func(PhoneRequestLog)
+	RequestLog func(PhoneRequestLog)
+	// Reconnected, when set, runs after a connection outage ends (see OutagesSince).
+	Reconnected   func()
+	outages       outageLog
 	discovery     conversationPageCache
 	phoneRequests phoneRequests
 	phonePurposes phoneRequests

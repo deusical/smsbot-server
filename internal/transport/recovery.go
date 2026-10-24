@@ -103,6 +103,7 @@ func (g *Google) noteFailure(reason string, hard bool) {
 	g.healthFailure.Store(true)
 	g.ready.Store(false)
 	r.mu.Unlock()
+	g.outages.begin(time.Now())
 	g.wakeRecovery(false)
 }
 func (g *Google) wakeRecovery(recovered bool) {

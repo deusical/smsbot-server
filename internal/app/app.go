@@ -45,6 +45,10 @@ func New(s *store.Store, t transport.Transport, archiveRoot string) *Service {
 	e := bot.New(s, t, c, control)
 	c.History = history.New(s, c.HistoryHost())
 	c.Archive = archive.New(s, archiveRoot, c.FileHost())
+	// A finished connection outage wakes history at once to catch up.
+	if g, ok := t.(*transport.Google); ok {
+		g.Reconnected = c.History.Wake
+	}
 	// Cross-service reactions are explicit here rather than discovered.
 	c.SettingsSaved = e.CollectionSettingsSaved
 	c.MessageRetentionDays = func() (int, error) {

@@ -274,6 +274,17 @@ promise to recheck every conversation every 15 minutes. Push capture and viewed-
 refreshes remain immediate. Unfinished recent scans continue at the active cadence;
 future retry deadlines sleep until eligible. The fallback/rotation hint persists
 in encrypted settings; the durable LastSync still covers the disconnected interval.
+
+Messages that arrive while live capture is not receiving events are caught up
+promptly rather than waiting for the slow fallback rotation. The transport records
+each connection outage (readiness lost, or an event-queue overflow) once the
+connection is verified again, and wakes the history worker. The service start counts
+as an outage beginning at the newest saved message. The worker then runs a discovery
+pass at once (list pages only; cached details are reused), and every allowed
+conversation whose phone-reported last activity is at or after the outage start gets
+a recent scan that pages back to 30 minutes before it, extending any scan already in
+progress. Conversations with no activity since cost nothing. The window stays open
+until a discovery pass that started after the outage completes.
 Exact before/after page identity checks, consent and generation checks remain live.
 
 The conversation list is read from the phone when the phone reports activity,
