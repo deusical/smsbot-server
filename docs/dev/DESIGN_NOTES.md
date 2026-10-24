@@ -259,6 +259,11 @@ Unknown scope is explicitly unverified and cannot be automatically declared repa
 ## Phone wake budget
 
 Phone RPCs can activate Messages, but request counts are not physical wake counts.
+Besides the in-memory counters in `/state` (totals since start and the last hour),
+every adapter request is written to the service log as
+`Phone request: {"at":…,"kind":…,"purpose":…}`, so traffic can be reviewed after the
+fact and across restarts (for example with `journalctl --user -u smsbot | grep
+'Phone request'`). The line carries no identifiers or content.
 History lanes have independent deadlines. A queued import advances from its saved
 checkpoint even if discovery fails; it does not accelerate unrelated recent checks.
 Automatic imports rotate by stable conversation ID, independent of discovery-page

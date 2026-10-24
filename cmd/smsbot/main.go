@@ -408,6 +408,14 @@ func (o *options) serve(s *store.Store, v *vault.Vault, sessionPath string) erro
 				fmt.Fprintln(os.Stderr, "Authentication:", string(b))
 			}
 		}
+		// One line per phone request (kind and purpose only), so phone wake-ups
+		// can be reviewed later, across restarts.
+		google.RequestLog = func(r transport.PhoneRequestLog) {
+			b, err := json.Marshal(r)
+			if err == nil {
+				fmt.Fprintln(os.Stderr, "Phone request:", string(b))
+			}
+		}
 		if e = google.Connect(ctx); e != nil {
 			return e
 		}

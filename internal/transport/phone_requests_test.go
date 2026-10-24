@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"context"
 	"testing"
 	"time"
 )
@@ -45,5 +46,18 @@ func TestPhoneRequestCountsSurviveAClockBefore1970(t *testing.T) {
 	p.add(phoneList, before)
 	if got := p.snapshot(before)[phoneList]; got != (PhoneRequestCount{Total: 1, LastHour: 1}) {
 		t.Fatalf("counts %+v", got)
+	}
+}
+
+func TestEveryPhoneRequestIsLoggedWithLabelsOnly(t *testing.T) {
+	var logged []PhoneRequestLog
+	g := &Google{RequestLog: func(r PhoneRequestLog) { logged = append(logged, r) }}
+	g.countPhone(WithPhonePurpose(context.Background(), "discovery"), phoneLookup)
+	g.countPhone(context.Background(), phoneList)
+	if len(logged) != 2 || logged[0].Kind != "conversation" || logged[0].Purpose != "discovery" || logged[1].Purpose != "other" || logged[0].At == "" {
+		t.Fatalf("unexpected log: %+v", logged)
+	}
+	if g.PhoneRequests()["conversation"].Total != 1 {
+		t.Fatal("logging replaced counting")
 	}
 }
