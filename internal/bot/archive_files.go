@@ -3,6 +3,7 @@ package bot
 import (
 	"context"
 	"errors"
+	"github.com/deusical/smsbot-server/internal/archive"
 	"github.com/deusical/smsbot-server/internal/media"
 	"github.com/deusical/smsbot-server/internal/transport"
 	"io"
@@ -79,7 +80,7 @@ func (e *Engine) LocalArchiveAttachment(conv, message, attachment string) (media
 // web uploads are excluded; replacement uses the normal consent/identity CAS.
 func (h archiveFileHost) Repair(ctx context.Context, c transport.Conversation, message string, file media.File) (bool, error) {
 	ctx = transport.WithPhonePurpose(ctx, "original")
-	if h.e.now().Before(file.OriginalRetryAt()) {
+	if h.e.now().Before(archive.RetryAt(file)) {
 		return false, nil
 	}
 	// Upgrade descriptors written before measured original sizes were tracked.
@@ -115,7 +116,7 @@ func (h archiveFileHost) Repair(ctx context.Context, c transport.Conversation, m
 		persist, persistCancel := context.WithTimeout(parent, 20*time.Second)
 		defer persistCancel()
 		failed := file
-		failed.BackoffOriginal(h.e.now())
+		archive.Backoff(&failed, h.e.now())
 		failed.ArchiveState = "failed"
 		failed.ArchiveError = "original_unavailable"
 		if persistErr := h.CommitFile(persist, c, revision, message, file, failed); persistErr != nil {

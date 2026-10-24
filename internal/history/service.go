@@ -170,38 +170,34 @@ func (s *Service) nextInterval() time.Duration {
 	if !s.nextFallback.IsZero() {
 		consider(s.nextFallback)
 	}
-	if checker, ok := s.Host.(interface{ NextGapAttempt() (time.Time, bool) }); ok {
-		if at, pending := checker.NextGapAttempt(); pending {
+	if gaps, ok := s.Host.(GapSchedule); ok {
+		if at, pending := gaps.NextGapAttempt(); pending {
 			consider(at)
 		}
-	} else if checker, ok := s.Host.(interface{ HasPendingGap() bool }); ok && checker.HasPendingGap() {
-		consider(now)
 	}
 	archives, err := s.Store.Archives()
 	if err != nil {
 		return idleInterval
 	}
-	for _, a := range archives {
-		if _, err := s.Host.Policy(a.Conversation); err != nil {
-			continue
-		}
-		if activeState(a.RefreshState) {
-			consider(parseTime(a.RefreshRetryAt))
-		}
-		if activeState(a.State) {
-			consider(parseTime(a.RetryAt))
-		}
-		if a.RecentStarted != "" || a.RecentRetryAt != "" {
-			consider(parseTime(a.RecentRetryAt))
-		}
+	for _, at := range pendingDeadlines(archives, s.allowed) {
+		consider(at)
 	}
 	return max(activeInterval, next.Sub(now))
+}
+
+// allowed reports whether a record is an individual conversation the owner
+// currently permits collection for. Policy is a local check, never a phone call.
+func (s *Service) allowed(a store.Archive) bool {
+	if !eligibleArchive(a) {
+		return false
+	}
+	_, err := s.Host.Policy(a.Conversation)
+	return err == nil
 }
 func activeState(state string) bool {
 	return state == "queued" || state == "running" || state == "retrying"
 }
-func parseTime(value string) time.Time   { at, _ := time.Parse(time.RFC3339Nano, value); return at }
-func (s *Service) due(value string) bool { return !s.now().Before(parseTime(value)) }
+func parseTime(value string) time.Time { at, _ := time.Parse(time.RFC3339Nano, value); return at }
 
 func (s *Service) Run(ctx context.Context) {
 	timer := time.NewTimer(0)
@@ -253,23 +249,7 @@ func (s *Service) Tick(ctx context.Context) {
 		return
 	}
 	// Owner views and explicit imports keep independent, bounded opportunities.
-	var focus, manual *store.Archive
-	for i := range archives {
-		a := &archives[i]
-		if !eligibleArchive(*a) {
-			continue
-		}
-		if _, err := s.Host.Policy(a.Conversation); err != nil {
-			continue
-		}
-		if activeState(a.RefreshState) && s.due(a.RefreshRetryAt) && (focus == nil || a.FocusAt > focus.FocusAt) {
-			focus = a
-		}
-		explicit := isExplicitArchive(*a)
-		if explicit && activeState(a.State) && s.due(a.RetryAt) && (manual == nil || a.LastAttemptAt < manual.LastAttemptAt || (a.LastAttemptAt == manual.LastAttemptAt && a.Conversation.ID < manual.Conversation.ID)) {
-			manual = a
-		}
-	}
+	focus, manual := selectPriority(s.now(), archives, s.allowed)
 	if focus != nil {
 		if p, err := s.Host.Policy(focus.Conversation); err == nil {
 			_ = s.viewStep(ctx, *focus, p)
@@ -280,7 +260,7 @@ func (s *Service) Tick(ctx context.Context) {
 			_ = s.importStep(ctx, *manual, p, true)
 		}
 	}
-	if repair, ok := s.Host.(interface{ RepairCaptureGap(context.Context) error }); ok {
+	if repair, ok := s.Host.(GapRepairer); ok {
 		_ = repair.RepairCaptureGap(transport.WithPhonePurpose(ctx, "gap"))
 	}
 	// Saved jobs must advance even when discovery is unavailable. Discovery has
@@ -293,7 +273,7 @@ func (s *Service) Tick(ctx context.Context) {
 		if err != nil {
 			s.nextDiscovery = s.now().Add(30 * time.Second)
 		} else {
-			if paged, ok := s.Host.(interface{ DiscoveryPending() bool }); ok && paged.DiscoveryPending() {
+			if paged, ok := s.Host.(DiscoveryPager); ok && paged.DiscoveryPending() {
 				s.nextDiscovery = s.now().Add(activeInterval)
 			}
 			for _, c := range list {
@@ -321,45 +301,23 @@ func (s *Service) Tick(ctx context.Context) {
 		s.nextFallback = s.now().Add(idleInterval)
 	}
 	fallback := !s.now().Before(s.nextFallback)
-	start := sort.Search(len(archives), func(i int) bool { return archives[i].Conversation.ID > s.fallbackAfter })
-	for n := 0; n < len(archives); n++ {
-		a := archives[(start+n)%len(archives)]
-		if !eligibleArchive(a) || !s.due(a.RecentRetryAt) {
-			continue
-		}
-		if a.RecentStarted == "" && a.RecentRetryAt == "" && !fallback {
-			continue
-		}
-		p, err := s.Host.Policy(a.Conversation)
-		if err != nil {
-			continue
-		}
-		s.fallbackAfter = a.Conversation.ID
-		if fallback {
-			s.nextFallback = s.now().Add(idleInterval)
-		}
-		if err := s.recentStep(ctx, a, p); err != nil {
-			return
-		}
-		break
-	}
 	if fallback {
 		s.nextFallback = s.now().Add(idleInterval)
 	}
-	start = sort.Search(len(archives), func(i int) bool { return archives[i].Conversation.ID > s.backgroundAfter })
-	for n := 0; n < len(archives); n++ {
-		a := archives[(start+n)%len(archives)]
-		explicit := isExplicitArchive(a)
-		if explicit || !eligibleArchive(a) || !activeState(a.State) || !s.due(a.RetryAt) {
-			continue
+	if a, ok := rotate(archives, s.fallbackAfter, func(a store.Archive) bool { return wantsRecent(s.now(), a, fallback) && s.allowed(a) }); ok {
+		s.fallbackAfter = a.Conversation.ID
+		if p, err := s.Host.Policy(a.Conversation); err == nil {
+			if err := s.recentStep(ctx, a, p); err != nil {
+				// A failing phone gets no further reads this turn.
+				return
+			}
 		}
-		p, err := s.Host.Policy(a.Conversation)
-		if err != nil {
-			continue
-		}
+	}
+	if a, ok := rotate(archives, s.backgroundAfter, func(a store.Archive) bool { return wantsBackground(s.now(), a) && s.allowed(a) }); ok {
 		s.backgroundAfter = a.Conversation.ID
-		_ = s.importStep(ctx, a, p, false)
-		break
+		if p, err := s.Host.Policy(a.Conversation); err == nil {
+			_ = s.importStep(ctx, a, p, false)
+		}
 	}
 }
 func isExplicitArchive(a store.Archive) bool {

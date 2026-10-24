@@ -158,8 +158,6 @@ func (e *Engine) CaptureGapStatus() ([]store.CaptureGap, bool) {
 	return gaps, unknown
 }
 
-func (h archiveHost) HasPendingGap() bool { _, pending := h.NextGapAttempt(); return pending }
-
 // NextGapAttempt exposes retry eligibility, not merely a visible warning.
 func (h archiveHost) NextGapAttempt() (time.Time, bool) {
 	e := h.e

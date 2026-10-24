@@ -1,7 +1,8 @@
-package media
+package archive
 
 import (
 	"encoding/json"
+	"github.com/deusical/smsbot-server/internal/media"
 	"testing"
 	"time"
 )
@@ -15,25 +16,25 @@ func TestOriginalFailureCooldownAndLegacyDeadlines(t *testing.T) {
 		{1, 10 * time.Second}, {8, 1280 * time.Second}, {9, 2560 * time.Second},
 		{14, 81920 * time.Second}, {15, 24 * time.Hour}, {180, 24 * time.Hour},
 	} {
-		if got := OriginalRetryDelay(tc.failures); got != tc.delay {
+		if got := RetryDelay(tc.failures); got != tc.delay {
 			t.Fatalf("failures=%d delay=%v want=%v", tc.failures, got, tc.delay)
 		}
 	}
-	legacy := File{Info: Info{ArchiveState: "failed"}, Failures: 180, RetryAt: now.Add(1280 * time.Second).Format(time.RFC3339Nano)}
-	if !legacy.OriginalRetryAt().Equal(now.Add(24 * time.Hour)) {
+	legacy := media.File{Info: media.Info{ArchiveState: "failed"}, Failures: 180, RetryAt: now.Add(1280 * time.Second).Format(time.RFC3339Nano)}
+	if !RetryAt(legacy).Equal(now.Add(24 * time.Hour)) {
 		t.Fatal("legacy failures still use the old capped deadline")
 	}
-	modern := File{Info: Info{ArchiveState: "failed"}, Failures: 179}
-	modern.BackoffOriginal(now)
-	if modern.RetryBackoffVersion != 1 || !modern.OriginalRetryAt().Equal(now.Add(24*time.Hour)) {
+	modern := media.File{Info: media.Info{ArchiveState: "failed"}, Failures: 179}
+	Backoff(&modern, now)
+	if modern.RetryBackoffVersion != 1 || !RetryAt(modern).Equal(now.Add(24*time.Hour)) {
 		t.Fatal("new backoff was extended twice")
 	}
 	encoded, err := json.Marshal(modern)
-	var restored File
-	if err != nil || json.Unmarshal(encoded, &restored) != nil || !restored.OriginalRetryAt().Equal(now.Add(24*time.Hour)) {
+	var restored media.File
+	if err != nil || json.Unmarshal(encoded, &restored) != nil || !RetryAt(restored).Equal(now.Add(24*time.Hour)) {
 		t.Fatal("persisted retry schedule changed after reload")
 	}
-	if (File{Failures: 180}).OriginalRetryAt() != (time.Time{}) {
+	if RetryAt(media.File{Failures: 180}) != (time.Time{}) {
 		t.Fatal("missing retry timestamp blocked a source")
 	}
 }
