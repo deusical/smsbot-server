@@ -270,6 +270,7 @@ func (g *Google) finishRecovery(result recoveryResult, now time.Time) (recovered
 	r.next = time.Time{}
 	return true, false
 }
+
 // invalidateIdentities makes every authorizing path verify identity live
 // again after a connection gap. Discovery hints survive: they only list
 // conversations, never authorize, and individual conversation updates still
