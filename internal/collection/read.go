@@ -1,4 +1,4 @@
-package bot
+package collection
 
 import (
 	"context"
@@ -33,11 +33,11 @@ func (t *readThrottle) allow(conv string, now time.Time) bool {
 // ReadReceipts reports whether viewed conversations are marked read on the
 // phone. It is on unless the owner turned it off; old settings without the
 // field keep the default.
-func (s InboxSettings) ReadReceipts() bool { return s.MarkRead == nil || *s.MarkRead }
+func (s Settings) ReadReceipts() bool { return s.MarkRead == nil || *s.MarkRead }
 
 // AllowsID is the identity-free check used for ephemeral hints such as typing:
 // collection must be on and the conversation selected (or all individuals).
-func (s InboxSettings) AllowsID(conv string) bool {
+func (s Settings) AllowsID(conv string) bool {
 	if !s.Enabled {
 		return false
 	}
@@ -54,20 +54,20 @@ func (s InboxSettings) AllowsID(conv string) bool {
 
 // MarkConversationRead marks an individual conversation read on the phone when
 // the owner has looked at it. Like history reads it needs collection access and
-// an exact participant match, runs outside the engine lock, and never sends a
+// an exact participant match, runs outside the control lock, and never sends a
 // message, changes Live/Pause or runs a command.
-func (e *Engine) MarkConversationRead(ctx context.Context, conv string, through time.Time) error {
+func (svc *Service) MarkConversationRead(ctx context.Context, conv string, through time.Time) error {
 	ctx = transport.WithPhonePurpose(ctx, "read")
-	marker, ok := e.Transport.(transport.ReadMarker)
+	marker, ok := svc.Transport.(transport.ReadMarker)
 	if !ok {
 		return errors.New("read_unavailable")
 	}
-	if through.IsZero() || through.After(e.now().Add(5*time.Minute)) {
+	if through.IsZero() || through.After(svc.now().Add(5*time.Minute)) {
 		return errors.New("invalid_time")
 	}
-	e.mu.Lock()
-	s, err := e.InboxSettings()
-	e.mu.Unlock()
+	svc.mu.Lock()
+	s, err := svc.Settings()
+	svc.mu.Unlock()
 	if err != nil {
 		return err
 	}
@@ -76,26 +76,26 @@ func (e *Engine) MarkConversationRead(ctx context.Context, conv string, through 
 	}
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	c, err := e.lookupConversation(ctx, conv)
+	c, err := svc.lookup(ctx, conv)
 	if err != nil {
 		return err
 	}
 	if !s.Allows(c) {
 		return errors.New("inbox_access_disabled")
 	}
-	if a, archiveErr := e.Store.Archive(conv); archiveErr == nil && a.Conversation.ParticipantID != c.ParticipantID {
+	if a, archiveErr := svc.Store.Archive(conv); archiveErr == nil && a.Conversation.ParticipantID != c.ParticipantID {
 		return errors.New("archive_identity_changed")
 	}
-	e.mu.Lock()
-	current, err := e.InboxSettings()
-	e.mu.Unlock()
+	svc.mu.Lock()
+	current, err := svc.Settings()
+	svc.mu.Unlock()
 	if err != nil {
 		return err
 	}
 	if current.Revision != s.Revision || !current.Enabled || !current.ReadReceipts() || !current.Allows(c) {
 		return errors.New("inbox_access_disabled")
 	}
-	if !e.reads.allow(conv, e.now()) {
+	if !svc.reads.allow(conv, svc.now()) {
 		return nil
 	}
 	return marker.MarkRead(ctx, conv, c.ParticipantID, through)
@@ -103,14 +103,14 @@ func (e *Engine) MarkConversationRead(ctx context.Context, conv string, through 
 
 // TypingConversations lists conversations the other participant is typing in,
 // limited to those the owner has opted to see.
-func (e *Engine) TypingConversations() []string {
-	reporter, ok := e.Transport.(transport.TypingReporter)
+func (svc *Service) TypingConversations() []string {
+	reporter, ok := svc.Transport.(transport.TypingReporter)
 	if !ok {
 		return []string{}
 	}
-	e.mu.Lock()
-	s, err := e.InboxSettings()
-	e.mu.Unlock()
+	svc.mu.Lock()
+	s, err := svc.Settings()
+	svc.mu.Unlock()
 	out := []string{}
 	if err != nil || !s.Enabled {
 		return out
@@ -125,12 +125,12 @@ func (e *Engine) TypingConversations() []string {
 
 // ConversationRevision changes whenever the phone reports activity or a message
 // is saved, letting the dashboard refetch its list only when something changed.
-func (e *Engine) ConversationRevision() string {
+func (svc *Service) ConversationRevision() string {
 	var phone uint64
-	if reporter, ok := e.Transport.(transport.ActivityReporter); ok {
+	if reporter, ok := svc.Transport.(transport.ActivityReporter); ok {
 		phone = reporter.ActivityRevision()
 	}
-	return formatRevision(phone, e.Store.ChangeSequence())
+	return formatRevision(phone, svc.Store.ChangeSequence())
 }
 
 func formatRevision(phone, saved uint64) string {

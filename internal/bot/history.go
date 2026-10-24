@@ -3,6 +3,7 @@ package bot
 import (
 	"context"
 	"errors"
+	"github.com/deusical/smsbot-server/internal/history"
 	"github.com/deusical/smsbot-server/internal/transport"
 	"time"
 )
@@ -17,13 +18,13 @@ func (e *Engine) ImportHistory(ctx context.Context, conv, cursor string) (map[st
 		return nil, errors.New("history_import_unavailable")
 	}
 	// Enrollment is this route's only grant; collection consent plays no part.
-	enrolled := historyAccess{
-		allows: func(c transport.Conversation) bool {
+	enrolled := history.Access{
+		Allows: func(c transport.Conversation) bool {
 			return !c.Group && c.Writable && e.Store.Enrolled(conv, c.ParticipantID)
 		},
-		denied: errors.New("enrollment_required"),
+		Denied: errors.New("enrollment_required"),
 	}
-	verified, page, _, err := e.readHistoryPage(ctx, source, conv, cursor, enrolled)
+	verified, page, _, err := history.ReadPage(ctx, e.Transport, e.Store, source, conv, cursor, enrolled)
 	if err != nil {
 		return nil, err
 	}

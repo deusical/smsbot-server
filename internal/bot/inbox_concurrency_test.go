@@ -3,6 +3,7 @@ package bot
 import (
 	"context"
 	"errors"
+	"github.com/deusical/smsbot-server/internal/collection"
 	"github.com/deusical/smsbot-server/internal/store"
 	"github.com/deusical/smsbot-server/internal/transport"
 	"sync"
@@ -50,7 +51,7 @@ func TestSettingsValidationDoesNotBlockPauseOrOverwriteNewRevision(t *testing.T)
 	entered := make(chan struct{})
 	release := make(chan struct{})
 	var once sync.Once
-	e.Transport = &lookupTransport{f, func(ctx context.Context, id string) (transport.Conversation, error) {
+	useTransport(e, &lookupTransport{f, func(ctx context.Context, id string) (transport.Conversation, error) {
 		once.Do(func() { close(entered) })
 		select {
 		case <-ctx.Done():
@@ -58,18 +59,18 @@ func TestSettingsValidationDoesNotBlockPauseOrOverwriteNewRevision(t *testing.T)
 		case <-release:
 			return fixtureConversation(ctx, id)
 		}
-	}}
-	s, _ := e.InboxSettings()
+	}})
+	s, _ := e.Collection.Settings()
 	s.Enabled = true
 	s.Scope = "selected"
-	s.Conversations = []InboxBinding{{"demo-chat", "demo-peer"}}
+	s.Conversations = []collection.Binding{{Conversation: "demo-chat", Participant: "demo-peer"}}
 	done := make(chan error, 1)
-	go func() { done <- e.SetInboxSettings(context.Background(), s) }()
+	go func() { done <- e.Collection.SetSettings(context.Background(), s) }()
 	<-entered
 	assertPauseResponsive(t, e)
-	newer, _ := e.InboxSettings()
+	newer, _ := e.Collection.Settings()
 	newer.Enabled = false
-	if err := e.SetInboxSettings(context.Background(), newer); err != nil {
+	if err := e.Collection.SetSettings(context.Background(), newer); err != nil {
 		t.Fatal(err)
 	}
 	close(release)
@@ -80,7 +81,7 @@ func TestSettingsValidationDoesNotBlockPauseOrOverwriteNewRevision(t *testing.T)
 func TestSettingsValidationHasOneOverallDeadline(t *testing.T) {
 	e, f := setup(t)
 	var deadlines []time.Time
-	e.Transport = &lookupTransport{f, func(ctx context.Context, id string) (transport.Conversation, error) {
+	useTransport(e, &lookupTransport{f, func(ctx context.Context, id string) (transport.Conversation, error) {
 		d, ok := ctx.Deadline()
 		if !ok {
 			t.Fatal("unbounded lookup")
@@ -88,12 +89,12 @@ func TestSettingsValidationHasOneOverallDeadline(t *testing.T) {
 		deadlines = append(deadlines, d)
 		time.Sleep(30 * time.Millisecond)
 		return fixtureConversation(ctx, id)
-	}}
-	s, _ := e.InboxSettings()
+	}})
+	s, _ := e.Collection.Settings()
 	s.Enabled = true
 	s.Scope = "selected"
-	s.Conversations = []InboxBinding{{"demo-chat", "demo-peer"}, {"demo-sms", "demo-sms-peer"}}
-	if err := e.SetInboxSettings(context.Background(), s); err != nil {
+	s.Conversations = []collection.Binding{{Conversation: "demo-chat", Participant: "demo-peer"}, {Conversation: "demo-sms", Participant: "demo-sms-peer"}}
+	if err := e.Collection.SetSettings(context.Background(), s); err != nil {
 		t.Fatal(err)
 	}
 	if len(deadlines) != 2 || !deadlines[0].Equal(deadlines[1]) {
@@ -106,7 +107,7 @@ func TestAsyncCaptureReturnsBeforeLookupAndRechecksConsent(t *testing.T) {
 	entered := make(chan struct{})
 	release := make(chan struct{})
 	var once sync.Once
-	e.Transport = &lookupTransport{f, func(ctx context.Context, id string) (transport.Conversation, error) {
+	useTransport(e, &lookupTransport{f, func(ctx context.Context, id string) (transport.Conversation, error) {
 		once.Do(func() { close(entered) })
 		select {
 		case <-ctx.Done():
@@ -114,10 +115,10 @@ func TestAsyncCaptureReturnsBeforeLookupAndRechecksConsent(t *testing.T) {
 		case <-release:
 			return fixtureConversation(ctx, id)
 		}
-	}}
+	}})
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
-	go func() { defer close(done); e.RunCapture(ctx) }()
+	go func() { defer close(done); e.Collection.RunCapture(ctx) }()
 	m := incoming()
 	m.Text = "Synthetic ordinary async text"
 	received := make(chan error, 1)
@@ -133,7 +134,7 @@ func TestAsyncCaptureReturnsBeforeLookupAndRechecksConsent(t *testing.T) {
 	<-entered
 	assertPauseResponsive(t, e)
 	s.Enabled = false
-	if err := e.SetInboxSettings(context.Background(), s); err != nil {
+	if err := e.Collection.SetSettings(context.Background(), s); err != nil {
 		t.Fatal(err)
 	}
 	close(release)
@@ -148,12 +149,12 @@ func TestCaptureFailureReportsGapWithoutPausingAutomation(t *testing.T) {
 	e, f := setup(t)
 	enableInbox(t, e)
 	e.Pause(false)
-	e.Transport = &lookupTransport{f, func(context.Context, string) (transport.Conversation, error) {
+	useTransport(e, &lookupTransport{f, func(context.Context, string) (transport.Conversation, error) {
 		return transport.Conversation{}, errors.New("synthetic_transient")
-	}}
+	}})
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
-	go func() { defer close(done); e.RunCapture(ctx) }()
+	go func() { defer close(done); e.Collection.RunCapture(ctx) }()
 	defer func() { cancel(); <-done }()
 	m := incoming()
 	m.Text = "Synthetic ordinary text"
@@ -161,11 +162,11 @@ func TestCaptureFailureReportsGapWithoutPausingAutomation(t *testing.T) {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(time.Second)
-	for !e.InboxCaptureGap() && time.Now().Before(deadline) {
+	for !e.Collection.InboxCaptureGap() && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
 	}
 	paused, err := e.Store.Paused()
-	if err != nil || paused || !e.InboxCaptureGap() {
+	if err != nil || paused || !e.Collection.InboxCaptureGap() {
 		t.Fatal("optional failure paused automation or failed to report a capture gap")
 	}
 }
@@ -188,13 +189,13 @@ func TestHistoryFetchDoesNotBlockPauseAndRechecksRevocation(t *testing.T) {
 	e, f := setup(t)
 	s := enableInbox(t, e)
 	source := &slowHistoryTransport{f, make(chan struct{}), make(chan struct{})}
-	e.Transport = source
+	useTransport(e, source)
 	done := make(chan error, 1)
-	go func() { _, err := e.ImportInboxHistory(context.Background(), "demo-chat", ""); done <- err }()
+	go func() { _, err := e.Collection.ImportInboxHistory(context.Background(), "demo-chat", ""); done <- err }()
 	<-source.entered
 	assertPauseResponsive(t, e)
 	s.LoadOlder = false
-	if err := e.SetInboxSettings(context.Background(), s); err != nil {
+	if err := e.Collection.SetSettings(context.Background(), s); err != nil {
 		t.Fatal(err)
 	}
 	close(source.release)
@@ -270,7 +271,7 @@ func TestLegacySendThenRepeatedHistoryImportHasOneRowAndOneSend(t *testing.T) {
 		t.Fatal(err)
 	}
 	j, _, _ := e.Store.JobPlan(id)
-	e.Transport = &sentHistoryTransport{f, j.TransactionID}
+	useTransport(e, &sentHistoryTransport{f, j.TransactionID})
 	for i := 0; i < 2; i++ {
 		if _, err = e.ImportHistory(context.Background(), "demo-chat", ""); err != nil {
 			t.Fatal(err)
@@ -300,7 +301,7 @@ func (f *earlyEchoTransport) Send(ctx context.Context, conv, txn, text string) (
 func TestEarlyEchoStatusSurvivesSubmissionPersistence(t *testing.T) {
 	e, f := setup(t)
 	enableInbox(t, e)
-	e.Transport = &earlyEchoTransport{f, e.Store}
+	useTransport(e, &earlyEchoTransport{f, e.Store})
 	e.Pause(false)
 	if _, err := e.ComposeInbox(context.Background(), "demo-chat", "Synthetic early echo", "synthetic-early-request"); err != nil {
 		t.Fatal(err)

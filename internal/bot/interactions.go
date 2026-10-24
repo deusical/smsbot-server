@@ -25,7 +25,7 @@ type MessageActions struct {
 
 func isRCS(protocol string) bool { return strings.Contains(strings.ToUpper(protocol), "RCS") }
 
-// Called under e.mu. This is policy, not a replacement for transport rechecks.
+// Called under the control lock. This is policy, not a replacement for transport rechecks.
 func (e *Engine) replyTarget(ctx context.Context, c transport.Conversation, target string) (*transport.MessageInteraction, error) {
 	v, err := e.Store.Interaction(c.ID, target)
 	if err != nil {
@@ -60,7 +60,7 @@ func (e *Engine) actionPolicy(ctx context.Context, conv, target string) (Message
 			}
 		}
 	}
-	settings, err := e.InboxSettings()
+	settings, err := e.Collection.Settings()
 	if err != nil {
 		return a, transport.Conversation{}, err
 	}

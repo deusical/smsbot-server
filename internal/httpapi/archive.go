@@ -17,7 +17,7 @@ func (s *Server) archiveRoutes() {
 		if !s.decode(w, r, &v) {
 			return
 		}
-		a, err := s.Engine.RequestArchiveRefresh(r.Context(), r.PathValue("id"), v.Since, v.Until)
+		a, err := s.Collection.RequestArchiveRefresh(r.Context(), r.PathValue("id"), v.Since, v.Until)
 		if err != nil {
 			s.bad(w, 409, "refresh_unavailable_or_invalid_range")
 			return
@@ -42,7 +42,7 @@ func (s *Server) archiveRoutes() {
 		if !s.decode(w, r, &v) {
 			return
 		}
-		a, err := s.Engine.RequestArchive(r.Context(), r.PathValue("id"), v.Since, v.Cancel)
+		a, err := s.Collection.RequestArchive(r.Context(), r.PathValue("id"), v.Since, v.Cancel)
 		if err != nil {
 			s.bad(w, 409, "sync_unavailable_or_invalid_range")
 			return

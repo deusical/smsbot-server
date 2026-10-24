@@ -3,11 +3,13 @@ package bot
 import (
 	"context"
 	"github.com/deusical/smsbot-server/internal/archive"
+	"github.com/deusical/smsbot-server/internal/collection"
 	"github.com/deusical/smsbot-server/internal/history"
 	"github.com/deusical/smsbot-server/internal/store"
 	"github.com/deusical/smsbot-server/internal/transport"
 	"github.com/deusical/smsbot-server/internal/vault"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -27,13 +29,23 @@ func setup(t *testing.T) (*Engine, *transport.Fixture) {
 	return assemble(t, s, f), f
 }
 
-// assemble wires an engine with its workers as internal/app does (bot tests
-// cannot import app) and runs its startup work.
+// assemble wires an engine with collection and its workers as internal/app
+// does (bot tests cannot import app) and runs their startup work.
 func assemble(t *testing.T, s *store.Store, tr transport.Transport) *Engine {
 	t.Helper()
-	e := New(s, tr)
-	e.History = history.New(s, e.HistoryHost())
-	e.Archive = archive.New(s, filepath.Join(filepath.Dir(s.Path), "archive"), e.FileHost())
+	control := new(sync.Mutex)
+	c := collection.New(s, tr, control)
+	e := New(s, tr, c, control)
+	c.History = history.New(s, c.HistoryHost())
+	c.Archive = archive.New(s, filepath.Join(filepath.Dir(s.Path), "archive"), c.FileHost())
+	c.SettingsSaved = e.CollectionSettingsSaved
+	c.MessageRetentionDays = func() (int, error) {
+		cfg, err := e.Configuration()
+		return cfg.Settings.RetentionDays, err
+	}
+	if err := c.Init(); err != nil {
+		t.Fatal(err)
+	}
 	if err := e.Init(); err != nil {
 		t.Fatal(err)
 	}
@@ -234,4 +246,11 @@ func TestKnownRejectionIsFailedAndNeverRetried(t *testing.T) {
 	if jobs[0].State != "failed" || len(f.Sent) != 0 {
 		t.Fatal("known rejection retried or mislabeled")
 	}
+}
+
+// useTransport swaps the transport the engine and its collection service use,
+// as a single process-wide transport would be.
+func useTransport(e *Engine, t transport.Transport) {
+	e.Transport = t
+	e.Collection.Transport = t
 }

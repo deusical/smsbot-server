@@ -28,11 +28,11 @@ func TestViewedRefreshRepairsGapsAndEditsWithoutReplacingDeepImport(t *testing.T
 	e, f := setup(t)
 	settings := enableInbox(t, e)
 	settings.ArchiveRetentionDays = 0
-	if err := e.SetInboxSettings(context.Background(), settings); err != nil {
+	if err := e.Collection.SetSettings(context.Background(), settings); err != nil {
 		t.Fatal(err)
 	}
 	at := time.Now().Add(-365 * 24 * time.Hour)
-	e.Transport = &viewedHistoryTransport{Fixture: f, at: at}
+	useTransport(e, &viewedHistoryTransport{Fixture: f, at: at})
 	a := store.Archive{Conversation: transport.Conversation{ID: "demo-chat", ParticipantID: "demo-peer", Writable: true}, Since: time.Now().Add(-time.Hour).UTC().Format(time.RFC3339Nano), State: "running", Cursor: "deep-checkpoint", Generation: 3, RetryAt: time.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano), RecentRetryAt: time.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano)}
 	if err := e.Store.SaveArchive(a, 0); err != nil {
 		t.Fatal(err)
@@ -40,7 +40,7 @@ func TestViewedRefreshRepairsGapsAndEditsWithoutReplacingDeepImport(t *testing.T
 	if err := e.Store.SaveObservedFiles("demo-chat", "edited", "", "incoming", "Synthetic stale text", "history", "", at, nil); err != nil {
 		t.Fatal(err)
 	}
-	queued, err := e.RequestArchiveRefresh(context.Background(), "demo-chat", at.Add(-time.Minute).UTC().Format(time.RFC3339Nano), at.Add(time.Hour).UTC().Format(time.RFC3339Nano))
+	queued, err := e.Collection.RequestArchiveRefresh(context.Background(), "demo-chat", at.Add(-time.Minute).UTC().Format(time.RFC3339Nano), at.Add(time.Hour).UTC().Format(time.RFC3339Nano))
 	if err != nil || queued.Cursor != a.Cursor || queued.Since != a.Since || queued.State != a.State {
 		t.Fatal("view replaced deep import", err)
 	}
@@ -49,12 +49,12 @@ func TestViewedRefreshRepairsGapsAndEditsWithoutReplacingDeepImport(t *testing.T
 		t.Fatal("superseded view committed")
 	}
 	// The range request does not supersede an import page already in flight.
-	live, _ := e.InboxSettings()
+	live, _ := e.Collection.Settings()
 	if err := commitStep(e, history.ImportWork, a, history.Policy{Revision: live.Revision}, nil); err != nil {
 		t.Fatal("view request discarded in-flight import progress", err)
 	}
-	e.History.Tick(context.Background())
-	e.History.Tick(context.Background())
+	e.Collection.History.Tick(context.Background())
+	e.Collection.History.Tick(context.Background())
 	saved, err := e.Store.OwnerMessagePage("demo-chat", "", "", 50)
 	if err != nil || len(saved.Messages) != 2 {
 		t.Fatal("missing range messages", err)
@@ -77,7 +77,7 @@ func TestViewedRefreshRepairsGapsAndEditsWithoutReplacingDeepImport(t *testing.T
 func TestExplicitDeepImportPreservesViewedRefresh(t *testing.T) {
 	e, _ := setup(t)
 	enableInbox(t, e)
-	a, err := e.RequestArchiveRefresh(context.Background(), "demo-chat", time.Now().Add(-time.Hour).UTC().Format(time.RFC3339Nano), "")
+	a, err := e.Collection.RequestArchiveRefresh(context.Background(), "demo-chat", time.Now().Add(-time.Hour).UTC().Format(time.RFC3339Nano), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +86,7 @@ func TestExplicitDeepImportPreservesViewedRefresh(t *testing.T) {
 	if err := e.Store.SaveArchive(a, 0); err != nil {
 		t.Fatal(err)
 	}
-	deep, err := e.RequestArchive(context.Background(), "demo-chat", time.Now().Add(-24*time.Hour).UTC().Format(time.RFC3339Nano), false)
+	deep, err := e.Collection.RequestArchive(context.Background(), "demo-chat", time.Now().Add(-24*time.Hour).UTC().Format(time.RFC3339Nano), false)
 	if err != nil || deep.RefreshCursor != a.RefreshCursor || deep.RefreshSince != a.RefreshSince || deep.RefreshState != "running" {
 		t.Fatal("deep import erased viewed progress", err)
 	}
@@ -107,17 +107,17 @@ func TestViewedRefreshCannotPublishAfterConsentRevocation(t *testing.T) {
 	e, f := setup(t)
 	enableInbox(t, e)
 	at := time.Now().Add(-time.Hour)
-	e.Transport = &revokeViewedTransport{viewedHistoryTransport: &viewedHistoryTransport{Fixture: f, at: at}, revoke: func() {
-		cfg, _ := e.InboxSettings()
+	useTransport(e, &revokeViewedTransport{viewedHistoryTransport: &viewedHistoryTransport{Fixture: f, at: at}, revoke: func() {
+		cfg, _ := e.Collection.Settings()
 		cfg.Enabled = false
-		if err := e.SetInboxSettings(context.Background(), cfg); err != nil {
+		if err := e.Collection.SetSettings(context.Background(), cfg); err != nil {
 			t.Error(err)
 		}
-	}}
-	if _, err := e.RequestArchiveRefresh(context.Background(), "demo-chat", at.Add(-time.Minute).UTC().Format(time.RFC3339Nano), ""); err != nil {
+	}})
+	if _, err := e.Collection.RequestArchiveRefresh(context.Background(), "demo-chat", at.Add(-time.Minute).UTC().Format(time.RFC3339Nano), ""); err != nil {
 		t.Fatal(err)
 	}
-	e.History.Tick(context.Background())
+	e.Collection.History.Tick(context.Background())
 	page, err := e.Store.OwnerMessagePage("demo-chat", "", "", 50)
 	if err != nil || len(page.Messages) != 0 {
 		t.Fatal("revoked view published phone data", err)

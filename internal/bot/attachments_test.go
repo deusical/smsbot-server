@@ -25,7 +25,7 @@ func (f *thumbnailTransport) DownloadFile(ctx context.Context, file media.File) 
 func TestImageThumbnailDoesNotMasqueradeAsOriginalDownload(t *testing.T) {
 	e, fixture := setup(t)
 	enableInbox(t, e)
-	e.Transport = &thumbnailTransport{fixture}
+	useTransport(e, &thumbnailTransport{fixture})
 	files := []media.File{{Info: media.Info{ID: "part-0", Name: "synthetic.png", MIME: "image/png", Size: 100}, RemoteID: "synthetic-unavailable-original", ThumbnailID: "synthetic-thumbnail"}}
 	if err := e.Store.SaveObservedFiles("demo-chat", "synthetic-thumb-message", "", "incoming", "", "phone", "", time.Now(), files); err != nil {
 		t.Fatal(err)
@@ -33,11 +33,11 @@ func TestImageThumbnailDoesNotMasqueradeAsOriginalDownload(t *testing.T) {
 	message := ""
 	p, _ := e.Store.OwnerMessagePage("demo-chat", "", "", 50)
 	message = p.Messages[0].ID
-	info, data, err := e.InboxAttachmentContent(context.Background(), "demo-chat", message, "part-0", true)
+	info, data, err := e.Collection.InboxAttachmentContent(context.Background(), "demo-chat", message, "part-0", true)
 	if err != nil || info.MIME != "image/gif" || string(data) != "GIF89aSynthetic thumbnail" {
 		t.Fatal("available thumbnail not displayed", err)
 	}
-	if _, _, err = e.InboxAttachment(context.Background(), "demo-chat", message, "part-0"); err == nil {
+	if _, _, err = e.Collection.InboxAttachment(context.Background(), "demo-chat", message, "part-0"); err == nil {
 		t.Fatal("thumbnail returned as original file")
 	}
 }
@@ -51,10 +51,10 @@ func TestOwnerLimitsPersistAndCanBeUnlimited(t *testing.T) {
 	s := enableInbox(t, e)
 	limits := media.Limits{}
 	s.AttachmentLimits = &limits
-	if err := e.SetInboxSettings(context.Background(), s); err != nil {
+	if err := e.Collection.SetSettings(context.Background(), s); err != nil {
 		t.Fatal(err)
 	}
-	saved, err := e.InboxSettings()
+	saved, err := e.Collection.Settings()
 	if err != nil || saved.FileLimits() != limits {
 		t.Fatal("unlimited limits did not persist", err)
 	}
@@ -71,7 +71,7 @@ func TestOwnerLimitsPersistAndCanBeUnlimited(t *testing.T) {
 	}
 	// Changing limits after queueing must be checked before submission.
 	saved.AttachmentLimits.MaxFiles = 1
-	if err := e.SetInboxSettings(context.Background(), saved); err != nil {
+	if err := e.Collection.SetSettings(context.Background(), saved); err != nil {
 		t.Fatal(err)
 	}
 	if err := e.Dispatch(context.Background()); err != nil {
@@ -98,23 +98,23 @@ func TestFileOnlyCaptureAndCaptionNeverExecute(t *testing.T) {
 			t.Fatal("media caption executed", err)
 		}
 	}
-	p, err := e.InboxPage(context.Background(), "demo-chat", "", "", 50)
+	p, err := e.Collection.InboxPage(context.Background(), "demo-chat", "", "", 50)
 	if err != nil || len(p.Messages) != 2 || len(p.Messages[0].Attachments) != 1 {
 		t.Fatal("file-only capture missing", err)
 	}
-	_, data, err := e.InboxAttachment(context.Background(), "demo-chat", p.Messages[0].ID, files[0].ID)
+	_, data, err := e.Collection.InboxAttachment(context.Background(), "demo-chat", p.Messages[0].ID, files[0].ID)
 	if err != nil || string(data) != "Synthetic attachment" {
 		t.Fatal("attachment download failed", err)
 	}
-	if _, _, err = e.InboxAttachment(context.Background(), "demo-sms", p.Messages[0].ID, files[0].ID); err == nil {
+	if _, _, err = e.Collection.InboxAttachment(context.Background(), "demo-sms", p.Messages[0].ID, files[0].ID); err == nil {
 		t.Fatal("cross-conversation download permitted")
 	}
-	s, _ := e.InboxSettings()
+	s, _ := e.Collection.Settings()
 	s.Enabled = false
-	if err = e.SetInboxSettings(context.Background(), s); err != nil {
+	if err = e.Collection.SetSettings(context.Background(), s); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err = e.InboxAttachment(context.Background(), "demo-chat", p.Messages[0].ID, files[0].ID); err == nil {
+	if _, _, err = e.Collection.InboxAttachment(context.Background(), "demo-chat", p.Messages[0].ID, files[0].ID); err == nil {
 		t.Fatal("download after consent revocation")
 	}
 }
@@ -175,7 +175,7 @@ func TestPauseAndConsentRevocationDuringUploadPreventSend(t *testing.T) {
 			enableInbox(t, e)
 			e.Pause(false)
 			f := &blockedFileTransport{Fixture: fixture, started: make(chan struct{}), release: make(chan struct{})}
-			e.Transport = f
+			useTransport(e, f)
 			id, err := e.ComposeInboxFiles(context.Background(), "demo-chat", "", "synthetic-upload-cancel", syntheticUpload())
 			if err != nil {
 				t.Fatal(err)
@@ -188,9 +188,9 @@ func TestPauseAndConsentRevocationDuringUploadPreventSend(t *testing.T) {
 				t.Fatal("upload did not start")
 			}
 			if revoke {
-				s, _ := e.InboxSettings()
+				s, _ := e.Collection.Settings()
 				s.Enabled = false
-				err = e.SetInboxSettings(context.Background(), s)
+				err = e.Collection.SetSettings(context.Background(), s)
 			} else {
 				err = e.Pause(true)
 			}
@@ -264,7 +264,7 @@ func TestUploadJobReloadFailurePropagates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e.Transport = &failedReloadTransport{Fixture: fixture, fail: func() { e.Store.DB.Close() }}
+	useTransport(e, &failedReloadTransport{Fixture: fixture, fail: func() { e.Store.DB.Close() }})
 	if err = e.Dispatch(context.Background()); err == nil {
 		t.Fatal("job reload database error swallowed")
 	}
@@ -285,13 +285,13 @@ func TestAttachmentReadsEnforceExpiryWithoutPruning(t *testing.T) {
 	if _, err := e.Store.DB.Exec(`CREATE TRIGGER reject_attachment_prune BEFORE DELETE ON messages BEGIN SELECT RAISE(ABORT,'unexpected prune'); END; CREATE TRIGGER reject_attachment_job_update BEFORE UPDATE ON jobs BEGIN SELECT RAISE(ABORT,'unexpected update'); END;`); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := e.InboxAttachment(context.Background(), "demo-chat", message, files[0].ID); err != nil {
+	if _, _, err := e.Collection.InboxAttachment(context.Background(), "demo-chat", message, files[0].ID); err != nil {
 		t.Fatal("file read performed retention writes", err)
 	}
 	if _, err := e.Store.DB.Exec("UPDATE messages SET at='2020-01-01T00:00:00Z' WHERE id=?", message); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := e.InboxAttachment(context.Background(), "demo-chat", message, files[0].ID); err == nil {
+	if _, _, err := e.Collection.InboxAttachment(context.Background(), "demo-chat", message, files[0].ID); err == nil {
 		t.Fatal("expired file returned before scheduled pruning")
 	}
 	var count int
@@ -320,9 +320,9 @@ func TestLegacyRepairFailureBackoffAndRecovery(t *testing.T) {
 	e, f := setup(t)
 	enableInbox(t, e)
 	source := &failingRepairTransport{originalRepairTransport: &originalRepairTransport{f}, fail: true}
-	e.Transport = source
+	useTransport(e, source)
 	now := time.Now()
-	e.now = func() time.Time { return now }
+	e.Collection.SetClock(func() time.Time { return now })
 	c := transport.Conversation{ID: "demo-chat", ParticipantID: "demo-peer", Writable: true}
 	if err := e.Store.SaveArchive(store.Archive{Conversation: c, State: "running", Generation: 1}, 0); err != nil {
 		t.Fatal(err)
@@ -332,7 +332,7 @@ func TestLegacyRepairFailureBackoffAndRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	message := store.Hash(c.ID + "\x00synthetic-message")
-	host := archiveFileHost{e}
+	host := e.Collection.FileHost()
 	if _, err := host.Repair(context.Background(), c, message, old); err == nil {
 		t.Fatal("repair failure hidden")
 	}
@@ -380,14 +380,14 @@ func (f *originalRepairTransport) DownloadFile(ctx context.Context, file media.F
 func TestLegacyInlinePreviewIsRepairedForOriginalDownload(t *testing.T) {
 	e, f := setup(t)
 	enableInbox(t, e)
-	e.Transport = &originalRepairTransport{f}
+	useTransport(e, &originalRepairTransport{f})
 	old := media.File{Info: media.Info{ID: "part-0", MIME: "image/jpeg", Size: 8}, Data: []byte("preview")}
 	if err := e.Store.SaveObservedFiles("demo-chat", "synthetic-message", "", "outgoing", "", "phone", "", time.Now(), []media.File{old}); err != nil {
 		t.Fatal(err)
 	}
 	p, _ := e.Store.OwnerMessagePage("demo-chat", "", "", 50)
 	id := p.Messages[0].ID
-	info, b, err := e.InboxAttachment(context.Background(), "demo-chat", id, "part-0")
+	info, b, err := e.Collection.InboxAttachment(context.Background(), "demo-chat", id, "part-0")
 	if err != nil || len(b) != 32000 || info.Size != 32000 {
 		t.Fatal("legacy preview served instead of original", err)
 	}
@@ -399,17 +399,17 @@ func TestLegacyInlinePreviewIsRepairedForOriginalDownload(t *testing.T) {
 func TestInlinePreviewNeverBecomesOriginal(t *testing.T) {
 	e, f := setup(t)
 	enableInbox(t, e)
-	e.Transport = &thumbnailTransport{f}
+	useTransport(e, &thumbnailTransport{f})
 	file := media.File{Info: media.Info{ID: "part-0", MIME: "image/jpeg", PreviewOnly: true}, PreviewData: []byte("tiny preview"), MessageID: "synthetic-message", ActionID: "synthetic-action"}
 	if err := e.Store.SaveObservedFiles("demo-chat", "synthetic-message", "", "incoming", "", "phone", "", time.Now(), []media.File{file}); err != nil {
 		t.Fatal(err)
 	}
 	p, _ := e.Store.OwnerMessagePage("demo-chat", "", "", 50)
 	id := p.Messages[0].ID
-	if _, b, err := e.InboxAttachmentContent(context.Background(), "demo-chat", id, "part-0", true); err != nil || string(b) != "tiny preview" {
+	if _, b, err := e.Collection.InboxAttachmentContent(context.Background(), "demo-chat", id, "part-0", true); err != nil || string(b) != "tiny preview" {
 		t.Fatal("preview unavailable", err)
 	}
-	if _, _, err := e.InboxAttachment(context.Background(), "demo-chat", id, "part-0"); err == nil {
+	if _, _, err := e.Collection.InboxAttachment(context.Background(), "demo-chat", id, "part-0"); err == nil {
 		t.Fatal("preview downloaded as original")
 	}
 }
@@ -423,7 +423,7 @@ func (f *originalRepairTransport) OpenFile(ctx context.Context, file media.File)
 func TestArchiveRepairsLegacyPreviewBeforeSavingOriginal(t *testing.T) {
 	e, f := setup(t)
 	enableInbox(t, e)
-	e.Transport = &originalRepairTransport{f}
+	useTransport(e, &originalRepairTransport{f})
 	c := transport.Conversation{ID: "demo-chat", ParticipantID: "demo-peer", Writable: true}
 	if err := e.Store.SaveArchive(store.Archive{Conversation: c, State: "running", Generation: 1}, 0); err != nil {
 		t.Fatal(err)
@@ -432,15 +432,15 @@ func TestArchiveRepairsLegacyPreviewBeforeSavingOriginal(t *testing.T) {
 	if err := e.Store.SaveObservedFiles(c.ID, "synthetic-message", "", "incoming", "", "phone", "", time.Now(), []media.File{file}); err != nil {
 		t.Fatal(err)
 	}
-	e.Archive.Tick(context.Background())
+	e.Collection.Archive.Tick(context.Background())
 	// Restart the scanner after descriptor repair, before downloading the original.
-	e.Archive = archive.New(e.Store, e.Archive.Root, archiveFileHost{e})
-	e.Archive.Tick(context.Background())
+	e.Collection.Archive = archive.New(e.Store, e.Collection.Archive.Root, e.Collection.FileHost())
+	e.Collection.Archive.Tick(context.Background())
 	saved, err := e.Store.Attachment(c.ID, store.Hash(c.ID+"\x00synthetic-message"), "part-0")
 	if err != nil || saved.ArchiveState != "saved" || saved.Size != 32000 || saved.PreviewOnly {
 		t.Fatal("archive retained thumbnail as original", err)
 	}
-	r, err := e.Archive.OpenLocal(saved)
+	r, err := e.Collection.Archive.OpenLocal(saved)
 	if err != nil {
 		t.Fatal(err)
 	}

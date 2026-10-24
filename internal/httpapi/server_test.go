@@ -26,7 +26,7 @@ func apiSetup(t *testing.T) *Server {
 	if err := service.Init(); err != nil {
 		t.Fatal(err)
 	}
-	return New(service.Engine, "http://localhost:8787", true)
+	return New(service.Engine, service.Collection, "http://localhost:8787", true)
 }
 func req(s *Server, method, path, body, token, origin string) *httptest.ResponseRecorder {
 	r := httptest.NewRequest(method, "http://localhost:8787"+path, bytes.NewBufferString(body))

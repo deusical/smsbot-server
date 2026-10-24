@@ -93,3 +93,23 @@ func (f *Fixture) Send(ctx context.Context, conv, txn, text string) (Receipt, er
 	f.Sent[txn] = text
 	return Receipt{State: "submitted", MessageID: txn}, nil
 }
+
+// Lookup returns the live identity of one conversation, bounded to 20 seconds.
+// It uses a direct lookup when the transport supports one.
+func Lookup(ctx context.Context, t Transport, id string) (Conversation, error) {
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	if lookup, ok := t.(ConversationLookup); ok {
+		return lookup.LookupConversation(ctx, id)
+	}
+	list, err := t.Conversations(ctx)
+	if err != nil {
+		return Conversation{}, err
+	}
+	for _, c := range list {
+		if c.ID == id {
+			return c, nil
+		}
+	}
+	return Conversation{}, errors.New("conversation_unavailable")
+}

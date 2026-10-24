@@ -1,4 +1,4 @@
-package bot
+package collection
 
 import (
 	"context"
@@ -65,17 +65,17 @@ func (c *captureReads) remember(key string, digest [32]byte) {
 	}
 	c.verified[key] = digest
 }
-func (e *Engine) captureConnectionEpoch() uint64 {
-	if source, ok := e.Transport.(transport.IdentityEpochSource); ok {
+func (svc *Service) captureConnectionEpoch() uint64 {
+	if source, ok := svc.Transport.(transport.IdentityEpochSource); ok {
 		return source.IdentityEpoch()
 	}
 	return 0
 }
-func (e *Engine) captureDigest(m transport.Incoming, consent *captureConsent) ([32]byte, error) {
+func (svc *Service) captureDigest(m transport.Incoming, consent *captureConsent) ([32]byte, error) {
 	// File commits do not emit message changes. Include their encrypted local
 	// version as well, without retaining the payload in the cache.
 	var files string
-	if err := e.Store.DB.QueryRow("SELECT coalesce((SELECT payload FROM message_attachments WHERE message=?),'')", store.Hash(m.ConversationID+"\x00"+m.ID)).Scan(&files); err != nil {
+	if err := svc.Store.DB.QueryRow("SELECT coalesce((SELECT payload FROM message_attachments WHERE message=?),'')", store.Hash(m.ConversationID+"\x00"+m.ID)).Scan(&files); err != nil {
 		return [32]byte{}, err
 	}
 	// The digest and resource hash stay in bounded process memory; no personal
@@ -90,6 +90,6 @@ func (e *Engine) captureDigest(m transport.Incoming, consent *captureConsent) ([
 		Driver      string
 		Changes     uint64
 		Files       [32]byte
-	}{m, m.Interaction, m.Attachments, consent.epoch, consent.settings.Revision, e.captureConnectionEpoch(), fmt.Sprintf("%T:%p", e.Transport, e.Transport), e.Store.ChangeSequence(), sha256.Sum256([]byte(files))})
+	}{m, m.Interaction, m.Attachments, consent.epoch, consent.settings.Revision, svc.captureConnectionEpoch(), fmt.Sprintf("%T:%p", svc.Transport, svc.Transport), svc.Store.ChangeSequence(), sha256.Sum256([]byte(files))})
 	return sha256.Sum256(data), err
 }

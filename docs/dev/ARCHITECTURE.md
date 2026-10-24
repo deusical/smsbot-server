@@ -10,11 +10,14 @@ flowchart LR
   Google <--> T[transport<br/>libgm adapter]
   subgraph Service[SmsBot service - one Go process]
     T --> B[bot engine<br/>commands, plans, sends]
-    T --> H[history + archive<br/>sync, originals, export]
+    T --> C[collection<br/>consent, capture, gap repair]
+    C --> H[history + archive workers<br/>sync, originals, export]
+    B -. consent .-> C
     B <--> S[(store<br/>encrypted SQLite)]
+    C <--> S
     H <--> S
     A[httpapi<br/>owner API v1] --> B
-    A --> H
+    A --> C
     A --> S
     W[web dashboard<br/>embedded assets] --- A
   end
@@ -27,15 +30,21 @@ flowchart LR
 | Package | Responsibility |
 |---|---|
 | `cmd/smsbot` | Command line: serve, initialise, pair, update cookies, backup/restore, archive export/restore, `--version`. |
+| `internal/app` | Assembles the service: constructs the engine, collection service and workers, runs startup work in order (recover and pause before connecting; preservation before expiry), routes transport events, and owns every worker goroutine. Nothing imports it. |
 | `internal/transport` | Normalised conversation and message contracts. The fixture adapter is physically separate from the opt-in Google adapter (libgm). Google cookies and session live here and in encrypted storage only. |
 | `internal/store` | SQLite (WAL) with schema migrations, sealed payloads, unique incoming jobs, enrollment, hashed credentials, backups. |
 | `internal/vault` | Master key handling and AES-GCM sealing bound to a scope (job, message, session). Windows uses DPAPI; Linux requires a 0600 key file. |
-| `internal/bot` | Command routing, immutable plans, the serialized dispatcher, pre-send rechecks, receipt reconciliation, capture and repair of history gaps, owner inbox. |
-| `internal/history` | Background reads that fill the local archive (recent reconciliation, older imports, viewed-section checks) without ever routing commands. |
+| `internal/bot` | Command routing, immutable plans, provider generation, the serialized dispatcher, pre-send rechecks, receipt reconciliation, owner sends. It reads collection consent but owns no collection work. |
+| `internal/collection` | The owner's message collection: settings and consent, observation capture, capture-gap repair, archive sync requests, collected inbox reads and read receipts, and the consent-checked hosts the history and original-file workers use. It never routes commands or submits messages, and does not import `bot`. |
+| `internal/history` | Background reads that fill the local archive (recent reconciliation, older imports, viewed-section checks) without ever routing commands, and the bounded read shared by owner-requested history pages. |
 | `internal/archive` | Streaming encrypted copies of original files, storage statistics, exports and offline restore. |
 | `internal/media` | Attachment validation, limits and intent digests. |
 | `internal/httpapi` | Owner-only JSON API, session cookies, exact Host and Origin checks, embedded dashboard. |
 | `web/` | React and TypeScript dashboard. It polls the API and caches only static files. |
+
+Collection and the bot share one control lock: consent changes, send decisions and
+protected commits serialize on it. Cross-service reactions (stopping automatic
+replies cancels in-flight generation) are wired explicitly in `internal/app`.
 
 ## Request flow
 

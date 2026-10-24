@@ -8,6 +8,7 @@ import (
 	"errors"
 	"github.com/deusical/smsbot-server/internal/archive"
 	"github.com/deusical/smsbot-server/internal/bot"
+	"github.com/deusical/smsbot-server/internal/collection"
 	"github.com/deusical/smsbot-server/internal/history"
 	"github.com/deusical/smsbot-server/internal/store"
 	"github.com/deusical/smsbot-server/internal/transport"
@@ -16,11 +17,12 @@ import (
 
 // Service is the assembled application.
 type Service struct {
-	Store     *store.Store
-	Transport transport.Transport
-	Engine    *bot.Engine
-	History   *history.Service
-	Archive   *archive.Service
+	Store      *store.Store
+	Transport  transport.Transport
+	Engine     *bot.Engine
+	Collection *collection.Service
+	History    *history.Service
+	Archive    *archive.Service
 }
 
 // PrepareStore recovers sends interrupted by the last shutdown and pauses
@@ -36,16 +38,29 @@ func PrepareStore(s *store.Store) error {
 // New wires the service without touching storage or starting work.
 // archiveRoot holds saved originals.
 func New(s *store.Store, t transport.Transport, archiveRoot string) *Service {
-	e := bot.New(s, t)
-	e.History = history.New(s, e.HistoryHost())
-	e.Archive = archive.New(s, archiveRoot, e.FileHost())
-	return &Service{Store: s, Transport: t, Engine: e, History: e.History, Archive: e.Archive}
+	// One control lock serializes consent changes, send decisions and
+	// protected commits across the collection service and the bot.
+	control := new(sync.Mutex)
+	c := collection.New(s, t, control)
+	e := bot.New(s, t, c, control)
+	c.History = history.New(s, c.HistoryHost())
+	c.Archive = archive.New(s, archiveRoot, c.FileHost())
+	// Cross-service reactions are explicit here rather than discovered.
+	c.SettingsSaved = e.CollectionSettingsSaved
+	c.MessageRetentionDays = func() (int, error) {
+		cfg, err := e.Configuration()
+		return cfg.Settings.RetentionDays, err
+	}
+	return &Service{Store: s, Transport: t, Engine: e, Collection: c, History: c.History, Archive: c.Archive}
 }
 
-// Init runs one-time startup work in order: the engine publishes consent and
+// Init runs one-time startup work in order: collection publishes consent and
 // marks opted-in history for preservation before the legacy expiry pass can
 // delete it. Any failure stops startup.
 func (a *Service) Init() error {
+	if err := a.Collection.Init(); err != nil {
+		return err
+	}
 	if err := a.Engine.Init(); err != nil {
 		return err
 	}
@@ -87,7 +102,7 @@ func (a *Service) Start(ctx context.Context, events EventSource, dispatchFailed 
 	ctx, cancel := context.WithCancel(ctx)
 	w := &Workers{cancel: cancel}
 	e := a.Engine
-	w.start(func() { e.RunCapture(ctx) })
+	w.start(func() { a.Collection.RunCapture(ctx) })
 	w.start(func() { a.Archive.Run(ctx) })
 	w.start(func() { a.History.Run(ctx) })
 	if events != nil {

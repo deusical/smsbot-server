@@ -13,11 +13,11 @@ import (
 
 func TestInboxOwnerOnlyAndLegacyVisibility(t *testing.T) {
 	s := apiSetup(t)
-	cfg, _ := s.Engine.InboxSettings()
+	cfg, _ := s.Collection.Settings()
 	cfg.Enabled = true
-	s.Engine.SetInboxSettings(context.Background(), cfg)
+	s.Collection.SetSettings(context.Background(), cfg)
 	s.Engine.Store.Enroll("demo-chat", "demo-peer")
-	s.Engine.Observe(context.Background(), transport.Incoming{ID: "synthetic-message", ConversationID: "demo-chat", ParticipantID: "demo-peer", Text: "Synthetic private message", At: time.Now()})
+	s.Collection.Observe(context.Background(), transport.Incoming{ID: "synthetic-message", ConversationID: "demo-chat", ParticipantID: "demo-peer", Text: "Synthetic private message", At: time.Now()})
 	if w := req(s, "GET", "/api/v1/conversations/demo-chat/history", "", "fixture-client", ""); w.Code != 200 || strings.Contains(w.Body.String(), "Synthetic private message") {
 		t.Fatal("private text exposed on legacy history")
 	}
@@ -39,7 +39,7 @@ func ownerRequest(s *Server, method, path, body string) *httptest.ResponseRecord
 }
 func TestInboxSettingsOptimisticSave(t *testing.T) {
 	s := apiSetup(t)
-	cfg, _ := s.Engine.InboxSettings()
+	cfg, _ := s.Collection.Settings()
 	cfg.Enabled = true
 	b, _ := json.Marshal(cfg)
 	if w := ownerRequest(s, "PUT", "/api/v1/inbox/settings", string(b)); w.Code != 200 {
@@ -52,9 +52,9 @@ func TestInboxSettingsOptimisticSave(t *testing.T) {
 
 func TestOwnerComposeUnicodeLimit(t *testing.T) {
 	s := apiSetup(t)
-	cfg, _ := s.Engine.InboxSettings()
+	cfg, _ := s.Collection.Settings()
 	cfg.Enabled = true
-	if err := s.Engine.SetInboxSettings(context.Background(), cfg); err != nil {
+	if err := s.Collection.SetSettings(context.Background(), cfg); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Engine.Pause(false); err != nil {
@@ -72,12 +72,12 @@ func TestOwnerComposeUnicodeLimit(t *testing.T) {
 
 func TestInboxWithoutArchiveKeepsSnapshotPolling(t *testing.T) {
 	s := apiSetup(t)
-	cfg, err := s.Engine.InboxSettings()
+	cfg, err := s.Collection.Settings()
 	if err != nil {
 		t.Fatal(err)
 	}
 	cfg.Enabled = true
-	if err := s.Engine.SetInboxSettings(context.Background(), cfg); err != nil {
+	if err := s.Collection.SetSettings(context.Background(), cfg); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.Engine.Store.Archive("demo-chat"); err == nil {
@@ -112,9 +112,9 @@ func TestViewedRefreshOwnerConsentAndRangeValidation(t *testing.T) {
 	if w := ownerRequest(s, "POST", path, body); w.Code != 409 {
 		t.Fatal("sync enabled without consent", w.Code)
 	}
-	cfg, _ := s.Engine.InboxSettings()
+	cfg, _ := s.Collection.Settings()
 	cfg.Enabled = true
-	if err := s.Engine.SetInboxSettings(context.Background(), cfg); err != nil {
+	if err := s.Collection.SetSettings(context.Background(), cfg); err != nil {
 		t.Fatal(err)
 	}
 	if w := ownerRequest(s, "POST", path, body); w.Code != 202 {
