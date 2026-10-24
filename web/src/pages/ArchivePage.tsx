@@ -61,7 +61,7 @@ export function ArchivePage({conversations, inbox, state, workspace}: {conversat
   const current:Archive | undefined=conversation && (rows.find(row=>row.conversation.id===conversation.id) ?? {conversation,state:"not_started",imported:0,since:"",last_sync:"",oldest:""});
   const filtered=choices.filter(item=>(item.label || "Saved conversation").toLocaleLowerCase().includes(query.toLocaleLowerCase()));
   const active = rows.filter(row => ["queued","running","retrying"].includes(row.state)).length;
-  const pendingChecks=(state?.inbox_capture_gaps ?? []).filter(gap => gap.state !== "checked_available").length;
+  const pendingChecks=(state?.inbox_capture_gaps ?? []).filter(gap => gap.state !== "checked_available" && gap.state !== "not_collected").length;
   const checked = rows.filter(row => row.state === "available_pages_exhausted").length;
   const update = (result: Archive) => setRows(previous => previous.some(row=>row.conversation.id===result.conversation.id) ? previous.map(row => row.conversation.id === result.conversation.id ? result : row) : [...previous,result]);
   const mutation = (value: boolean) => {epoch.current++; mutating.current = value; setBusy(value);};

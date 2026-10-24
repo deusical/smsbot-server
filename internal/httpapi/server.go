@@ -235,7 +235,7 @@ func (s *Server) state(w http.ResponseWriter, r *http.Request) {
 	gaps, unknown := s.Collection.CaptureGapStatus()
 	active := unknown
 	for _, g := range gaps {
-		if g.State != "checked_available" {
+		if !store.GapSettled(g) {
 			active = true
 		}
 	}

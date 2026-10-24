@@ -72,3 +72,9 @@ func GapRetryReady(g CaptureGap) bool {
 	at, _ := time.Parse(time.RFC3339Nano, g.RetryAt)
 	return !time.Now().Before(at)
 }
+
+// GapSettled reports a gap that needs no more work: its range was rechecked,
+// or collection does not apply to its conversation (not_collected).
+func GapSettled(g CaptureGap) bool {
+	return g.State == "checked_available" || g.State == "not_collected"
+}

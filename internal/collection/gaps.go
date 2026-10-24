@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"github.com/deusical/smsbot-server/internal/archive"
 	"github.com/deusical/smsbot-server/internal/history"
 	"github.com/deusical/smsbot-server/internal/store"
 	"github.com/deusical/smsbot-server/internal/transport"
@@ -55,7 +56,7 @@ func (svc *Service) noteCaptureGap(m transport.Incoming, epoch uint64, reason st
 	}
 }
 func mergeCaptureGap(old, next store.CaptureGap) store.CaptureGap {
-	if old.State == "checked_available" {
+	if store.GapSettled(old) {
 		next.Generation = old.Generation + 1
 		return next
 	}
@@ -151,7 +152,7 @@ func (svc *Service) CaptureGapStatus() ([]store.CaptureGap, bool) {
 	svc.gapMu.Unlock()
 	unknown := err != nil
 	for _, g := range gaps {
-		if g.Conversation == "" && g.State != "checked_available" {
+		if g.Conversation == "" && !store.GapSettled(g) {
 			unknown = true
 		}
 	}
@@ -180,7 +181,7 @@ func (h HistoryHost) NextGapAttempt() (time.Time, bool) {
 	var next time.Time
 	found := false
 	for _, g := range gaps {
-		if !settings.AllowsID(g.Conversation) || g.Conversation == "" || g.State == "checked_available" || g.State == "scope_unknown" {
+		if !settings.AllowsID(g.Conversation) || g.Conversation == "" || store.GapSettled(g) || g.State == "scope_unknown" {
 			continue
 		}
 		at, _ := time.Parse(time.RFC3339Nano, g.RetryAt)
@@ -225,7 +226,7 @@ func (h HistoryHost) RepairCaptureGap(ctx context.Context) error {
 		if !allowed {
 			continue
 		}
-		if g.Conversation == "" || g.State == "checked_available" || g.State == "scope_unknown" || !store.GapRetryReady(*g) {
+		if g.Conversation == "" || store.GapSettled(*g) || g.State == "scope_unknown" || !store.GapRetryReady(*g) {
 			continue
 		}
 		if selected == nil || g.RetryAt < selected.RetryAt || (g.RetryAt == selected.RetryAt && g.Since < selected.Since) {
@@ -241,6 +242,12 @@ func (h HistoryHost) RepairCaptureGap(ctx context.Context) error {
 	c, err := svc.lookup(call, g.Conversation)
 	var policy history.Policy
 	if err == nil {
+		// The conversation is live but collection does not apply to it (a
+		// group, read-only, or not selected): there is nothing to repair, and
+		// retrying would only wake the phone.
+		if settings, settingsErr := svc.Settings(); settingsErr == nil && !settings.Allows(c) {
+			return svc.settleGap(g, "not_collected")
+		}
 		policy, err = h.Policy(c)
 	}
 	var a store.Archive
@@ -368,7 +375,7 @@ func (svc *Service) finishCaptureGapsFromImport(a store.Archive, retention int, 
 		return err
 	}
 	for _, g := range gaps {
-		if g.Conversation != a.Conversation.ID || g.State == "checked_available" {
+		if g.Conversation != a.Conversation.ID || store.GapSettled(g) {
 			continue
 		}
 		until, parseErr := time.Parse(time.RFC3339Nano, g.Until)
@@ -411,9 +418,11 @@ func (svc *Service) finishGapAttempt(g store.CaptureGap, attemptErr error) error
 		}
 	}
 	if attemptErr != nil {
+		// Transient failures retry quickly; sustained ones back off to daily,
+		// like original files, instead of waking the phone every few minutes.
 		g.State = "retrying"
 		g.Failures++
-		g.RetryAt = svc.now().Add(time.Duration(1<<min(g.Failures, 6)) * 5 * time.Second).UTC().Format(time.RFC3339Nano)
+		g.RetryAt = svc.now().Add(archive.RetryDelay(g.Failures)).UTC().Format(time.RFC3339Nano)
 	} else {
 		g.Failures = 0
 		g.RetryAt = svc.now().Add(3 * time.Second).UTC().Format(time.RFC3339Nano)
@@ -426,4 +435,25 @@ func captureFailureReason(err error) string {
 		return "phone_unavailable"
 	}
 	return "capture_check_failed"
+}
+
+// settleGap closes a gap that needs no repair, unless a newer failure
+// replaced it meanwhile.
+func (svc *Service) settleGap(g store.CaptureGap, state string) error {
+	svc.mu.Lock()
+	defer svc.mu.Unlock()
+	current, err := svc.Store.CaptureGaps()
+	if err != nil {
+		return err
+	}
+	for _, saved := range current {
+		if saved.Conversation == g.Conversation && saved.Generation != g.Generation {
+			return nil
+		}
+	}
+	g.State = state
+	g.CheckedAt = svc.now().UTC().Format(time.RFC3339Nano)
+	g.Cursor, g.RetryAt = "", ""
+	g.Failures = 0
+	return svc.Store.SaveCaptureGap(g)
 }
