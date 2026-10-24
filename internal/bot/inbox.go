@@ -2,7 +2,6 @@ package bot
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"github.com/deusical/smsbot-server/internal/media"
@@ -269,17 +268,7 @@ func (e *Engine) observe(ctx context.Context, m transport.Incoming, epoch uint64
 	if m.Outgoing {
 		dir = "outgoing"
 	}
-	a, archiveErr := e.Store.Archive(c.ID)
-	if archiveErr != nil {
-		if !errors.Is(archiveErr, sql.ErrNoRows) {
-			return archiveErr
-		}
-		a = store.Archive{Conversation: c, State: "queued", Generation: 1}
-	}
-	if a.Conversation.ParticipantID != c.ParticipantID {
-		return errors.New("archive_identity_changed")
-	}
-	if err = e.Store.SaveArchive(a, current.ArchiveRetentionDays); err != nil {
+	if err = e.ensureArchive(c, current.ArchiveRetentionDays); err != nil {
 		return err
 	}
 	if err := e.Store.SaveObservedFiles(c.ID, m.ID, m.TransactionID, dir, m.Text, "phone", m.Status, m.At, m.Attachments, m.Interaction); err != nil {
@@ -375,14 +364,7 @@ func (e *Engine) ImportInboxHistory(ctx context.Context, conv, cursor string) (m
 	if err = ctx.Err(); err != nil {
 		return nil, err
 	}
-	a, archiveErr := e.Store.Archive(conv)
-	if archiveErr != nil {
-		if !errors.Is(archiveErr, sql.ErrNoRows) {
-			return nil, archiveErr
-		}
-		a = store.Archive{Conversation: verified, State: "queued", Generation: 1}
-	}
-	if err = e.Store.SaveArchive(a, current.ArchiveRetentionDays); err != nil {
+	if err = e.ensureArchive(verified, current.ArchiveRetentionDays); err != nil {
 		return nil, err
 	}
 	count, duplicates, skipped := 0, 0, 0

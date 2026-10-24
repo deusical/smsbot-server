@@ -1061,6 +1061,8 @@ paths:
             Archive records, including stopped/offline conversations; never collection consent.
             retry_at/failures/error describe deep backfill; recent_retry_at/recent_failures/recent_error
             describe independent recent reconciliation backoff. Error values are sanitized codes.
+            generation versions the import; refresh_generation (optional) versions the
+            viewed-section check. Both are opaque counters.
   /inbox/conversations/{id}/sync:
     parameters:
     - name: id
