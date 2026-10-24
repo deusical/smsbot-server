@@ -209,7 +209,7 @@ feed updates file state and previews when originals are saved.
 
 Temporary listen/ping/phone-readiness failures latch transport unavailability independently of the receive queue. A single recovery worker checks the existing paired client with a 20-second deadline, retries with exponential backoff and jitter (capped at five minutes), and re-arms a missing receive stream after repeated failures. Recovery hints expedite checks but do not establish readiness. Successful recovery requires a responding phone, a connected stream and a saved encrypted session; a generation check prevents a stale success from overriding a newer failure. Authentication, account change, session conflict, fatal stream and storage errors remain blocked for owner intervention.
 
-Connection interruption cancels queued, generating and approval work without changing the persisted owner Live/Pause choice. Generation/upload contexts are cancelled; submitted/uncertain intents retain their evidence and are never replayed. Readiness gates every send while offline. Recovery clears cached identities and advances the command freshness cutoff, so only new post-verification commands can execute. Receipts still reconcile during the gap. Explicit owner pause remains authoritative, and process startup still pauses. API v1 adds sanitized connection_state and connection_retry_at fields; the dashboard distinguishes reconnecting from owner-action failures and explains automatic resumption when Live.
+Connection interruption cancels queued, generating and approval work without changing the persisted owner Live/Pause choice. Generation/upload contexts are cancelled; submitted/uncertain intents retain their evidence and are never replayed. Readiness gates every send while offline. Recovery clears cached identities and advances the command freshness cutoff, so only new post-verification commands can execute. Receipts still reconcile during the gap. Explicit owner pause remains authoritative, and process startup still pauses. If the phone does not answer the startup readiness check, the service still starts, unready, and the same recovery worker verifies the phone with backoff; only rejected credentials stop startup. Exiting instead made systemd restart the service, and probe the phone, every minute until it answered. API v1 adds sanitized connection_state and connection_retry_at fields; the dashboard distinguishes reconnecting from owner-action failures and explains automatic resumption when Live.
 
 
 ## Sync scheduling, progress and capture checks
@@ -332,7 +332,10 @@ hint, and identity changes discard that hint while preserving the send baseline
 until a verified lookup. A connection or identity reset clears every verified
 identity and the cached list pages, but keeps the hints: they only list
 conversations, and re-reading all of them after each reconnect cost about 400 phone
-requests per reconnect in the field (several reconnects a day). List scans
+requests per reconnect in the field (several reconnects a day). The hints are also
+saved, encrypted, next to the session (every 30 seconds when changed, and at
+shutdown) and restored at startup, so a restart or deploy does not re-read every
+conversation either; a new pairing discards them. List scans
 still reconcile inventory and ordering. Cached discovery hints never replace live
 participant checks for sending, capture, history or original-file access.
 

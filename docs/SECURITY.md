@@ -17,7 +17,8 @@ pair a real account.
 ## How it is protected
 
 - **Encryption at rest.** Message bodies, queued plans, attachment payloads, pairing
-  sessions and settings are sealed with AES-GCM bound to a scope (job, message,
+  sessions, settings and the conversation discovery cache (`google-session.enc.hints`:
+  conversation names and participant identifiers) are sealed with AES-GCM bound to a scope (job, message,
   session). The master key lives outside the database directory. Windows wraps it with
   the current user's DPAPI; Linux requires a key file with mode 0600 or stricter. A state
   directory copied without its key cannot be read, and DPAPI-protected keys do not move
