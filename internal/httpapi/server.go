@@ -3,11 +3,6 @@ package httpapi
 import (
 	"embed"
 	"encoding/json"
-	"github.com/deusical/smsbot-server/internal/bot"
-	"github.com/deusical/smsbot-server/internal/collection"
-	"github.com/deusical/smsbot-server/internal/media"
-	"github.com/deusical/smsbot-server/internal/store"
-	"github.com/deusical/smsbot-server/internal/transport"
 	"io"
 	"io/fs"
 	"math"
@@ -16,6 +11,12 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/deusical/smsbot-server/internal/bot"
+	"github.com/deusical/smsbot-server/internal/collection"
+	"github.com/deusical/smsbot-server/internal/media"
+	"github.com/deusical/smsbot-server/internal/store"
+	"github.com/deusical/smsbot-server/internal/transport"
 )
 
 //go:embed all:assets
@@ -29,13 +30,15 @@ func init() {
 type Server struct {
 	Engine     *bot.Engine
 	Collection *collection.Service
+	Store      *store.Store
+	Transport  transport.Transport
 	Origin     string
 	Fixture    bool
 	mux        *http.ServeMux
 }
 
 func New(e *bot.Engine, c *collection.Service, origin string, fixture bool) *Server {
-	s := &Server{Engine: e, Collection: c, Origin: origin, Fixture: fixture, mux: http.NewServeMux()}
+	s := &Server{Engine: e, Collection: c, Store: e.Store, Transport: e.Transport, Origin: origin, Fixture: fixture, mux: http.NewServeMux()}
 	s.featureRoutes()
 	s.mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { s.json(w, 200, map[string]string{"status": "running"}) })
 	s.mux.HandleFunc("POST /api/v1/login", s.login)
@@ -129,7 +132,7 @@ func (s *Server) protected(fn http.HandlerFunc) http.HandlerFunc {
 			s.bad(w, 401, "authentication_required")
 			return
 		}
-		expires, ok := s.Engine.Store.SessionExpiry(c.Value)
+		expires, ok := s.Store.SessionExpiry(c.Value)
 		if !ok {
 			s.bad(w, 401, "authentication_required")
 			return
@@ -156,7 +159,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Tolerate whitespace copied along with the credential file contents.
-	if !s.Engine.Store.Credential(strings.TrimSpace(in.Token), "owner") {
+	if !s.Store.Credential(strings.TrimSpace(in.Token), "owner") {
 		s.bad(w, 401, "invalid_credentials")
 		return
 	}
@@ -169,7 +172,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	} else {
 		expires = time.Now().Add(sessionLifetime).Unix()
 	}
-	if e := s.Engine.Store.AddCredential(token, "Browser", "session", expires); e != nil {
+	if e := s.Store.AddCredential(token, "Browser", "session", expires); e != nil {
 		s.bad(w, 500, "storage_error")
 		return
 	}
@@ -186,7 +189,7 @@ func (s *Server) sessionCookie(w http.ResponseWriter, token string, age int) {
 	http.SetCookie(w, &http.Cookie{Name: "smsbot_session", Value: token, Path: "/api/v1", HttpOnly: true, Secure: strings.HasPrefix(s.Origin, "https://"), SameSite: http.SameSiteStrictMode, MaxAge: age})
 }
 func (s *Server) revokeSessions(w http.ResponseWriter, r *http.Request) {
-	if e := s.Engine.Store.RevokeSessions(); e != nil {
+	if e := s.Store.RevokeSessions(); e != nil {
 		s.bad(w, 500, "storage_error")
 		return
 	}
@@ -195,8 +198,7 @@ func (s *Server) revokeSessions(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 	if c, e := r.Cookie("smsbot_session"); e == nil {
-		_, err := s.Engine.Store.DB.Exec("DELETE FROM credentials WHERE hash=? AND kind='session'", store.Hash(c.Value))
-		if err != nil {
+		if err := s.Store.RevokeSession(c.Value); err != nil {
 			s.bad(w, 500, "storage_error")
 			return
 		}
@@ -205,13 +207,13 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 	s.json(w, 200, map[string]bool{"authenticated": false})
 }
 func (s *Server) state(w http.ResponseWriter, r *http.Request) {
-	p, e := s.Engine.Store.Paused()
+	p, e := s.Store.Paused()
 	if e != nil {
 		s.bad(w, 500, "storage_error")
 		return
 	}
-	value := map[string]any{"api_version": 1, "paused": p, "transport_ready": s.Engine.Transport.Ready(), "transport": map[bool]string{true: "fixture", false: "google_messages"}[s.Fixture], "fixture": s.Fixture, "capabilities": []string{"fixed_commands", "enrollment", "activity", "encrypted_inbox", "configuration", "models", "history", "history_import", "playground", "approvals", "manual_compose", "recipes", "ai_commands", "full_inbox", "attachments", "archive_history", "archive_refresh", "archive_files", "archive_backup", "archive_stats", "conversation_sync", "read_receipts", "typing", "message_actions", "rcs_replies", "rcs_reactions"}}
-	if reporter, ok := s.Engine.Transport.(transport.ConnectionReporter); ok {
+	value := map[string]any{"api_version": 1, "paused": p, "transport_ready": s.Transport.Ready(), "transport": map[bool]string{true: "fixture", false: "google_messages"}[s.Fixture], "fixture": s.Fixture, "capabilities": []string{"fixed_commands", "enrollment", "activity", "encrypted_inbox", "configuration", "models", "history", "history_import", "playground", "approvals", "manual_compose", "recipes", "ai_commands", "full_inbox", "attachments", "archive_history", "archive_refresh", "archive_files", "archive_backup", "archive_stats", "conversation_sync", "read_receipts", "typing", "message_actions", "rcs_replies", "rcs_reactions"}}
+	if reporter, ok := s.Transport.(transport.ConnectionReporter); ok {
 		connection := reporter.ConnectionStatus()
 		value["connection_state"] = connection.State
 		if connection.RetryAt != "" {
@@ -219,15 +221,15 @@ func (s *Server) state(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if reporter, ok := s.Engine.Transport.(transport.PhoneRequestReporter); ok {
+	if reporter, ok := s.Transport.(transport.PhoneRequestReporter); ok {
 		value["phone_requests"] = reporter.PhoneRequests()
 	}
 
-	if reporter, ok := s.Engine.Transport.(transport.PhonePurposeReporter); ok {
+	if reporter, ok := s.Transport.(transport.PhonePurposeReporter); ok {
 		value["phone_request_purposes"] = reporter.PhoneRequestPurposes()
 		value["phone_request_coverage"] = "adapter_attempts_only"
 	}
-	if reporter, ok := s.Engine.Transport.(transport.PhoneRelayReporter); ok {
+	if reporter, ok := s.Transport.(transport.PhoneRelayReporter); ok {
 		value["phone_relay_requests"] = reporter.PhoneRelayRequests()
 	}
 	gaps, unknown := s.Collection.CaptureGapStatus()
@@ -254,7 +256,7 @@ func (s *Server) pause(w http.ResponseWriter, r *http.Request) {
 		s.bad(w, 400, "paused_required")
 		return
 	}
-	if !*in.Paused && !s.Engine.Transport.Ready() {
+	if !*in.Paused && !s.Transport.Ready() {
 		s.bad(w, 503, "transport_unavailable")
 		return
 	}
@@ -272,7 +274,7 @@ func (s *Server) enroll(w http.ResponseWriter, r *http.Request) {
 	if !s.decode(w, r, &in) {
 		return
 	}
-	list, e := s.Engine.Transport.Conversations(r.Context())
+	list, e := s.Transport.Conversations(r.Context())
 	if e != nil {
 		s.bad(w, 503, "transport_unavailable")
 		return
@@ -297,7 +299,7 @@ func (s *Server) unenroll(w http.ResponseWriter, r *http.Request) {
 	s.json(w, 200, map[string]bool{"enrolled": false})
 }
 func (s *Server) activity(w http.ResponseWriter, r *http.Request) {
-	jobs, e := s.Engine.Store.Jobs()
+	jobs, e := s.Store.Jobs()
 	if e != nil {
 		s.bad(w, 500, "storage_error")
 		return
@@ -343,7 +345,7 @@ func (s *Server) incoming(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) fixtureTyping(w http.ResponseWriter, r *http.Request) {
-	fixture, ok := s.Engine.Transport.(*transport.Fixture)
+	fixture, ok := s.Transport.(*transport.Fixture)
 	if !s.Fixture || !ok {
 		s.bad(w, 404, "not_found")
 		return

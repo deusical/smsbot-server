@@ -79,16 +79,11 @@ func (svc *Service) Init() error {
 	if !settings.Enabled {
 		return nil
 	}
-	if settings.Scope == "all" {
-		_, err = svc.Store.DB.Exec("INSERT OR IGNORE INTO archive_pending SELECT DISTINCT conversation FROM messages WHERE conversation NOT IN (SELECT conversation FROM archive_conversations)")
-		return err
-	}
+	selected := make([]string, 0, len(settings.Conversations))
 	for _, b := range settings.Conversations {
-		if _, err = svc.Store.DB.Exec("INSERT OR IGNORE INTO archive_pending SELECT ? WHERE NOT EXISTS(SELECT 1 FROM archive_conversations WHERE conversation=?)", b.Conversation, b.Conversation); err != nil {
-			return err
-		}
+		selected = append(selected, b.Conversation)
 	}
-	return nil
+	return svc.Store.PreserveHistory(settings.Scope == "all", selected)
 }
 
 // ConsentEpoch identifies the current collection consent; it changes whenever

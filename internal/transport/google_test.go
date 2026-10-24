@@ -1,10 +1,11 @@
 package transport
 
 import (
-	"go.mau.fi/mautrix-gmessages/pkg/libgm"
-	"go.mau.fi/mautrix-gmessages/pkg/libgm/gmproto"
 	"testing"
 	"time"
+
+	"go.mau.fi/mautrix-gmessages/pkg/libgm"
+	"go.mau.fi/mautrix-gmessages/pkg/libgm/gmproto"
 )
 
 func TestCookieParserNeverExecutesInput(t *testing.T) {

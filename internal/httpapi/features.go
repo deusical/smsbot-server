@@ -2,9 +2,10 @@ package httpapi
 
 import (
 	"encoding/json"
-	"github.com/deusical/smsbot-server/internal/bot"
 	"net/http"
 	"strconv"
+
+	"github.com/deusical/smsbot-server/internal/bot"
 )
 
 func (s *Server) featureRoutes() {
@@ -164,10 +165,7 @@ func (s *Server) playground(w http.ResponseWriter, r *http.Request) {
 	}
 	s.json(w, 200, result)
 }
-func (s *Server) enrolled(id string) bool {
-	var n int
-	return s.Engine.Store.DB.QueryRow("SELECT count(*) FROM enrollment WHERE conversation=?", id).Scan(&n) == nil && n == 1
-}
+func (s *Server) enrolled(id string) bool { return s.Store.HasEnrollment(id) }
 func (s *Server) history(w http.ResponseWriter, r *http.Request) {
 	if !s.enrolled(r.PathValue("id")) {
 		s.bad(w, 403, "enrollment_required")
@@ -182,7 +180,7 @@ func (s *Server) history(w http.ResponseWriter, r *http.Request) {
 		}
 		limit = value
 	}
-	page, err := s.Engine.Store.MessagePage(r.PathValue("id"), r.URL.Query().Get("cursor"), r.URL.Query().Get("search"), limit)
+	page, err := s.Store.MessagePage(r.PathValue("id"), r.URL.Query().Get("cursor"), r.URL.Query().Get("search"), limit)
 	if err != nil {
 		s.bad(w, 400, "history_unavailable_or_invalid_query")
 		return

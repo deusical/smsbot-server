@@ -3,14 +3,15 @@ package httpapi
 import (
 	"bytes"
 	"encoding/json"
-	"github.com/deusical/smsbot-server/internal/app"
-	"github.com/deusical/smsbot-server/internal/store"
-	"github.com/deusical/smsbot-server/internal/transport"
-	"github.com/deusical/smsbot-server/internal/vault"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
+
+	"github.com/deusical/smsbot-server/internal/app"
+	"github.com/deusical/smsbot-server/internal/store"
+	"github.com/deusical/smsbot-server/internal/transport"
+	"github.com/deusical/smsbot-server/internal/vault"
 )
 
 func apiSetup(t *testing.T) *Server {
@@ -121,7 +122,7 @@ func TestRememberedLoginNeverExpiresAndRevokesEverywhere(t *testing.T) {
 	if short.MaxAge != 12*3600 || long.MaxAge != 400*24*3600 {
 		t.Fatal(short.MaxAge, long.MaxAge)
 	}
-	if expires, ok := s.Engine.Store.SessionExpiry(long.Value); !ok || expires != 0 {
+	if expires, ok := s.Store.SessionExpiry(long.Value); !ok || expires != 0 {
 		t.Fatal("remembered session expires", expires)
 	}
 	get := func(c *http.Cookie) *httptest.ResponseRecorder {
@@ -226,4 +227,11 @@ func TestFixtureEndpointUnavailableInLiveMode(t *testing.T) {
 	if w := req(s, "POST", "/api/v1/fixture/incoming", `{}`, "fixture-client", ""); w.Code != 404 {
 		t.Fatal(w.Code)
 	}
+}
+
+// useTransport swaps the single process-wide transport every service uses.
+func useTransport(s *Server, t transport.Transport) {
+	s.Transport = t
+	s.Engine.Transport = t
+	s.Collection.Transport = t
 }
