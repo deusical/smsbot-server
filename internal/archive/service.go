@@ -180,8 +180,7 @@ func (s *Service) Tick(ctx context.Context) {
 			if ctx.Err() != nil {
 				return
 			}
-			retry, _ := time.Parse(time.RFC3339Nano, file.RetryAt)
-			if time.Now().Before(retry) {
+			if time.Now().Before(file.OriginalRetryAt()) {
 				continue
 			}
 			// Repair can authorize or refresh against the phone. A blocked
@@ -351,8 +350,7 @@ func (s *Service) ingest(ctx context.Context, c transport.Conversation, revision
 	updated := file
 	updated.ArchiveState = "failed"
 	updated.ArchiveError = "download_failed"
-	updated.Failures++
-	updated.RetryAt = time.Now().Add(time.Duration(1<<min(updated.Failures, 8)) * 5 * time.Second).UTC().Format(time.RFC3339Nano)
+	updated.BackoffOriginal(time.Now())
 	limit := p.MaxFileMiB << 20
 	fail := func() {
 		if ctx.Err() == nil {

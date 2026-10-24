@@ -120,3 +120,51 @@ func TestChangedBlockedSourceAndSmallerFilesRemainEligible(t *testing.T) {
 		t.Fatal("smaller changed source did not resume preservation", err)
 	}
 }
+
+func TestLegacyRepeatedFailuresSkipPhoneUntilCooldownOrSourceChange(t *testing.T) {
+	s, manager := setup(t)
+	file := media.File{Info: media.Info{ID: "part", ArchiveState: "failed"}, ActionID: "action", MessageID: "upstream", Failures: 18, RetryAt: time.Now().Add(-time.Minute).UTC().Format(time.RFC3339Nano)}
+	seed(t, s, []media.File{file})
+	host := &repairCountingHost{fileHost: &fileHost{s: s, data: []byte("small")}}
+	for range 3 {
+		manager = New(s, manager.Root, host)
+		manager.Tick(context.Background())
+	}
+	if host.repairs != 0 || host.authorizations != 0 || host.opens != 0 {
+		t.Fatal("legacy repeated failure performed phone work")
+	}
+	file.RemoteID, file.RetryAt, file.Failures = "newly-uploaded-original", "", 0
+	file.ArchiveState = ""
+	if err := s.SaveObservedFiles("chat", "message", "", "incoming", "Synthetic update", "phone", "read", time.Now(), []media.File{file}); err != nil {
+		t.Fatal(err)
+	}
+	manager.cursor, manager.nextScan = "", time.Time{}
+	manager.Tick(context.Background())
+	current, err := s.Attachment("chat", store.Hash("chat\x00message"), file.ID)
+	if err != nil || current.BlobID == "" {
+		t.Fatal("changed source did not bypass old failure cooldown", err)
+	}
+}
+
+func TestObservedModernFailureKeepsRetryVersionAndEventuallyRetries(t *testing.T) {
+	s, manager := setup(t)
+	file := media.File{Info: media.Info{ID: "part", Size: 5, ArchiveState: "failed"}, RemoteID: "source", Failures: 14}
+	file.BackoffOriginal(time.Now().Add(-25 * time.Hour))
+	seed(t, s, []media.File{file})
+	observed := file
+	observed.RetryAt, observed.ArchiveState, observed.Failures, observed.RetryBackoffVersion = "", "", 0, 0
+	if err := s.SaveObservedFiles("chat", "message", "", "incoming", "Synthetic update", "phone", "read", time.Now(), []media.File{observed}); err != nil {
+		t.Fatal(err)
+	}
+	current, err := s.Attachment("chat", store.Hash("chat\x00message"), file.ID)
+	if err != nil || current.RetryBackoffVersion != 1 {
+		t.Fatal("observation erased retry schedule version", err)
+	}
+	host := &fileHost{s: s, data: []byte("small")}
+	manager.Host = host
+	manager.Tick(context.Background())
+	current, err = s.Attachment("chat", store.Hash("chat\x00message"), file.ID)
+	if err != nil || current.BlobID == "" || host.opens != 1 {
+		t.Fatal("expired modern cooldown did not retry", err)
+	}
+}

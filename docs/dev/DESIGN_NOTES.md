@@ -297,6 +297,13 @@ resume. Unknown-size downloads get a bounded attempt under the current budget;
 smaller eligible sources can still fit. Identity and consent checks continue to
 apply to every attempt and commit.
 
+Unavailable originals use exponential retry delays, starting at ten seconds and
+growing to a daily retry for sustained failures. Legacy persisted failures adopt
+the longer delay locally, without a final phone attempt to rewrite their state.
+Repeated observations retain the failure deadline and its schedule version; a
+changed source is immediately eligible. Recovery of an unchanged source after
+many failures can therefore take up to a day unless the owner requests it directly.
+
 ## CI execution
 
 Offline checks run once per pull request commit and on main pushes. Superseded

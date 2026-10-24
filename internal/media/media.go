@@ -83,23 +83,24 @@ type Info struct {
 type File struct {
 	Info
 	// Google inline media can be a tiny preview, never an original.
-	PreviewData    []byte `json:"preview_data,omitempty"`
-	MessageID      string `json:"upstream_message_id,omitempty"`
-	ActionID       string `json:"upstream_action_id,omitempty"`
-	ConversationID string `json:"upstream_conversation_id,omitempty"`
-	Timestamp      int64  `json:"upstream_timestamp,omitempty"`
-	SizeUnverified bool   `json:"size_unverified,omitempty"`
-	BlobID         string `json:"blob_id,omitempty"`
-	Digest         string `json:"digest,omitempty"`
-	RetryAt        string `json:"retry_at,omitempty"`
-	RetryPolicy    string `json:"retry_policy,omitempty"`
-	Failures       int    `json:"failures,omitempty"`
-	Data           []byte `json:"data,omitempty"`
-	RemoteID       string `json:"remote_id,omitempty"`
-	Key            []byte `json:"key,omitempty"`
-	ThumbnailID    string `json:"thumbnail_id,omitempty"`
-	ThumbnailKey   []byte `json:"thumbnail_key,omitempty"`
-	ReadLimit      int64  `json:"-"`
+	PreviewData         []byte `json:"preview_data,omitempty"`
+	MessageID           string `json:"upstream_message_id,omitempty"`
+	ActionID            string `json:"upstream_action_id,omitempty"`
+	ConversationID      string `json:"upstream_conversation_id,omitempty"`
+	Timestamp           int64  `json:"upstream_timestamp,omitempty"`
+	SizeUnverified      bool   `json:"size_unverified,omitempty"`
+	BlobID              string `json:"blob_id,omitempty"`
+	Digest              string `json:"digest,omitempty"`
+	RetryAt             string `json:"retry_at,omitempty"`
+	RetryPolicy         string `json:"retry_policy,omitempty"`
+	Failures            int    `json:"failures,omitempty"`
+	RetryBackoffVersion int    `json:"retry_backoff_version,omitempty"`
+	Data                []byte `json:"data,omitempty"`
+	RemoteID            string `json:"remote_id,omitempty"`
+	Key                 []byte `json:"key,omitempty"`
+	ThumbnailID         string `json:"thumbnail_id,omitempty"`
+	ThumbnailKey        []byte `json:"thumbnail_key,omitempty"`
+	ReadLimit           int64  `json:"-"`
 }
 
 // Upload deliberately has no remote reference or key fields.
