@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/deusical/smsbot-server/internal/history"
 	"github.com/deusical/smsbot-server/internal/media"
 	"github.com/deusical/smsbot-server/internal/store"
 	"github.com/deusical/smsbot-server/internal/transport"
@@ -332,25 +333,15 @@ func (e *Engine) ImportInboxHistory(ctx context.Context, conv, cursor string) (m
 	if !s.Enabled || !s.LoadOlder {
 		return nil, errors.New("older_history_disabled")
 	}
-	c, err := e.lookupConversation(ctx, conv)
-	if err != nil || !s.Allows(c) {
-		return nil, errors.New("inbox_access_disabled")
-	}
 	source, ok := e.Transport.(transport.HistorySource)
 	if !ok {
 		return nil, errors.New("history_unavailable")
 	}
-	snapshot, err := e.Store.ChangeWatermark(conv)
+	// Collection consent is this route's grant; enrollment plays no part.
+	collected := historyAccess{allows: s.Allows, denied: errors.New("inbox_access_disabled")}
+	verified, page, snapshot, err := e.readHistoryPage(ctx, source, conv, cursor, collected)
 	if err != nil {
 		return nil, err
-	}
-	page, err := source.FetchHistory(ctx, conv, c.ParticipantID, cursor)
-	if err != nil {
-		return nil, err
-	}
-	verified, err := e.lookupConversation(ctx, conv)
-	if err != nil || verified.ParticipantID != c.ParticipantID || !s.Allows(verified) {
-		return nil, errors.New("conversation_identity_changed")
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -367,34 +358,11 @@ func (e *Engine) ImportInboxHistory(ctx context.Context, conv, cursor string) (m
 	if err = e.ensureArchive(verified, current.ArchiveRetentionDays); err != nil {
 		return nil, err
 	}
-	count, duplicates, skipped := 0, 0, 0
-	for _, m := range page.Messages {
-		changed, checkErr := e.Store.MessageChangedSince(conv, m.ID, m.TransactionID, snapshot)
-		if checkErr != nil {
-			return nil, checkErr
-		}
-		if changed {
-			skipped++
-			continue
-		}
-		if current.ArchiveRetentionDays > 0 && m.At.Before(e.now().AddDate(0, 0, -current.ArchiveRetentionDays)) {
-			skipped++
-			continue
-		}
-		var known int
-		if err = e.Store.DB.QueryRow("SELECT count(*) FROM message_alias WHERE alias=?", store.Hash(conv+"\x00"+m.ID)).Scan(&known); err != nil {
-			return nil, err
-		}
-		if err = e.Store.SaveObservedFiles(conv, m.ID, m.TransactionID, m.Direction, m.Text, "history", m.Status, m.At, m.Attachments, m.Interaction); err != nil {
-			return nil, err
-		}
-		if known == 0 {
-			count++
-		} else {
-			duplicates++
-		}
+	r, err := e.persistHistoryPage(ctx, conv, page.Messages, time.Time{}, history.Policy{Snapshot: &snapshot, Retention: current.ArchiveRetentionDays}, true)
+	if err != nil {
+		return nil, err
 	}
-	return map[string]any{"imported": count, "duplicates": duplicates, "skipped": skipped, "next_cursor": page.NextCursor, "available_pages_exhausted": page.NextCursor == "", "text_only": false}, nil
+	return map[string]any{"imported": r.imported, "duplicates": r.duplicates + r.updated, "skipped": r.skipped, "next_cursor": page.NextCursor, "available_pages_exhausted": page.NextCursor == "", "text_only": false}, nil
 }
 
 // A repeat acknowledges the original intent without creating another job,

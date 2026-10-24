@@ -120,6 +120,23 @@ failure counters and sanitized errors. A recent failure ends that conversation's
 current tick; subsequent ticks can run either lane when its own backoff permits.
 Inbox history advertises a change cursor only for persisted archives; conversations
 without an archive keep polling snapshots for new messages.
+
+### History entry points and their grants
+
+Three routes read upstream history. They share the bounded read sequence (identity
+and access check, change watermark, one page for that exact participant, identity
+and access check again, policy recheck under the engine lock) and the store's
+message/alias/attachment persistence, but never each other's grants:
+
+| Route | Grant | Saves | Retention | Counts |
+|---|---|---|---|---|
+| `POST /conversations/{id}/history/import` (legacy) | Current bot enrollment of the exact participant | Text only; cannot rewrite or expose a private capture | Bot job retention | `imported` |
+| `POST /inbox/conversations/{id}/history/import` | Collection consent with "load older" | Text, files and interactions; newer live observations win | Archive retention | `imported`, `duplicates` (unchanged or updated), `skipped` |
+| Archive jobs (`internal/history`) | Collection consent at the revision read before the fetch | As inbox, per workflow checkpoint | Archive retention and import cutoff | Per-import progress |
+
+None of them routes commands, changes Live/Pause, or proves that upstream history is
+complete: what is saved locally is what was read, and absence from a page deletes
+nothing.
 Archive UI polling uses the change feed after the initial snapshot, and page reads
 and change-feed reads serialize so an older snapshot cannot resurrect deleted rows
 or overwrite an already-applied edit.
