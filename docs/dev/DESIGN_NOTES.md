@@ -284,7 +284,7 @@ promptly rather than waiting for the slow fallback rotation. The transport recor
 each connection outage (readiness lost, or an event-queue overflow) once the
 connection is verified again, and wakes the history worker. The service start counts
 as an outage beginning at the newest saved message. The worker then runs a discovery
-pass at once (list pages only; cached details are reused), and every allowed
+pass at once (list pages only), and every allowed
 conversation whose phone-reported last activity is at or after the outage start gets
 a recent scan that pages back to 30 minutes before it, extending any scan already in
 progress. Conversations with no activity since cost nothing. The window stays open
@@ -325,19 +325,16 @@ participant checks, command freshness and Live/Pause semantics are unchanged.
 
 ## Avoiding redundant phone reads
 
-Conversation discovery and list display reuse per-conversation detail hints across
-routine reconciliation sweeps. These hints have no time-based expiry: new IDs or
-missing hints require a lookup, ordinary conversation events update the affected
-hint, and identity changes discard that hint while preserving the send baseline
-until a verified lookup. A connection or identity reset clears every verified
-identity and the cached list pages, but keeps the hints: they only list
-conversations, and re-reading all of them after each reconnect cost about 400 phone
-requests per reconnect in the field (several reconnects a day). The hints are also
-saved, encrypted, next to the session (every 30 seconds when changed, and at
-shutdown) and restored at startup, so a restart or deploy does not re-read every
-conversation either; a new pairing discards them. List scans
-still reconcile inventory and ordering. Cached discovery hints never replace live
-participant checks for sending, capture, history or original-file access.
+Conversation discovery and the inbox list are built from the phone's list pages
+alone (25 conversations a page). A list record carries the same identity fields as
+a single-conversation lookup; a field check on the Acer found name, group,
+read-only, type, sending number and participant identical for all 388
+conversations. The earlier design looked each listed conversation up again and
+kept the answers as in-memory "hints", which cost about 390 phone requests after
+each restart or reconnect. Groups and read-only conversations are still excluded
+from discovery. Inbox list records become the send baselines, as lookups did;
+sending, capture, history and original-file access still verify identity with a
+live lookup.
 
 Original-file policy blocks survive repeated observations of the same source and
 worker restarts. The worker checks a block locally before repair, authorization or
