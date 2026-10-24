@@ -4,6 +4,7 @@ import (
 	"embed"
 	"encoding/json"
 	"github.com/deusical/smsbot-server/internal/bot"
+	"github.com/deusical/smsbot-server/internal/collection"
 	"github.com/deusical/smsbot-server/internal/media"
 	"github.com/deusical/smsbot-server/internal/store"
 	"github.com/deusical/smsbot-server/internal/transport"
@@ -26,14 +27,15 @@ func init() {
 }
 
 type Server struct {
-	Engine  *bot.Engine
-	Origin  string
-	Fixture bool
-	mux     *http.ServeMux
+	Engine     *bot.Engine
+	Collection *collection.Service
+	Origin     string
+	Fixture    bool
+	mux        *http.ServeMux
 }
 
-func New(e *bot.Engine, origin string, fixture bool) *Server {
-	s := &Server{Engine: e, Origin: origin, Fixture: fixture, mux: http.NewServeMux()}
+func New(e *bot.Engine, c *collection.Service, origin string, fixture bool) *Server {
+	s := &Server{Engine: e, Collection: c, Origin: origin, Fixture: fixture, mux: http.NewServeMux()}
 	s.featureRoutes()
 	s.mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { s.json(w, 200, map[string]string{"status": "running"}) })
 	s.mux.HandleFunc("POST /api/v1/login", s.login)
@@ -228,7 +230,7 @@ func (s *Server) state(w http.ResponseWriter, r *http.Request) {
 	if reporter, ok := s.Engine.Transport.(transport.PhoneRelayReporter); ok {
 		value["phone_relay_requests"] = reporter.PhoneRelayRequests()
 	}
-	gaps, unknown := s.Engine.CaptureGapStatus()
+	gaps, unknown := s.Collection.CaptureGapStatus()
 	active := unknown
 	for _, g := range gaps {
 		if g.State != "checked_available" {
@@ -236,7 +238,7 @@ func (s *Server) state(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	value["inbox_capture_gap"] = active
-	value["conversations_revision"] = s.Engine.ConversationRevision()
+	value["conversations_revision"] = s.Collection.ConversationRevision()
 	value["inbox_capture_gaps"] = gaps
 	value["inbox_capture_gap_unknown"] = unknown
 	s.json(w, 200, value)
@@ -315,7 +317,7 @@ func (s *Server) incoming(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	m := input.Incoming
-	settings, settingsErr := s.Engine.InboxSettings()
+	settings, settingsErr := s.Collection.Settings()
 	if settingsErr != nil {
 		s.bad(w, 500, "settings_unavailable")
 		return

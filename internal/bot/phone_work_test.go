@@ -19,20 +19,6 @@ type countedCaptureTransport struct {
 
 func (f *countedCaptureTransport) IdentityEpoch() uint64 { return f.epoch.Load() }
 
-func TestCaptureWaitCancellation(t *testing.T) {
-	var reads captureReads
-	release, err := reads.acquire(context.Background(), "synthetic")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer release()
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if _, err = reads.acquire(ctx, "synthetic"); !errors.Is(err, context.Canceled) {
-		t.Fatal("cancelled duplicate blocked")
-	}
-}
-
 func TestCaptureDuplicateAndChangedSnapshots(t *testing.T) {
 	e, f := setup(t)
 	settings := enableInbox(t, e)
@@ -41,14 +27,14 @@ func TestCaptureDuplicateAndChangedSnapshots(t *testing.T) {
 		calls.Add(1)
 		return fixtureConversation(ctx, id)
 	}}}
-	e.Transport = source
+	useTransport(e, source)
 	m := incoming()
 	var wg sync.WaitGroup
 	for range 16 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := e.Observe(context.Background(), m); err != nil {
+			if err := e.Collection.Observe(context.Background(), m); err != nil {
 				t.Error(err)
 			}
 		}()
@@ -60,7 +46,7 @@ func TestCaptureDuplicateAndChangedSnapshots(t *testing.T) {
 	verify := func() {
 		t.Helper()
 		before := calls.Load()
-		if err := e.Observe(context.Background(), m); err != nil {
+		if err := e.Collection.Observe(context.Background(), m); err != nil {
 			t.Fatal(err)
 		}
 		if calls.Load() != before+1 {
@@ -96,7 +82,7 @@ func TestCaptureDuplicateAndChangedSnapshots(t *testing.T) {
 	verify()
 	source.epoch.Add(1)
 	verify()
-	if err := e.SetInboxSettings(context.Background(), settings); err != nil {
+	if err := e.Collection.SetSettings(context.Background(), settings); err != nil {
 		t.Fatal(err)
 	}
 	verify()
@@ -110,17 +96,17 @@ func TestCaptureFailedVerificationIsNotRemembered(t *testing.T) {
 	e, f := setup(t)
 	enableInbox(t, e)
 	calls := 0
-	e.Transport = &lookupTransport{Fixture: f, lookup: func(ctx context.Context, id string) (transport.Conversation, error) {
+	useTransport(e, &lookupTransport{Fixture: f, lookup: func(ctx context.Context, id string) (transport.Conversation, error) {
 		calls++
 		if calls == 1 {
 			return transport.Conversation{}, errors.New("synthetic_failure")
 		}
 		return fixtureConversation(ctx, id)
-	}}
-	if e.Observe(context.Background(), incoming()) == nil {
+	}})
+	if e.Collection.Observe(context.Background(), incoming()) == nil {
 		t.Fatal("failure hidden")
 	}
-	if err := e.Observe(context.Background(), incoming()); err != nil {
+	if err := e.Collection.Observe(context.Background(), incoming()); err != nil {
 		t.Fatal(err)
 	}
 	if calls != 2 {
@@ -140,13 +126,13 @@ func TestQueuedPreflightBackoffAndFreshness(t *testing.T) {
 			}
 			calls := 0
 			fail := true
-			e.Transport = &lookupTransport{Fixture: f, lookup: func(ctx context.Context, id string) (transport.Conversation, error) {
+			useTransport(e, &lookupTransport{Fixture: f, lookup: func(ctx context.Context, id string) (transport.Conversation, error) {
 				calls++
 				if fail {
 					return transport.Conversation{}, errors.New("synthetic_failure")
 				}
 				return fixtureConversation(ctx, id)
-			}}
+			}})
 			if e.Dispatch(context.Background()) == nil {
 				t.Fatal("failed preflight hidden")
 			}

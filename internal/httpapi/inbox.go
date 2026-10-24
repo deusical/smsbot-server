@@ -2,7 +2,7 @@ package httpapi
 
 import (
 	"bytes"
-	"github.com/deusical/smsbot-server/internal/bot"
+	"github.com/deusical/smsbot-server/internal/collection"
 	"github.com/deusical/smsbot-server/internal/media"
 	"github.com/deusical/smsbot-server/internal/store"
 	"github.com/deusical/smsbot-server/internal/transport"
@@ -27,7 +27,7 @@ func (s *Server) inboxRoutes() {
 	s.mux.HandleFunc("POST /api/v1/inbox/conversations/{id}/compose", s.protected(s.inboxCompose))
 }
 func (s *Server) inboxSettings(w http.ResponseWriter, r *http.Request) {
-	v, err := s.Engine.InboxSettings()
+	v, err := s.Collection.Settings()
 	if err != nil {
 		s.bad(w, 500, "settings_unavailable")
 		return
@@ -35,11 +35,11 @@ func (s *Server) inboxSettings(w http.ResponseWriter, r *http.Request) {
 	s.json(w, 200, v)
 }
 func (s *Server) saveInboxSettings(w http.ResponseWriter, r *http.Request) {
-	var v bot.InboxSettings
+	var v collection.Settings
 	if !s.decode(w, r, &v) {
 		return
 	}
-	if err := s.Engine.SetInboxSettings(r.Context(), v); err != nil {
+	if err := s.Collection.SetSettings(r.Context(), v); err != nil {
 		s.bad(w, 409, err.Error())
 		return
 	}
@@ -62,7 +62,7 @@ func (s *Server) inboxConversations(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	archived, err := s.Engine.ArchiveConversations()
+	archived, err := s.Collection.ArchiveConversations()
 	if err != nil {
 		s.bad(w, 500, "archive_unavailable")
 		return
@@ -92,7 +92,7 @@ func (s *Server) inboxConversations(w http.ResponseWriter, r *http.Request) {
 	p.Conversations = eligible
 
 	latest, _ := s.Engine.Store.LatestMessageTimes(r.Context())
-	settings, settingsErr := s.Engine.InboxSettings()
+	settings, settingsErr := s.Collection.Settings()
 	var previewIDs []string
 	for _, c := range p.Conversations {
 		if settingsErr == nil && (c.Archived || settings.Allows(c)) {
@@ -127,7 +127,7 @@ func (s *Server) inboxHistory(w http.ResponseWriter, r *http.Request) {
 	if archiveErr == nil {
 		p, err = s.localArchivePage(r.PathValue("id"), r.URL.Query().Get("cursor"), r.URL.Query().Get("search"), limit)
 	} else {
-		p, err = s.Engine.InboxPage(r.Context(), r.PathValue("id"), r.URL.Query().Get("cursor"), r.URL.Query().Get("search"), limit)
+		p, err = s.Collection.InboxPage(r.Context(), r.PathValue("id"), r.URL.Query().Get("cursor"), r.URL.Query().Get("search"), limit)
 	}
 	if err != nil {
 		s.bad(w, 409, "history_unavailable_or_access_disabled")
@@ -148,7 +148,7 @@ func (s *Server) inboxImport(w http.ResponseWriter, r *http.Request) {
 	if !s.decode(w, r, &v) {
 		return
 	}
-	p, err := s.Engine.ImportInboxHistory(r.Context(), r.PathValue("id"), v.Cursor)
+	p, err := s.Collection.ImportInboxHistory(r.Context(), r.PathValue("id"), v.Cursor)
 	if err != nil {
 		s.bad(w, 409, "history_unavailable_or_access_disabled")
 		return
@@ -156,7 +156,7 @@ func (s *Server) inboxImport(w http.ResponseWriter, r *http.Request) {
 	s.json(w, 200, p)
 }
 func (s *Server) inboxCompose(w http.ResponseWriter, r *http.Request) {
-	settings, settingsErr := s.Engine.InboxSettings()
+	settings, settingsErr := s.Collection.Settings()
 	if settingsErr != nil {
 		s.bad(w, 500, "settings_unavailable")
 		return
@@ -188,9 +188,9 @@ func (s *Server) inboxAttachment(w http.ResponseWriter, r *http.Request) {
 	var content io.ReadSeeker
 	var info media.Info
 	var localClose io.Closer
-	file, localErr := s.Engine.LocalArchiveAttachment(r.PathValue("id"), r.PathValue("message"), r.PathValue("attachment"))
+	file, localErr := s.Collection.LocalArchiveAttachment(r.PathValue("id"), r.PathValue("message"), r.PathValue("attachment"))
 	if localErr == nil {
-		settings, err := s.Engine.InboxSettings()
+		settings, err := s.Collection.Settings()
 		if err != nil {
 			s.bad(w, 500, "settings_unavailable")
 			return
@@ -201,7 +201,7 @@ func (s *Server) inboxAttachment(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if localErr == nil && file.BlobID != "" {
-		local, err := s.Engine.Archive.OpenLocal(file)
+		local, err := s.Collection.Archive.OpenLocal(file)
 		if err != nil {
 			s.bad(w, 409, "archived_file_missing_or_corrupt")
 			return
@@ -217,7 +217,7 @@ func (s *Server) inboxAttachment(w http.ResponseWriter, r *http.Request) {
 		defer localClose.Close()
 	}
 	if content == nil {
-		infoValue, data, err := s.Engine.InboxAttachmentContent(r.Context(), r.PathValue("id"), r.PathValue("message"), r.PathValue("attachment"), r.URL.Query().Get("inline") == "1")
+		infoValue, data, err := s.Collection.InboxAttachmentContent(r.Context(), r.PathValue("id"), r.PathValue("message"), r.PathValue("attachment"), r.URL.Query().Get("inline") == "1")
 		if err != nil {
 			if err.Error() == "attachment_size_limit" {
 				s.bad(w, 413, "attachment_size_limit")
@@ -261,7 +261,7 @@ func newestTime(a, b string) string {
 }
 
 func (s *Server) inboxTyping(w http.ResponseWriter, r *http.Request) {
-	s.json(w, 200, map[string]any{"conversations": s.Engine.TypingConversations()})
+	s.json(w, 200, map[string]any{"conversations": s.Collection.TypingConversations()})
 }
 
 // inboxRead marks a viewed conversation read on the phone through the newest
@@ -278,7 +278,7 @@ func (s *Server) inboxRead(w http.ResponseWriter, r *http.Request) {
 		s.bad(w, 400, "invalid_time")
 		return
 	}
-	if err = s.Engine.MarkConversationRead(r.Context(), r.PathValue("id"), through); err != nil {
+	if err = s.Collection.MarkConversationRead(r.Context(), r.PathValue("id"), through); err != nil {
 		code := "read_unavailable"
 		switch err.Error() {
 		case "read_receipts_disabled", "inbox_access_disabled", "archive_identity_changed", "newer_message", "invalid_time", "ineligible_conversation", "conversation_identity_changed":

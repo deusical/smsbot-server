@@ -1,4 +1,4 @@
-package bot
+package collection
 
 import (
 	"context"
@@ -8,6 +8,7 @@ import (
 	"github.com/deusical/smsbot-server/internal/store"
 	"github.com/deusical/smsbot-server/internal/transport"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -31,9 +32,9 @@ func (f *gapTransport) FetchHistory(context.Context, string, string, string) (tr
 	}
 	return transport.HistoryPage{Messages: []transport.HistoricalMessage{{ID: "synthetic-gap-message", Direction: "incoming", Text: "!ping", At: f.at}}}, nil
 }
-func seedGap(t *testing.T, e *Engine, at time.Time) {
+func seedGap(t *testing.T, e *Service, at time.Time) {
 	t.Helper()
-	consent := e.captureConsent.Load()
+	consent := e.consent.Load()
 	e.noteCaptureGap(transport.Incoming{ConversationID: "demo-chat", At: at, Text: "synthetic private body"}, consent.epoch, "capture_check_failed")
 	e.flushCaptureGaps()
 }
@@ -103,7 +104,7 @@ func TestHistoricalCaptureFailureTargetsMessageTimeAndPersistsObservation(t *tes
 	e, _ := setup(t)
 	enableInbox(t, e)
 	at := time.Now().AddDate(-1, 0, 0).UTC()
-	e.noteCaptureGap(transport.Incoming{ConversationID: "demo-chat", At: at, Historical: true}, e.captureConsent.Load().epoch, "phone_unavailable")
+	e.noteCaptureGap(transport.Incoming{ConversationID: "demo-chat", At: at, Historical: true}, e.consent.Load().epoch, "phone_unavailable")
 	e.flushCaptureGaps()
 	gaps, err := e.Store.CaptureGaps()
 	if err != nil || len(gaps) != 1 {
@@ -118,7 +119,7 @@ func TestHistoricalCaptureFailureTargetsMessageTimeAndPersistsObservation(t *tes
 	}
 	// A later live failure must retain both unverified ranges, restart repair,
 	// and avoid presenting their union as a single historical update.
-	e.noteCaptureGap(transport.Incoming{ConversationID: "demo-chat", At: time.Now()}, e.captureConsent.Load().epoch, "phone_unavailable")
+	e.noteCaptureGap(transport.Incoming{ConversationID: "demo-chat", At: time.Now()}, e.consent.Load().epoch, "phone_unavailable")
 	e.flushCaptureGaps()
 	gaps, err = e.Store.CaptureGaps()
 	if err != nil || len(gaps) != 1 || gaps[0].Kind != "mixed" || gaps[0].Since != g.Since || gaps[0].Generation <= g.Generation {
@@ -139,7 +140,7 @@ func TestRepairReconcilesAnImportCompletedBeforeRestart(t *testing.T) {
 	if err := e.Store.SaveCaptureGap(gap); err != nil {
 		t.Fatal(err)
 	}
-	if err := (archiveHost{e}).RepairCaptureGap(context.Background()); err != nil {
+	if err := e.HistoryHost().RepairCaptureGap(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	gaps, err := e.Store.CaptureGaps()
@@ -157,11 +158,14 @@ func TestCaptureGapPersistsRepairsAndNeverRunsCommands(t *testing.T) {
 	if !e.InboxCaptureGap() {
 		t.Fatal("pending gap missing")
 	}
-	restarted := assemble(t, e.Store, e.Transport)
+	restarted := New(e.Store, e.Transport, new(sync.Mutex))
+	if err := restarted.Init(); err != nil {
+		t.Fatal(err)
+	}
 	if !restarted.InboxCaptureGap() {
 		t.Fatal("gap lost on restart")
 	}
-	if err := (archiveHost{e}).RepairCaptureGap(context.Background()); err != nil {
+	if err := e.HistoryHost().RepairCaptureGap(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	gaps, unknown := e.CaptureGapStatus()
@@ -197,7 +201,7 @@ func TestNewCaptureFailureCannotBeClearedByOlderRepair(t *testing.T) {
 	e.Transport = source
 	seedGap(t, e, at)
 	source.beforeFetch = func() { seedGap(t, e, at.Add(-time.Hour)) }
-	if err := (archiveHost{e}).RepairCaptureGap(context.Background()); err != nil {
+	if err := e.HistoryHost().RepairCaptureGap(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	gaps, _ := e.CaptureGapStatus()
@@ -215,14 +219,14 @@ func TestCaptureRepairHonorsConsentRevocationAndRetries(t *testing.T) {
 		seedGap(t, e, at)
 		if revoke {
 			source.beforeFetch = func() {
-				cfg, _ := e.InboxSettings()
+				cfg, _ := e.Settings()
 				cfg.Enabled = false
-				if err := e.SetInboxSettings(context.Background(), cfg); err != nil {
+				if err := e.SetSettings(context.Background(), cfg); err != nil {
 					t.Fatal(err)
 				}
 			}
 		}
-		_ = (archiveHost{e}).RepairCaptureGap(context.Background())
+		_ = e.HistoryHost().RepairCaptureGap(context.Background())
 		gaps, _ := e.CaptureGapStatus()
 		if len(gaps) != 1 || gaps[0].State != "retrying" || gaps[0].RetryAt == "" {
 			t.Fatal("failed/revoked check marked complete")
@@ -231,7 +235,7 @@ func TestCaptureRepairHonorsConsentRevocationAndRetries(t *testing.T) {
 		if len(page.Messages) != 0 {
 			t.Fatal("unverified phone data published")
 		}
-		_ = (archiveHost{e}).RepairCaptureGap(context.Background())
+		_ = e.HistoryHost().RepairCaptureGap(context.Background())
 		if source.calls != 1 {
 			t.Fatal("repair ignored backoff or revoked consent")
 		}
@@ -240,7 +244,7 @@ func TestCaptureRepairHonorsConsentRevocationAndRetries(t *testing.T) {
 func TestCaptureGapAggregationIsBoundedAndUnknownScopeIsExplicit(t *testing.T) {
 	e, _ := setup(t)
 	enableInbox(t, e)
-	epoch := e.captureConsent.Load().epoch
+	epoch := e.consent.Load().epoch
 	for i := 0; i < 520; i++ {
 		e.noteCaptureGap(transport.Incoming{ConversationID: store.ID(), At: time.Now()}, epoch, "capture_queue_full")
 	}
@@ -282,36 +286,6 @@ func TestDeepProgressCountsCheckedNewAndUpdatedSeparately(t *testing.T) {
 	}
 }
 
-func TestImportedSendAliasDoesNotCountAsNewSavedMessage(t *testing.T) {
-	e, _ := setup(t)
-	cfg := enableInbox(t, e)
-	arm(t, e)
-	if ok, err := e.Accept(context.Background(), incoming()); err != nil || !ok {
-		t.Fatal("fixture command not accepted")
-	}
-	if err := e.Dispatch(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	var txn string
-	if err := e.Store.DB.QueryRow("SELECT txn FROM jobs WHERE txn!='' LIMIT 1").Scan(&txn); err != nil {
-		t.Fatal(err)
-	}
-	a, err := e.Store.Archive("demo-chat")
-	if err != nil {
-		a = store.Archive{Conversation: transport.Conversation{ID: "demo-chat", ParticipantID: "demo-peer", Writable: true}, State: "running", Generation: 1}
-		if err := e.Store.SaveArchive(a, 0); err != nil {
-			t.Fatal(err)
-		}
-	}
-	page := transport.HistoryPage{Messages: []transport.HistoricalMessage{{ID: "new-upstream-alias", TransactionID: txn, Direction: "outgoing", Text: "pong", At: time.Now(), Status: "submitted"}}}
-	if err := commitStep(e, history.ImportWork, a, history.Policy{Revision: cfg.Revision}, &page); err != nil {
-		t.Fatal(err)
-	}
-	saved, _ := e.Store.Archive("demo-chat")
-	if saved.Imported != 0 || saved.Checked != 1 {
-		t.Fatal("existing submitted intent counted as a new saved message")
-	}
-}
 func TestRepairDoesNotFetchExcludedGroupsOrChangedParticipants(t *testing.T) {
 	for _, group := range []bool{false, true} {
 		e, f := setup(t)
@@ -319,7 +293,7 @@ func TestRepairDoesNotFetchExcludedGroupsOrChangedParticipants(t *testing.T) {
 		source := &gapTransport{Fixture: f, at: time.Now()}
 		e.Transport = source
 		if group {
-			e.noteCaptureGap(transport.Incoming{ConversationID: "demo-group", At: time.Now()}, e.captureConsent.Load().epoch, "capture_check_failed")
+			e.noteCaptureGap(transport.Incoming{ConversationID: "demo-group", At: time.Now()}, e.consent.Load().epoch, "capture_check_failed")
 			e.flushCaptureGaps()
 		} else {
 			seedGap(t, e, time.Now())
@@ -327,7 +301,7 @@ func TestRepairDoesNotFetchExcludedGroupsOrChangedParticipants(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		_ = (archiveHost{e}).RepairCaptureGap(context.Background())
+		_ = e.HistoryHost().RepairCaptureGap(context.Background())
 		if source.calls != 0 {
 			t.Fatal("repair fetched excluded group or changed participant")
 		}
@@ -337,7 +311,7 @@ func TestRepairDoesNotFetchExcludedGroupsOrChangedParticipants(t *testing.T) {
 func TestCaptureGapRemainsVisibleWhileWaitingToPersist(t *testing.T) {
 	e, _ := setup(t)
 	enableInbox(t, e)
-	e.noteCaptureGap(transport.Incoming{ConversationID: "demo-chat", At: time.Now()}, e.captureConsent.Load().epoch, "capture_delayed")
+	e.noteCaptureGap(transport.Incoming{ConversationID: "demo-chat", At: time.Now()}, e.consent.Load().epoch, "capture_delayed")
 	e.mu.Lock()
 	done := make(chan struct{})
 	go func() { defer close(done); e.flushCaptureGaps() }()
@@ -388,7 +362,7 @@ func TestGapScheduleRespectsRetryAndUnknownScope(t *testing.T) {
 	if err := e.Store.SaveCaptureGap(g); err != nil {
 		t.Fatal(err)
 	}
-	at, pending := (archiveHost{e}).NextGapAttempt()
+	at, pending := e.HistoryHost().NextGapAttempt()
 	if !pending || !at.Equal(due) {
 		t.Fatal("lost retry deadline")
 	}
@@ -396,7 +370,7 @@ func TestGapScheduleRespectsRetryAndUnknownScope(t *testing.T) {
 	if err := e.Store.SaveCaptureGap(g); err != nil {
 		t.Fatal(err)
 	}
-	if _, pending := (archiveHost{e}).NextGapAttempt(); pending {
+	if _, pending := e.HistoryHost().NextGapAttempt(); pending {
 		t.Fatal("unknown scope keeps fast worker alive")
 	}
 }

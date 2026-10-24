@@ -3,6 +3,7 @@ package bot
 import (
 	"context"
 	"errors"
+	"github.com/deusical/smsbot-server/internal/collection"
 	"github.com/deusical/smsbot-server/internal/history"
 	"github.com/deusical/smsbot-server/internal/store"
 	"github.com/deusical/smsbot-server/internal/transport"
@@ -13,7 +14,7 @@ import (
 func TestArchiveConversationCreatesReusesAndRearchivesWithoutDeletingSavedHistory(t *testing.T) {
 	e, f := setup(t)
 	enableInbox(t, e)
-	first, err := e.RequestArchive(context.Background(), "demo-chat", "", false)
+	first, err := e.Collection.RequestArchive(context.Background(), "demo-chat", "", false)
 	if err != nil || first.State != "queued" {
 		t.Fatal("first archive", err)
 	}
@@ -34,7 +35,7 @@ func TestArchiveConversationCreatesReusesAndRearchivesWithoutDeletingSavedHistor
 	done := make(chan result, 2)
 	for i := 0; i < 2; i++ {
 		go func() {
-			a, err := e.RequestArchive(context.Background(), "demo-chat", "", false)
+			a, err := e.Collection.RequestArchive(context.Background(), "demo-chat", "", false)
 			done <- result{a, err}
 		}()
 	}
@@ -49,7 +50,7 @@ func TestArchiveConversationCreatesReusesAndRearchivesWithoutDeletingSavedHistor
 	if err = e.Store.SaveArchive(first, 0); err != nil {
 		t.Fatal(err)
 	}
-	again, err := e.RequestArchive(context.Background(), "demo-chat", "", false)
+	again, err := e.Collection.RequestArchive(context.Background(), "demo-chat", "", false)
 	if err != nil || again.State != "queued" || again.Generation <= first.Generation || again.Pages != 0 {
 		t.Fatal("completed archive did not rescan", err)
 	}
@@ -63,8 +64,8 @@ func TestLiveCaptureDuringFetchWinsOverStaleSnapshot(t *testing.T) {
 	e, f := setup(t)
 	cfg := enableInbox(t, e)
 	cfg.Scope = "selected"
-	cfg.Conversations = []InboxBinding{{"demo-chat", "demo-peer"}}
-	if err := e.SetInboxSettings(context.Background(), cfg); err != nil {
+	cfg.Conversations = []collection.Binding{{Conversation: "demo-chat", Participant: "demo-peer"}}
+	if err := e.Collection.SetSettings(context.Background(), cfg); err != nil {
 		t.Fatal(err)
 	}
 	c := transport.Conversation{ID: "demo-chat", ParticipantID: "demo-peer", Writable: true}
@@ -72,13 +73,13 @@ func TestLiveCaptureDuringFetchWinsOverStaleSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	held := &heldArchiveTransport{Fixture: f, started: make(chan struct{}, 1), release: make(chan struct{})}
-	e.Transport = held
+	useTransport(e, held)
 	done := make(chan struct{})
-	go func() { defer close(done); e.History.Tick(context.Background()) }()
+	go func() { defer close(done); e.Collection.History.Tick(context.Background()) }()
 	<-held.started
 	captured := make(chan error, 1)
 	go func() {
-		captured <- e.Observe(context.Background(), transport.Incoming{ID: "fixture-history", ConversationID: "demo-chat", ParticipantID: "demo-peer", Text: "Newer observed content", At: time.Now().Add(-time.Hour), Historical: true})
+		captured <- e.Collection.Observe(context.Background(), transport.Incoming{ID: "fixture-history", ConversationID: "demo-chat", ParticipantID: "demo-peer", Text: "Newer observed content", At: time.Now().Add(-time.Hour), Historical: true})
 	}()
 	select {
 	case err := <-captured:
@@ -132,13 +133,13 @@ func TestArchiveOldestTimestampAndHeadlessRetention(t *testing.T) {
 	if err != nil || !oldest.Equal(base) {
 		t.Fatal("fractional timestamp order incorrect", err)
 	}
-	cfg, _ = e.InboxSettings()
+	cfg, _ = e.Collection.Settings()
 	cfg.ArchiveRetentionDays = 1
 	cfg.Enabled = false
-	if err = e.SetInboxSettings(context.Background(), cfg); err != nil {
+	if err = e.Collection.SetSettings(context.Background(), cfg); err != nil {
 		t.Fatal(err)
 	}
-	e.History.Tick(context.Background())
+	e.Collection.History.Tick(context.Background())
 	p, err := e.Store.OwnerMessagePage(c.ID, "", "", 50)
 	if err != nil || len(p.Messages) != 0 {
 		t.Fatal("headless retention did not expire archive", err)
@@ -156,18 +157,18 @@ func (t expiredDiscoveryTransport) DiscoverConversations(ctx context.Context, cu
 func TestArchiveDiscoveryRecoversExpiredCursor(t *testing.T) {
 	e, f := setup(t)
 	enableInbox(t, e)
-	e.Transport = expiredDiscoveryTransport{f}
+	useTransport(e, expiredDiscoveryTransport{f})
 	if err := e.Store.SetSecretSetting("archive_discovery", "archive-discovery", []byte("expired")); err != nil {
 		t.Fatal(err)
 	}
-	e.History.Tick(context.Background())
+	e.Collection.History.Tick(context.Background())
 	cursor, err := e.Store.GetSecretSetting("archive_discovery", "archive-discovery")
 	if err != nil || len(cursor) != 0 {
 		t.Fatal("bad discovery cursor retained", err)
 	}
 	// A new worker retries the reset cursor; the running worker backs off failed discovery.
-	e.History = history.New(e.Store, archiveHost{e})
-	e.History.Tick(context.Background())
+	e.Collection.History = history.New(e.Store, e.Collection.HistoryHost())
+	e.Collection.History.Tick(context.Background())
 	if _, err = e.Store.Archive("demo-chat"); err != nil {
 		t.Fatal("discovery did not recover", err)
 	}
@@ -197,8 +198,8 @@ func TestArchiveCancelAndRevokeDuringFetch(t *testing.T) {
 			e, f := setup(t)
 			cfg := enableInbox(t, e)
 			cfg.Scope = "selected"
-			cfg.Conversations = []InboxBinding{{"demo-chat", "demo-peer"}}
-			if err := e.SetInboxSettings(context.Background(), cfg); err != nil {
+			cfg.Conversations = []collection.Binding{{Conversation: "demo-chat", Participant: "demo-peer"}}
+			if err := e.Collection.SetSettings(context.Background(), cfg); err != nil {
 				t.Fatal(err)
 			}
 			// Hold an owner-requested import page; routine recent checks wait.
@@ -207,22 +208,22 @@ func TestArchiveCancelAndRevokeDuringFetch(t *testing.T) {
 				t.Fatal(err)
 			}
 			held := &heldArchiveTransport{Fixture: f, started: make(chan struct{}, 1), release: make(chan struct{})}
-			e.Transport = held
+			useTransport(e, held)
 			done := make(chan struct{})
-			go func() { defer close(done); e.History.Tick(context.Background()) }()
+			go func() { defer close(done); e.Collection.History.Tick(context.Background()) }()
 			select {
 			case <-held.started:
 			case <-time.After(time.Second):
 				t.Fatal("fetch did not start")
 			}
 			if revoke {
-				cfg, _ = e.InboxSettings()
+				cfg, _ = e.Collection.Settings()
 				cfg.Enabled = false
-				if err := e.SetInboxSettings(context.Background(), cfg); err != nil {
+				if err := e.Collection.SetSettings(context.Background(), cfg); err != nil {
 					t.Fatal(err)
 				}
 			} else {
-				if _, err := e.RequestArchive(context.Background(), "demo-chat", "", true); err != nil {
+				if _, err := e.Collection.RequestArchive(context.Background(), "demo-chat", "", true); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -243,7 +244,7 @@ func TestArchiveCancelAndRevokeDuringFetch(t *testing.T) {
 func TestArchiveSyncRunsPausedAndNeverRoutesHistory(t *testing.T) {
 	e, _ := setup(t)
 	enableInbox(t, e)
-	e.History.Tick(context.Background())
+	e.Collection.History.Tick(context.Background())
 	a, err := e.Store.Archive("demo-chat")
 	if err != nil || a.State != "available_pages_exhausted" {
 		t.Fatal("durable import did not finish", err)
@@ -256,18 +257,18 @@ func TestArchiveSyncRunsPausedAndNeverRoutesHistory(t *testing.T) {
 	if len(jobs) != 0 {
 		t.Fatal("history executed commands")
 	}
-	e.History.Tick(context.Background())
+	e.Collection.History.Tick(context.Background())
 	p, _ = e.Store.OwnerMessagePage("demo-chat", "", "", 50)
 	if len(p.Messages) != 2 {
 		t.Fatal("duplicate import")
 	}
-	cancelled, err := e.RequestArchive(context.Background(), "demo-chat", "", true)
+	cancelled, err := e.Collection.RequestArchive(context.Background(), "demo-chat", "", true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	old := a
 	old.Generation = cancelled.Generation - 1
-	settings, _ := e.InboxSettings()
+	settings, _ := e.Collection.Settings()
 	if err = commitStep(e, history.ImportWork, old, history.Policy{Revision: settings.Revision}, nil); err == nil {
 		t.Fatal("cancelled fetch committed")
 	}

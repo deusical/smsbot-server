@@ -18,7 +18,7 @@ func TestReplyProtocolAndIntentIdentity(t *testing.T) {
 	ctx := context.Background()
 	for _, protocol := range []string{"RCS", "SMS", "MMS", "unknown"} {
 		m := interactionMessage("synthetic-"+protocol, protocol)
-		if err := e.Observe(ctx, m); err != nil {
+		if err := e.Collection.Observe(ctx, m); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -81,7 +81,7 @@ func TestReactionIntentReconciliationAndUncertainty(t *testing.T) {
 			e.Pause(false)
 			ctx := context.Background()
 			m := interactionMessage("synthetic-react", "RCS")
-			if err := e.Observe(ctx, m); err != nil {
+			if err := e.Collection.Observe(ctx, m); err != nil {
 				t.Fatal(err)
 			}
 			target := store.Hash("demo-chat\x00" + m.ID)
@@ -121,13 +121,13 @@ func TestReactionIntentReconciliationAndUncertainty(t *testing.T) {
 			// A stale read cannot confirm the action or overwrite its newer snapshot.
 			m.Interaction.Reactions = []transport.Reaction{{Emoji: "👍", Participants: []string{"fixture-self"}}}
 			m.Interaction.ObservedAt = time.Now().Add(-time.Minute)
-			e.Observe(ctx, m)
+			e.Collection.Observe(ctx, m)
 			status, _ = e.ReactionStatus("demo-chat", id)
 			if status["state"] != expected {
 				t.Fatal("stale scan confirmed action")
 			}
 			m.Interaction.ObservedAt = time.Now()
-			if err = e.Observe(ctx, m); err != nil {
+			if err = e.Collection.Observe(ctx, m); err != nil {
 				t.Fatal(err)
 			}
 			status, _ = e.ReactionStatus("demo-chat", id)
@@ -148,7 +148,7 @@ func TestReactionCanonicalEmojiConfirmation(t *testing.T) {
 	e.Pause(false)
 	ctx := context.Background()
 	m := interactionMessage("synthetic-heart", "RCS")
-	e.Observe(ctx, m)
+	e.Collection.Observe(ctx, m)
 	target := store.Hash("demo-chat\x00" + m.ID)
 	a, _ := e.MessageActions(ctx, "demo-chat", target)
 	id, err := e.QueueReaction(ctx, "demo-chat", target, "❤", "add", a.Version, "synthetic-heart-request")
@@ -160,7 +160,7 @@ func TestReactionCanonicalEmojiConfirmation(t *testing.T) {
 	}
 	m.Interaction.ObservedAt = time.Now()
 	m.Interaction.Reactions = []transport.Reaction{{Emoji: "❤️", Participants: []string{"fixture-self"}}}
-	if err = e.Observe(ctx, m); err != nil {
+	if err = e.Collection.Observe(ctx, m); err != nil {
 		t.Fatal(err)
 	}
 	result, _ := e.ReactionStatus("demo-chat", id)
@@ -175,7 +175,7 @@ func TestReactionFinalChecksAndRestart(t *testing.T) {
 	e.Pause(false)
 	ctx := context.Background()
 	m := interactionMessage("synthetic-check", "RCS")
-	e.Observe(ctx, m)
+	e.Collection.Observe(ctx, m)
 	target := store.Hash("demo-chat\x00" + m.ID)
 	a, _ := e.MessageActions(ctx, "demo-chat", target)
 	id, err := e.QueueReaction(ctx, "demo-chat", target, "👍", "add", a.Version, "synthetic-final-request")
@@ -184,7 +184,7 @@ func TestReactionFinalChecksAndRestart(t *testing.T) {
 	}
 	m.Interaction.Reactions = []transport.Reaction{{Emoji: "❤️", Participants: []string{"fixture-self"}}}
 	m.Interaction.ObservedAt = time.Now()
-	e.Observe(ctx, m)
+	e.Collection.Observe(ctx, m)
 	if err = e.Dispatch(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -232,9 +232,9 @@ func TestInteractionSubmissionRechecksPolicy(t *testing.T) {
 			e.Pause(false)
 			ctx := context.Background()
 			wrapper := &changedProtocolFixture{Fixture: f, protocol: "RCS", participant: "demo-peer"}
-			e.Transport = wrapper
+			useTransport(e, wrapper)
 			m := interactionMessage("synthetic-policy", "RCS")
-			if err := e.Observe(ctx, m); err != nil {
+			if err := e.Collection.Observe(ctx, m); err != nil {
 				t.Fatal(err)
 			}
 			target := store.Hash("demo-chat\x00" + m.ID)
@@ -246,9 +246,9 @@ func TestInteractionSubmissionRechecksPolicy(t *testing.T) {
 			case "paused":
 				e.Pause(true)
 			case "consent":
-				s, _ := e.InboxSettings()
+				s, _ := e.Collection.Settings()
 				s.Enabled = false
-				e.SetInboxSettings(ctx, s)
+				e.Collection.SetSettings(ctx, s)
 			case "protocol":
 				wrapper.protocol = "SMS"
 			case "identity":
@@ -302,7 +302,7 @@ func TestOldOutgoingReactionObservation(t *testing.T) {
 			m.Outgoing = true
 			m.Historical = true
 			m.At = time.Now().Add(-10 * time.Minute)
-			if err := e.Observe(ctx, m); err != nil {
+			if err := e.Collection.Observe(ctx, m); err != nil {
 				t.Fatal(err)
 			}
 			m.Historical = false
@@ -313,17 +313,24 @@ func TestOldOutgoingReactionObservation(t *testing.T) {
 				if accepted, err := e.Ingest(ctx, m); err != nil || accepted {
 					t.Fatal("outgoing snapshot became command", err)
 				}
-				select {
-				case item := <-e.captureQueue:
-					if !item.message.Historical {
-						t.Fatal("worker would reject snapshot as delayed")
+				// The capture worker rejects delayed live messages, so the
+				// snapshot only lands if it was queued as historical.
+				workerCtx, stop := context.WithCancel(ctx)
+				done := make(chan struct{})
+				go func() { defer close(done); e.Collection.RunCapture(workerCtx) }()
+				deadline := time.Now().Add(5 * time.Second)
+				for {
+					p, _ := e.Store.OwnerMessagePage("demo-chat", "", "", 50)
+					if len(p.Messages) == 1 && len(p.Messages[0].Reactions) == 1 {
+						break
 					}
-					if err := e.observe(ctx, item.message, item.epoch); err != nil {
-						t.Fatal(err)
+					if time.Now().After(deadline) {
+						t.Fatal("queued snapshot not captured")
 					}
-				default:
-					t.Fatal("snapshot not queued")
+					time.Sleep(10 * time.Millisecond)
 				}
+				stop()
+				<-done
 			} else if accepted, err := e.Receive(ctx, m); err != nil || accepted {
 				t.Fatal("outgoing snapshot became command", err)
 			}
@@ -360,10 +367,10 @@ func TestUncachedInteractionOwnerResolvedAfterVerifiedLookup(t *testing.T) {
 	e.Pause(false)
 	ctx := context.Background()
 	source := &ownerResolvingFixture{Fixture: f}
-	e.Transport = source
+	useTransport(e, source)
 	m := interactionMessage("synthetic-uncached", "RCS")
 	m.Interaction.OwnerID = ""
-	if err := e.Observe(ctx, m); err != nil {
+	if err := e.Collection.Observe(ctx, m); err != nil {
 		t.Fatal(err)
 	}
 	target := store.Hash("demo-chat\x00" + m.ID)
@@ -387,7 +394,7 @@ func TestUncachedInteractionOwnerResolvedAfterVerifiedLookup(t *testing.T) {
 	}
 	m.Interaction.ObservedAt = time.Now()
 	m.Interaction.Reactions = []transport.Reaction{{Emoji: "👍", Participants: []string{"fixture-self"}}}
-	if err = e.Observe(ctx, m); err != nil {
+	if err = e.Collection.Observe(ctx, m); err != nil {
 		t.Fatal(err)
 	}
 	status, err := e.ReactionStatus("demo-chat", id)

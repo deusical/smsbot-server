@@ -44,7 +44,7 @@ func TestHistoryEntryPointsKeepTheirOwnGrants(t *testing.T) {
 		if err != nil || got["imported"] != 1 || got["text_only"] != true {
 			t.Fatal("enrolled text import failed", got, err)
 		}
-		if _, err = e.ImportInboxHistory(context.Background(), "demo-chat", ""); err == nil {
+		if _, err = e.Collection.ImportInboxHistory(context.Background(), "demo-chat", ""); err == nil {
 			t.Fatal("enrollment granted collected inbox history")
 		}
 		if after, _ := e.Store.Paused(); after != paused || historyJobs(t, e) != 0 {
@@ -57,14 +57,14 @@ func TestHistoryEntryPointsKeepTheirOwnGrants(t *testing.T) {
 		if _, err := e.ImportHistory(context.Background(), "demo-chat", ""); err == nil {
 			t.Fatal("collection consent granted enrolled bot history")
 		}
-		got, err := e.ImportInboxHistory(context.Background(), "demo-chat", "")
+		got, err := e.Collection.ImportInboxHistory(context.Background(), "demo-chat", "")
 		if err != nil || got["imported"] != 2 || got["text_only"] != false {
 			t.Fatal("collected import failed", got, err)
 		}
 		if historyJobs(t, e) != 0 {
 			t.Fatal("history page routed a command")
 		}
-		again, err := e.ImportInboxHistory(context.Background(), "demo-chat", "")
+		again, err := e.Collection.ImportInboxHistory(context.Background(), "demo-chat", "")
 		if err != nil || again["imported"] != 0 || again["duplicates"] != 2 {
 			t.Fatal("repeated page counted as new", again, err)
 		}
@@ -77,15 +77,15 @@ func TestHistoryEntryPointsKeepTheirOwnGrants(t *testing.T) {
 				t.Fatal(err)
 			}
 			at := time.Now().Add(-time.Hour)
-			e.Transport = &racingHistory{Fixture: f, during: func() {
+			useTransport(e, &racingHistory{Fixture: f, during: func() {
 				if err := e.Store.SaveObservedFiles("demo-chat", "fixture-history", "", "incoming", "Newer observed content", "phone", "", at, nil); err != nil {
 					t.Fatal(err)
 				}
-			}}
+			}})
 			var err error
 			if route == "inbox" {
 				var got map[string]any
-				got, err = e.ImportInboxHistory(context.Background(), "demo-chat", "")
+				got, err = e.Collection.ImportInboxHistory(context.Background(), "demo-chat", "")
 				if err == nil && got["skipped"] != 1 {
 					t.Fatal("concurrent newer message not skipped", got)
 				}

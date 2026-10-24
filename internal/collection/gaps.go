@@ -1,4 +1,4 @@
-package bot
+package collection
 
 import (
 	"context"
@@ -16,8 +16,8 @@ type pendingCaptureGap struct {
 }
 
 // Callback-safe: only bounded metadata aggregation; no SQL, RPC, or message text.
-func (e *Engine) noteCaptureGap(m transport.Incoming, epoch uint64, reason string) {
-	now := e.now()
+func (svc *Service) noteCaptureGap(m transport.Incoming, epoch uint64, reason string) {
+	now := svc.now()
 	at := m.At
 	if at.IsZero() || at.After(now) {
 		at = now
@@ -34,24 +34,24 @@ func (e *Engine) noteCaptureGap(m transport.Incoming, epoch uint64, reason strin
 		}
 	}
 	g := store.CaptureGap{Kind: kind, ObservedAt: now.UTC().Format(time.RFC3339Nano), Conversation: m.ConversationID, Since: at.Add(-2 * time.Minute).UTC().Format(time.RFC3339Nano), Until: until.UTC().Format(time.RFC3339Nano), Reason: reason, State: "queued"}
-	e.gapMu.Lock()
-	defer e.gapMu.Unlock()
-	if e.pendingGaps == nil {
-		e.pendingGaps = map[string]pendingCaptureGap{}
+	svc.gapMu.Lock()
+	defer svc.gapMu.Unlock()
+	if svc.pendingGaps == nil {
+		svc.pendingGaps = map[string]pendingCaptureGap{}
 	}
-	if len(e.pendingGaps) >= 512 {
-		if _, ok := e.pendingGaps[g.Conversation]; !ok {
+	if len(svc.pendingGaps) >= 512 {
+		if _, ok := svc.pendingGaps[g.Conversation]; !ok {
 			g.Conversation = ""
 			g.State = "scope_unknown"
 			g.Reason = "capture_scope_unknown"
 		}
 	}
-	if previous, ok := e.pendingGaps[g.Conversation]; ok && previous.epoch == epoch {
+	if previous, ok := svc.pendingGaps[g.Conversation]; ok && previous.epoch == epoch {
 		g = mergeCaptureGap(previous.gap, g)
 	}
-	e.pendingGaps[g.Conversation] = pendingCaptureGap{g, epoch}
-	if e.History != nil {
-		defer e.History.Wake()
+	svc.pendingGaps[g.Conversation] = pendingCaptureGap{g, epoch}
+	if svc.History != nil {
+		defer svc.History.Wake()
 	}
 }
 func mergeCaptureGap(old, next store.CaptureGap) store.CaptureGap {
@@ -81,23 +81,23 @@ func mergeCaptureGap(old, next store.CaptureGap) store.CaptureGap {
 	next.Failures = 0
 	return next
 }
-func (e *Engine) flushCaptureGaps() {
-	e.gapFlushMu.Lock()
-	defer e.gapFlushMu.Unlock()
-	e.gapMu.Lock()
-	pending := e.pendingGaps
-	e.flushingGaps = pending
-	defer func() { e.gapMu.Lock(); e.flushingGaps = nil; e.gapMu.Unlock() }()
-	e.pendingGaps = map[string]pendingCaptureGap{}
-	e.gapMu.Unlock()
+func (svc *Service) flushCaptureGaps() {
+	svc.gapFlushMu.Lock()
+	defer svc.gapFlushMu.Unlock()
+	svc.gapMu.Lock()
+	pending := svc.pendingGaps
+	svc.flushingGaps = pending
+	defer func() { svc.gapMu.Lock(); svc.flushingGaps = nil; svc.gapMu.Unlock() }()
+	svc.pendingGaps = map[string]pendingCaptureGap{}
+	svc.gapMu.Unlock()
 	if len(pending) == 0 {
 		return
 	}
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	saved, err := e.Store.CaptureGaps()
+	svc.mu.Lock()
+	defer svc.mu.Unlock()
+	saved, err := svc.Store.CaptureGaps()
 	for key, item := range pending {
-		consent := e.captureConsent.Load()
+		consent := svc.consent.Load()
 		if consent == nil || !consent.settings.Enabled || consent.epoch != item.epoch {
 			continue
 		}
@@ -110,26 +110,26 @@ func (e *Engine) flushCaptureGaps() {
 				}
 			}
 		}
-		if err != nil || e.Store.SaveCaptureGap(g) != nil {
-			e.gapMu.Lock()
-			if newer, ok := e.pendingGaps[key]; ok {
+		if err != nil || svc.Store.SaveCaptureGap(g) != nil {
+			svc.gapMu.Lock()
+			if newer, ok := svc.pendingGaps[key]; ok {
 				newer.gap = mergeCaptureGap(g, newer.gap)
-				e.pendingGaps[key] = newer
+				svc.pendingGaps[key] = newer
 			} else {
-				e.pendingGaps[key] = item
+				svc.pendingGaps[key] = item
 			}
-			e.gapMu.Unlock()
+			svc.gapMu.Unlock()
 		}
 	}
 }
-func (e *Engine) CaptureGapStatus() ([]store.CaptureGap, bool) {
-	gaps, err := e.Store.CaptureGaps()
-	e.gapMu.Lock()
-	combined := make(map[string]pendingCaptureGap, len(e.pendingGaps)+len(e.flushingGaps))
-	for key, item := range e.flushingGaps {
+func (svc *Service) CaptureGapStatus() ([]store.CaptureGap, bool) {
+	gaps, err := svc.Store.CaptureGaps()
+	svc.gapMu.Lock()
+	combined := make(map[string]pendingCaptureGap, len(svc.pendingGaps)+len(svc.flushingGaps))
+	for key, item := range svc.flushingGaps {
 		combined[key] = item
 	}
-	for key, item := range e.pendingGaps {
+	for key, item := range svc.pendingGaps {
 		if old, ok := combined[key]; ok {
 			item.gap = mergeCaptureGap(old.gap, item.gap)
 		}
@@ -148,7 +148,7 @@ func (e *Engine) CaptureGapStatus() ([]store.CaptureGap, bool) {
 			gaps = append(gaps, item.gap)
 		}
 	}
-	e.gapMu.Unlock()
+	svc.gapMu.Unlock()
 	unknown := err != nil
 	for _, g := range gaps {
 		if g.Conversation == "" && g.State != "checked_available" {
@@ -159,21 +159,21 @@ func (e *Engine) CaptureGapStatus() ([]store.CaptureGap, bool) {
 }
 
 // NextGapAttempt exposes retry eligibility, not merely a visible warning.
-func (h archiveHost) NextGapAttempt() (time.Time, bool) {
-	e := h.e
-	e.gapMu.Lock()
-	pending := len(e.pendingGaps) > 0 || len(e.flushingGaps) > 0
-	e.gapMu.Unlock()
+func (h HistoryHost) NextGapAttempt() (time.Time, bool) {
+	svc := h.svc
+	svc.gapMu.Lock()
+	pending := len(svc.pendingGaps) > 0 || len(svc.flushingGaps) > 0
+	svc.gapMu.Unlock()
 	if pending {
 		return time.Time{}, true
 	}
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	settings, err := e.InboxSettings()
+	svc.mu.Lock()
+	defer svc.mu.Unlock()
+	settings, err := svc.Settings()
 	if err != nil || !settings.Enabled {
 		return time.Time{}, false
 	}
-	gaps, err := e.Store.CaptureGaps()
+	gaps, err := svc.Store.CaptureGaps()
 	if err != nil {
 		return time.Time{}, false
 	}
@@ -192,16 +192,16 @@ func (h archiveHost) NextGapAttempt() (time.Time, bool) {
 	return next, found
 }
 
-func (h archiveHost) RepairCaptureGap(ctx context.Context) error {
-	e := h.e
-	e.flushCaptureGaps()
-	if !e.Transport.Ready() {
+func (h HistoryHost) RepairCaptureGap(ctx context.Context) error {
+	svc := h.svc
+	svc.flushCaptureGaps()
+	if !svc.Transport.Ready() {
 		return nil
 	}
-	e.mu.Lock()
-	gaps, err := e.Store.CaptureGaps()
-	settings, settingsErr := e.InboxSettings()
-	e.mu.Unlock()
+	svc.mu.Lock()
+	gaps, err := svc.Store.CaptureGaps()
+	settings, settingsErr := svc.Settings()
+	svc.mu.Unlock()
 	if settingsErr != nil {
 		return settingsErr
 	}
@@ -238,20 +238,20 @@ func (h archiveHost) RepairCaptureGap(ctx context.Context) error {
 	g := *selected
 	call, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	c, err := e.lookupConversation(call, g.Conversation)
+	c, err := svc.lookup(call, g.Conversation)
 	var policy history.Policy
 	if err == nil {
 		policy, err = h.Policy(c)
 	}
 	var a store.Archive
 	if err == nil {
-		e.mu.Lock()
-		existing, lookupErr := e.Store.Archive(c.ID)
+		svc.mu.Lock()
+		existing, lookupErr := svc.Store.Archive(c.ID)
 		a = existing
 		if errors.Is(lookupErr, sql.ErrNoRows) {
 			a = store.NewArchive(c)
 		}
-		e.mu.Unlock()
+		svc.mu.Unlock()
 		if lookupErr == nil && existing.Conversation.ParticipantID != c.ParticipantID {
 			err = errors.New("archive_identity_changed")
 		}
@@ -260,19 +260,19 @@ func (h archiveHost) RepairCaptureGap(ctx context.Context) error {
 		}
 	}
 	if err != nil {
-		return e.finishGapAttempt(g, err)
+		return svc.finishGapAttempt(g, err)
 	}
 	// Also reconcile imports completed before this worker/software restarted.
 	// Identity and enabled-access checks above still apply.
 	if a.State == "available_pages_exhausted" || a.State == "cutoff_reached" {
-		e.mu.Lock()
-		current, loadErr := e.Store.Archive(c.ID)
-		latest, policyErr := e.InboxSettings()
+		svc.mu.Lock()
+		current, loadErr := svc.Store.Archive(c.ID)
+		latest, policyErr := svc.Settings()
 		resolved := false
 		if policyErr == nil && latest.Revision == policy.Revision && latest.Allows(c) && loadErr == nil && current.Generation == a.Generation && current.Conversation.ParticipantID == c.ParticipantID {
-			err = e.finishCaptureGapsFromImport(current, policy.Retention, policy.Revision)
+			err = svc.finishCaptureGapsFromImport(current, policy.Retention, policy.Revision)
 			if err == nil {
-				saved, readErr := e.Store.CaptureGaps()
+				saved, readErr := svc.Store.CaptureGaps()
 				err = readErr
 				for _, item := range saved {
 					if item.Conversation == g.Conversation && item.State == "checked_available" {
@@ -281,9 +281,9 @@ func (h archiveHost) RepairCaptureGap(ctx context.Context) error {
 				}
 			}
 		}
-		e.mu.Unlock()
+		svc.mu.Unlock()
 		if err != nil {
-			return e.finishGapAttempt(g, err)
+			return svc.finishGapAttempt(g, err)
 		}
 		if resolved {
 			return nil
@@ -298,24 +298,24 @@ func (h archiveHost) RepairCaptureGap(ctx context.Context) error {
 		return err
 	}
 	policy.Since = &since
-	snapshot, err := e.Store.ChangeWatermark(c.ID)
+	snapshot, err := svc.Store.ChangeWatermark(c.ID)
 	if err != nil {
 		return err
 	}
 	policy.Snapshot = &snapshot
 	cursor := g.Cursor
 	if cursor == "" {
-		if source, ok := e.Transport.(transport.HistoryRangeSource); ok {
+		if source, ok := svc.Transport.(transport.HistoryRangeSource); ok {
 			cursor = source.HistoryCursorBefore(until.Add(time.Millisecond))
 		}
 	}
 	g.State = "checking"
-	if err = e.finishGapAttempt(g, nil); err != nil {
+	if err = svc.finishGapAttempt(g, nil); err != nil {
 		return err
 	}
 	page, fetchErr := h.Fetch(call, c, cursor)
 	if fetchErr != nil {
-		return e.finishGapAttempt(g, fetchErr)
+		return svc.finishGapAttempt(g, fetchErr)
 	}
 	done := page.NextCursor == "" || page.NextCursor == cursor
 	for _, m := range page.Messages {
@@ -327,25 +327,25 @@ func (h archiveHost) RepairCaptureGap(ctx context.Context) error {
 	g.State = "checking"
 	if done {
 		g.State = "checked_available"
-		g.CheckedAt = e.now().UTC().Format(time.RFC3339Nano)
+		g.CheckedAt = svc.now().UTC().Format(time.RFC3339Nano)
 		g.Cursor = ""
 	}
 	persist, stop := context.WithTimeout(ctx, 5*time.Second)
 	defer stop()
 	// Commit performs consent, revision and participant checks again.
 	if err = h.Commit(persist, history.Commit{Work: history.GapWork, Conversation: c, Policy: policy, Page: &page}); err != nil {
-		return e.finishGapAttempt(*selected, err)
+		return svc.finishGapAttempt(*selected, err)
 	}
 	g.Pages++
 	g.Checked += len(page.Messages)
-	g.LastProgressAt = e.now().UTC().Format(time.RFC3339Nano)
-	return e.finishGapAttempt(g, nil)
+	g.LastProgressAt = svc.now().UTC().Format(time.RFC3339Nano)
+	return svc.finishGapAttempt(g, nil)
 }
 
-// Caller holds e.mu. A full import started after a failure also repairs that
+// Caller holds the control lock. A full import started after a failure also repairs that
 // failure; do not leave an independent warning running after the same coverage
 // was successfully re-read. Never resolve failures observed after import start.
-func (e *Engine) finishCaptureGapsFromImport(a store.Archive, retention int, revision int64) error {
+func (svc *Service) finishCaptureGapsFromImport(a store.Archive, retention int, revision int64) error {
 	if a.ScanRevision == 0 || a.ScanRevision != revision {
 		return nil
 	}
@@ -358,12 +358,12 @@ func (e *Engine) finishCaptureGapsFromImport(a store.Archive, retention int, rev
 		return err
 	}
 	if retention > 0 {
-		retainedSince := e.now().AddDate(0, 0, -retention)
+		retainedSince := svc.now().AddDate(0, 0, -retention)
 		if cutoff.IsZero() || retainedSince.After(cutoff) {
 			cutoff = retainedSince
 		}
 	}
-	gaps, err := e.Store.CaptureGaps()
+	gaps, err := svc.Store.CaptureGaps()
 	if err != nil {
 		return err
 	}
@@ -386,22 +386,22 @@ func (e *Engine) finishCaptureGapsFromImport(a store.Archive, retention int, rev
 			continue
 		}
 		g.State = "checked_available"
-		g.CheckedAt = e.now().UTC().Format(time.RFC3339Nano)
+		g.CheckedAt = svc.now().UTC().Format(time.RFC3339Nano)
 		g.LastProgressAt = g.CheckedAt
 		g.Generation++ // an in-flight range repair must not overwrite completion
 		g.Cursor, g.RetryAt = "", ""
 		g.Failures = 0
-		if err = e.Store.SaveCaptureGap(g); err != nil {
+		if err = svc.Store.SaveCaptureGap(g); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (e *Engine) finishGapAttempt(g store.CaptureGap, attemptErr error) error {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	current, err := e.Store.CaptureGaps()
+func (svc *Service) finishGapAttempt(g store.CaptureGap, attemptErr error) error {
+	svc.mu.Lock()
+	defer svc.mu.Unlock()
+	current, err := svc.Store.CaptureGaps()
 	if err != nil {
 		return err
 	}
@@ -413,12 +413,12 @@ func (e *Engine) finishGapAttempt(g store.CaptureGap, attemptErr error) error {
 	if attemptErr != nil {
 		g.State = "retrying"
 		g.Failures++
-		g.RetryAt = e.now().Add(time.Duration(1<<min(g.Failures, 6)) * 5 * time.Second).UTC().Format(time.RFC3339Nano)
+		g.RetryAt = svc.now().Add(time.Duration(1<<min(g.Failures, 6)) * 5 * time.Second).UTC().Format(time.RFC3339Nano)
 	} else {
 		g.Failures = 0
-		g.RetryAt = e.now().Add(3 * time.Second).UTC().Format(time.RFC3339Nano)
+		g.RetryAt = svc.now().Add(3 * time.Second).UTC().Format(time.RFC3339Nano)
 	}
-	return e.Store.SaveCaptureGap(g)
+	return svc.Store.SaveCaptureGap(g)
 }
 
 func captureFailureReason(err error) string {

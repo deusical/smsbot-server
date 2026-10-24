@@ -3,13 +3,13 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
-	"github.com/deusical/smsbot-server/internal/bot"
+	"github.com/deusical/smsbot-server/internal/collection"
 	"github.com/deusical/smsbot-server/internal/transport"
 	"testing"
 	"time"
 )
 
-type botSettings = bot.InboxSettings
+type botSettings = collection.Settings
 
 func fixtureOf(t *testing.T, s *Server) *transport.Fixture {
 	t.Helper()
@@ -22,12 +22,12 @@ func fixtureOf(t *testing.T, s *Server) *transport.Fixture {
 
 func setInbox(t *testing.T, s *Server, change func(*botSettings)) {
 	t.Helper()
-	cfg, err := s.Engine.InboxSettings()
+	cfg, err := s.Collection.Settings()
 	if err != nil {
 		t.Fatal(err)
 	}
 	change(&cfg)
-	if err := s.Engine.SetInboxSettings(context.Background(), cfg); err != nil {
+	if err := s.Collection.SetSettings(context.Background(), cfg); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -53,7 +53,7 @@ func TestConversationListCarriesRecencyAndPreviewOnlyWithCollection(t *testing.T
 	s := apiSetup(t)
 	when := time.Now().Add(-time.Minute).UTC()
 	setInbox(t, s, func(c *botSettings) { c.Enabled = true })
-	if err := s.Engine.Observe(context.Background(), transport.Incoming{ID: "synthetic-preview", ConversationID: "demo-chat", ParticipantID: "demo-peer", Text: "Synthetic   preview\ntext", At: when}); err != nil {
+	if err := s.Collection.Observe(context.Background(), transport.Incoming{ID: "synthetic-preview", ConversationID: "demo-chat", ParticipantID: "demo-peer", Text: "Synthetic   preview\ntext", At: when}); err != nil {
 		t.Fatal(err)
 	}
 	c := listConversations(t, s)["demo-chat"]
@@ -96,7 +96,7 @@ func TestStateRevisionMovesWithActivity(t *testing.T) {
 	}
 	after := revision()
 	setInbox(t, s, func(c *botSettings) { c.Enabled = true })
-	s.Engine.Observe(context.Background(), transport.Incoming{ID: "synthetic-revision", ConversationID: "demo-chat", ParticipantID: "demo-peer", Text: "Synthetic", At: time.Now()})
+	s.Collection.Observe(context.Background(), transport.Incoming{ID: "synthetic-revision", ConversationID: "demo-chat", ParticipantID: "demo-peer", Text: "Synthetic", At: time.Now()})
 	if revision() == after {
 		t.Fatal("saved message did not change the revision")
 	}

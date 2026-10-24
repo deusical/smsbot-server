@@ -17,24 +17,24 @@ import (
 
 func TestSavedOriginalReadOfflineRangeAndCorruption(t *testing.T) {
 	s := apiSetup(t)
-	settings, _ := s.Engine.InboxSettings()
+	settings, _ := s.Collection.Settings()
 	settings.Enabled = true
-	if err := s.Engine.SetInboxSettings(context.Background(), settings); err != nil {
+	if err := s.Collection.SetSettings(context.Background(), settings); err != nil {
 		t.Fatal(err)
 	}
 	files, _ := media.Prepare([]media.Upload{{Name: "synthetic.txt", MIME: "text/plain", Data: []byte("Synthetic saved original")}})
-	if err := s.Engine.Observe(context.Background(), transport.Incoming{ID: "original", ConversationID: "demo-chat", ParticipantID: "demo-peer", At: time.Now(), Attachments: files}); err != nil {
+	if err := s.Collection.Observe(context.Background(), transport.Incoming{ID: "original", ConversationID: "demo-chat", ParticipantID: "demo-peer", At: time.Now(), Attachments: files}); err != nil {
 		t.Fatal(err)
 	}
-	s.Engine.Archive.Tick(context.Background())
+	s.Collection.Archive.Tick(context.Background())
 	message := store.Hash("demo-chat\x00original")
 	file, err := s.Engine.Store.Attachment("demo-chat", message, files[0].ID)
 	if err != nil || file.BlobID == "" {
 		t.Fatal("file not archived", err)
 	}
-	settings, _ = s.Engine.InboxSettings()
+	settings, _ = s.Collection.Settings()
 	settings.Enabled = false
-	s.Engine.SetInboxSettings(context.Background(), settings)
+	s.Collection.SetSettings(context.Background(), settings)
 	s.Engine.Transport = nil // any phone lookup would panic; local reads must not use it
 	url := "/api/v1/inbox/conversations/demo-chat/messages/" + message + "/attachments/" + file.ID
 	if w := ownerRequest(s, "GET", url, ""); w.Code != 200 || !bytes.Equal(w.Body.Bytes(), files[0].Data) {
@@ -48,7 +48,7 @@ func TestSavedOriginalReadOfflineRangeAndCorruption(t *testing.T) {
 	if w.Code != 206 || w.Body.String() != string(files[0].Data[10:15]) {
 		t.Fatal("encrypted local seek range failed", w.Code)
 	}
-	path := filepath.Join(s.Engine.Archive.Root, "blobs", file.BlobID+".enc")
+	path := filepath.Join(s.Collection.Archive.Root, "blobs", file.BlobID+".enc")
 	f, err := os.OpenFile(path, os.O_RDWR, 0600)
 	if err != nil {
 		t.Fatal(err)
@@ -64,7 +64,7 @@ func TestSavedOriginalReadOfflineRangeAndCorruption(t *testing.T) {
 }
 func TestArchiveExportOwnerFormatAndDeletion(t *testing.T) {
 	s := apiSetup(t)
-	defer s.Engine.Archive.Close()
+	defer s.Collection.Archive.Close()
 	if w := ownerRequest(s, "PUT", "/api/v1/inbox/archive/files/policy", `{"enabled":true,"max_file_mb":-1,"quota_mb":0}`); w.Code != 400 {
 		t.Fatal("invalid policy accepted")
 	}
@@ -79,7 +79,7 @@ func TestArchiveExportOwnerFormatAndDeletion(t *testing.T) {
 		}
 		deadline := time.Now().Add(5 * time.Second)
 		for {
-			job, err := s.Engine.Archive.Job()
+			job, err := s.Collection.Archive.Job()
 			if err != nil {
 				t.Fatal(err)
 			}

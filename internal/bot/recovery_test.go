@@ -124,7 +124,7 @@ func TestConnectionInterruptionBlocksUploadCompletion(t *testing.T) {
 		t.Fatal(err)
 	}
 	f := &blockedFileTransport{Fixture: fixture, started: make(chan struct{}), release: make(chan struct{})}
-	e.Transport = f
+	useTransport(e, f)
 	id, err := e.ComposeInboxFiles(context.Background(), "demo-chat", "", "synthetic-interrupted-upload", syntheticUpload())
 	if err != nil {
 		t.Fatal(err)

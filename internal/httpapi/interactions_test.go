@@ -14,14 +14,14 @@ import (
 func TestInteractionOwnerAPIAndReplyCompatibility(t *testing.T) {
 	s := apiSetup(t)
 	ctx := context.Background()
-	cfg, _ := s.Engine.InboxSettings()
+	cfg, _ := s.Collection.Settings()
 	cfg.Enabled = true
-	if err := s.Engine.SetInboxSettings(ctx, cfg); err != nil {
+	if err := s.Collection.SetSettings(ctx, cfg); err != nil {
 		t.Fatal(err)
 	}
 	s.Engine.Pause(false)
 	m := transport.Incoming{ID: "synthetic-actions", ConversationID: "demo-chat", ParticipantID: "demo-peer", Text: "Synthetic action target", At: time.Now(), Interaction: &transport.MessageInteraction{UpstreamID: "synthetic-actions", Protocol: "RCS", OwnerID: "synthetic-self", ObservedAt: time.Now(), Reactions: []transport.Reaction{}}}
-	if err := s.Engine.Observe(ctx, m); err != nil {
+	if err := s.Collection.Observe(ctx, m); err != nil {
 		t.Fatal(err)
 	}
 	target := store.Hash("demo-chat\x00" + m.ID)

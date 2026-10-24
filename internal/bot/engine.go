@@ -5,91 +5,75 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"github.com/deusical/smsbot-server/internal/archive"
-	"github.com/deusical/smsbot-server/internal/history"
+	"github.com/deusical/smsbot-server/internal/collection"
 	"github.com/deusical/smsbot-server/internal/store"
 	"github.com/deusical/smsbot-server/internal/transport"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 	"unicode/utf8"
 )
 
+// Engine routes commands, generates replies and dispatches sends. It reads
+// collection consent through Collection but owns none of collection's work.
 type Engine struct {
-	Archive        *archive.Service
-	History        *history.Service
-	Store          *store.Store
-	Transport      transport.Transport
-	Provider       Provider
-	mu             sync.Mutex
-	reads          readThrottle
-	captureReads   captureReads
-	preflight      preflightRetry
-	dispatchMu     sync.Mutex
-	now            func() time.Time
-	pending        map[string]context.CancelFunc
-	captureQueue   chan captureItem
-	captureConsent atomic.Pointer[captureConsent]
-	gapMu          sync.Mutex
-	gapFlushMu     sync.Mutex
-	flushingGaps   map[string]pendingCaptureGap
-	pendingGaps    map[string]pendingCaptureGap
+	Collection *collection.Service
+	Store      *store.Store
+	Transport  transport.Transport
+	Provider   Provider
+	// mu is the control lock shared with Collection: send decisions serialize
+	// with consent changes and protected commits.
+	mu         *sync.Mutex
+	preflight  preflightRetry
+	dispatchMu sync.Mutex
+	now        func() time.Time
+	pending    map[string]context.CancelFunc
 }
 
-// New wires an engine without touching storage or starting work. The caller
-// attaches the history and archive workers, then runs Init before use.
-func New(s *store.Store, t transport.Transport) *Engine {
+// New wires an engine without touching storage or starting work. control is
+// the lock shared with the collection service. Run Init before use.
+func New(s *store.Store, t transport.Transport, c *collection.Service, control *sync.Mutex) *Engine {
 	var provider Provider = NewOpenRouter()
 	if _, offline := t.(*transport.Fixture); offline {
 		provider = SimulatedProvider{}
 	}
-	return &Engine{Store: s, Transport: t, Provider: provider, now: time.Now, pending: map[string]context.CancelFunc{}, pendingGaps: map[string]pendingCaptureGap{}, captureQueue: make(chan captureItem, 512)}
+	return &Engine{Collection: c, Store: s, Transport: t, Provider: provider, mu: control, now: time.Now, pending: map[string]context.CancelFunc{}}
 }
 
-// HistoryHost is the consent-checked adapter the history worker reads through.
-func (e *Engine) HistoryHost() history.Host { return archiveHost{e} }
-
-// FileHost is the consent-checked adapter the original-file worker uses.
-func (e *Engine) FileHost() archive.FileHost { return archiveFileHost{e} }
-
-// Init performs the engine's one-time startup work. It must run before the
-// legacy expiry pass and before any worker or transport event: it publishes
-// the collection consent snapshot capture reads, and marks existing opted-in
-// history for preservation. Those markers grant no viewing or collection
-// rights before verification.
+// Init performs the engine's one-time startup work: offline fixture mode
+// seeds its simulated model catalog.
 func (e *Engine) Init() error {
-	if _, offline := e.Transport.(*transport.Fixture); offline {
-		var models []Model
-		if err := e.Store.GetPublicSetting("model_catalog", &models); err != nil {
-			return err
-		}
-		if len(models) == 0 {
-			models, _ = e.Provider.Models(context.Background())
-			if err := e.Store.SetPublicSetting("model_catalog", models); err != nil {
-				return err
-			}
-		}
-	}
-	settings, err := e.InboxSettings()
-	if err != nil {
-		return err
-	}
-	e.publishCaptureConsent(settings)
-	if !settings.Enabled {
+	if _, offline := e.Transport.(*transport.Fixture); !offline {
 		return nil
 	}
-	if settings.Scope == "all" {
-		_, err = e.Store.DB.Exec("INSERT OR IGNORE INTO archive_pending SELECT DISTINCT conversation FROM messages WHERE conversation NOT IN (SELECT conversation FROM archive_conversations)")
+	var models []Model
+	if err := e.Store.GetPublicSetting("model_catalog", &models); err != nil {
 		return err
 	}
-	for _, b := range settings.Conversations {
-		if _, err = e.Store.DB.Exec("INSERT OR IGNORE INTO archive_pending SELECT ? WHERE NOT EXISTS(SELECT 1 FROM archive_conversations WHERE conversation=?)", b.Conversation, b.Conversation); err != nil {
-			return err
-		}
+	if len(models) > 0 {
+		return nil
 	}
-	return nil
+	models, _ = e.Provider.Models(context.Background())
+	return e.Store.SetPublicSetting("model_catalog", models)
 }
+
+// CollectionSettingsSaved reacts to new collection settings. The collection
+// service calls it under the control lock: turning automatic replies off
+// cancels in-flight generation and upload work (queued jobs are cancelled in
+// the same transaction that saved the settings).
+func (e *Engine) CollectionSettingsSaved(s collection.Settings) {
+	if s.AutomaticReplies {
+		return
+	}
+	for _, cancel := range e.pending {
+		cancel()
+	}
+}
+
+func (e *Engine) lookupConversation(ctx context.Context, id string) (transport.Conversation, error) {
+	return transport.Lookup(ctx, e.Transport, id)
+}
+
 func (e *Engine) Pause(value bool) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -206,7 +190,7 @@ func (e *Engine) Accept(ctx context.Context, m transport.Incoming) (bool, error)
 	if paused || !e.Transport.Ready() || !e.Store.Enrolled(m.ConversationID, m.ParticipantID) {
 		return false, nil
 	}
-	inbox, err := e.InboxSettings()
+	inbox, err := e.Collection.Settings()
 	if err != nil {
 		return false, err
 	}
@@ -352,7 +336,7 @@ func (e *Engine) check(ctx context.Context, j store.Job, p store.Plan) (Configur
 	if quiet(cfg.Settings, e.now()) {
 		return cfg, "quiet_hours", nil
 	}
-	inbox, err := e.InboxSettings()
+	inbox, err := e.Collection.Settings()
 	if err != nil {
 		return cfg, "", err
 	}

@@ -2,6 +2,7 @@ package bot
 
 import (
 	"context"
+	"github.com/deusical/smsbot-server/internal/collection"
 	"github.com/deusical/smsbot-server/internal/store"
 	"github.com/deusical/smsbot-server/internal/transport"
 	"sync"
@@ -9,15 +10,15 @@ import (
 	"time"
 )
 
-func enableInbox(t *testing.T, e *Engine) InboxSettings {
+func enableInbox(t *testing.T, e *Engine) collection.Settings {
 	t.Helper()
-	s, _ := e.InboxSettings()
+	s, _ := e.Collection.Settings()
 	s.Enabled = true
 	s.LoadOlder = true
-	if err := e.SetInboxSettings(context.Background(), s); err != nil {
+	if err := e.Collection.SetSettings(context.Background(), s); err != nil {
 		t.Fatal(err)
 	}
-	s, _ = e.InboxSettings()
+	s, _ = e.Collection.Settings()
 	return s
 }
 func TestInboxCapturesWhilePausedWithoutExecuting(t *testing.T) {
@@ -29,7 +30,7 @@ func TestInboxCapturesWhilePausedWithoutExecuting(t *testing.T) {
 	if err != nil || accepted {
 		t.Fatalf("receive=%v err=%v", accepted, err)
 	}
-	page, err := e.InboxPage(context.Background(), m.ConversationID, "", "", 50)
+	page, err := e.Collection.InboxPage(context.Background(), m.ConversationID, "", "", 50)
 	if err != nil || len(page.Messages) != 1 {
 		t.Fatal("paused capture missing", err)
 	}
@@ -51,17 +52,17 @@ func TestInboxCapturesWhilePausedWithoutExecuting(t *testing.T) {
 }
 func TestInboxSelectedIdentityAndDisableBoundaries(t *testing.T) {
 	e, _ := setup(t)
-	s, _ := e.InboxSettings()
+	s, _ := e.Collection.Settings()
 	s.Enabled = true
 	s.Scope = "selected"
-	s.Conversations = []InboxBinding{{"demo-chat", "demo-peer"}}
-	if err := e.SetInboxSettings(context.Background(), s); err != nil {
+	s.Conversations = []collection.Binding{{Conversation: "demo-chat", Participant: "demo-peer"}}
+	if err := e.Collection.SetSettings(context.Background(), s); err != nil {
 		t.Fatal(err)
 	}
 	for _, edit := range []func(*transport.Incoming){func(m *transport.Incoming) { m.ParticipantID = "wrong" }, func(m *transport.Incoming) { m.ConversationID = "demo-group" }, func(m *transport.Incoming) { m.At = time.Now().Add(-time.Hour) }} {
 		m := incoming()
 		edit(&m)
-		if err := e.Observe(context.Background(), m); err != nil {
+		if err := e.Collection.Observe(context.Background(), m); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -69,10 +70,10 @@ func TestInboxSelectedIdentityAndDisableBoundaries(t *testing.T) {
 	if len(p.Messages) != 0 {
 		t.Fatal("ineligible message retained")
 	}
-	s, _ = e.InboxSettings()
+	s, _ = e.Collection.Settings()
 	s.Enabled = false
-	e.SetInboxSettings(context.Background(), s)
-	e.Observe(context.Background(), incoming())
+	e.Collection.SetSettings(context.Background(), s)
+	e.Collection.Observe(context.Background(), incoming())
 	p, _ = e.Store.OwnerMessagePage("demo-chat", "", "", 50)
 	if len(p.Messages) != 0 {
 		t.Fatal("capture after disabling")
@@ -82,7 +83,7 @@ func TestInboxManualSendDeduplicatesAndRechecksRevocation(t *testing.T) {
 	e, f := setup(t)
 	s := enableInbox(t, e)
 	s.AutomaticReplies = false
-	e.SetInboxSettings(context.Background(), s)
+	e.Collection.SetSettings(context.Background(), s)
 	e.Pause(false)
 	id, err := e.ComposeInbox(context.Background(), "demo-chat", "Synthetic manual reply", "synthetic-request-1")
 	if err != nil {
@@ -103,9 +104,9 @@ func TestInboxManualSendDeduplicatesAndRechecksRevocation(t *testing.T) {
 		t.Fatal("manual inbox reply leaked")
 	}
 	e.ComposeInbox(context.Background(), "demo-chat", "Must be cancelled", "synthetic-request-2")
-	s, _ = e.InboxSettings()
+	s, _ = e.Collection.Settings()
 	s.Enabled = false
-	e.SetInboxSettings(context.Background(), s)
+	e.Collection.SetSettings(context.Background(), s)
 	e.Dispatch(context.Background())
 	if len(f.Sent) != 1 {
 		t.Fatal("send after inbox revocation")
@@ -115,7 +116,7 @@ func TestInboxHistoryNeverExecutesAndSettingIsIndependent(t *testing.T) {
 	e, _ := setup(t)
 	s := enableInbox(t, e)
 	e.Pause(false)
-	if _, err := e.ImportInboxHistory(context.Background(), "demo-chat", ""); err != nil {
+	if _, err := e.Collection.ImportInboxHistory(context.Background(), "demo-chat", ""); err != nil {
 		t.Fatal(err)
 	}
 	jobs, _ := e.Store.Jobs()
@@ -127,20 +128,20 @@ func TestInboxHistoryNeverExecutesAndSettingIsIndependent(t *testing.T) {
 		t.Fatal("history missing text or file")
 	}
 	s.LoadOlder = false
-	e.SetInboxSettings(context.Background(), s)
-	if _, err := e.ImportInboxHistory(context.Background(), "demo-chat", ""); err == nil {
+	e.Collection.SetSettings(context.Background(), s)
+	if _, err := e.Collection.ImportInboxHistory(context.Background(), "demo-chat", ""); err == nil {
 		t.Fatal("history fetch continued after disable")
 	}
 }
 func TestInboxConcurrentSettingsSaveRejectsStaleRevision(t *testing.T) {
 	e, _ := setup(t)
-	s, _ := e.InboxSettings()
+	s, _ := e.Collection.Settings()
 	s.AutomaticReplies = false
 	var wg sync.WaitGroup
 	errs := make(chan error, 2)
 	for i := 0; i < 2; i++ {
 		wg.Add(1)
-		go func() { defer wg.Done(); errs <- e.SetInboxSettings(context.Background(), s) }()
+		go func() { defer wg.Done(); errs <- e.Collection.SetSettings(context.Background(), s) }()
 	}
 	wg.Wait()
 	close(errs)
@@ -162,10 +163,10 @@ func TestOutgoingObservationDeduplicatesEchoAndHistory(t *testing.T) {
 	m.Text = "Synthetic phone reply"
 	m.TransactionID = "synthetic-phone-transaction"
 	m.Status = "delivered"
-	if err := e.Observe(context.Background(), m); err != nil {
+	if err := e.Collection.Observe(context.Background(), m); err != nil {
 		t.Fatal(err)
 	}
-	e.Observe(context.Background(), m)
+	e.Collection.Observe(context.Background(), m)
 	if err := e.Store.SaveObserved(m.ConversationID, m.ID, m.TransactionID, "outgoing", m.Text, "history", "read", m.At); err != nil {
 		t.Fatal(err)
 	}
