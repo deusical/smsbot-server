@@ -101,8 +101,8 @@
   .hero-status {
     padding: 20px;
   }
-  .bars {
-    height: 56px;
+  .pulse-chart {
+    grid-template-rows: auto 64px auto;
   }
   .panel-head {
     flex-wrap: wrap;

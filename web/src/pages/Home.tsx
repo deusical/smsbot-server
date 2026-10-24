@@ -122,7 +122,7 @@ export function Home({
         </button>
       </div>
       <div className="home-grid">
-        <section className="panel">
+        <section className="panel home-list">
           <div className="panel-head">
             <h2>
               {waiting.length ? "Waiting for you" : "Recent requests"}
@@ -140,7 +140,7 @@ export function Home({
               jobs={[
                 ...waiting,
                 ...jobs.filter((j) => j.state !== "awaiting_approval"),
-              ].slice(0, 6)}
+              ].slice(0, 40)}
               conversations={conversations}
               busy={busy}
               act={act}
@@ -157,9 +157,14 @@ export function Home({
           )}
         </section>
         <div className="home-side">
-          <section className="panel">
+          <section className="panel home-list">
             <div className="panel-head">
-              <h2>People</h2>
+              <h2>
+                People
+                {enrolled.length > 0 && (
+                  <span className="count">{enrolled.length}</span>
+                )}
+              </h2>
               <button
                 type="button"
                 className="link"
@@ -170,7 +175,7 @@ export function Home({
             </div>
             {enrolled.length ? (
               <ul className="people">
-                {enrolled.slice(0, 6).map((c) => (
+                {enrolled.map((c) => (
                   <li key={c.id}>
                     <button type="button" onClick={() => openConversation(c.id)}>
                       <Avatar label={c.label} />
@@ -241,6 +246,12 @@ function Pulse({ jobs }: { jobs: Job[] }) {
       <figcaption>
         <strong>{label}</strong>
         <span>request{total === 1 ? "" : "s"} in the last 24 hours</span>
+        <span className="pulse-legend" aria-hidden="true">
+          <span className="key ok" />
+          Sent
+          <span className="key other" />
+          Other
+        </span>
       </figcaption>
       <div className="bars" role="img" aria-label={`${label} requests in the last 24 hours`}>
         {buckets.map((b, i) => {
@@ -264,8 +275,15 @@ function Pulse({ jobs }: { jobs: Job[] }) {
         })}
       </div>
       <div className="bars-axis" aria-hidden="true">
-        <span>24h ago</span>
-        <span>now</span>
+        {buckets.map((_, i) => (
+          <span key={i}>
+            {i === 23
+              ? "now"
+              : i % 6 === 0
+                ? new Date(now - (23 - i) * 3600000).toLocaleTimeString([], { hour: "numeric" })
+                : ""}
+          </span>
+        ))}
       </div>
     </figure>
   );
