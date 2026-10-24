@@ -38,6 +38,7 @@ type Google struct {
 	conversations map[string]*gmproto.Conversation
 	// Display/discovery hints have no TTL and never authorize phone operations.
 	discoveryDetails map[string]*gmproto.Conversation
+	hintsDirty       atomic.Bool // discoveryDetails changed since the last save
 	updates          chan any
 	queueMu          sync.Mutex
 	overflow         atomic.Bool
@@ -113,6 +114,8 @@ func (g *Google) Pair(ctx context.Context, input string, showEmoji func(string))
 	if _, e := os.Stat(g.path); e == nil {
 		return errors.New("saved pairing exists; use a fresh state directory for a different account")
 	}
+	// Hints left from an earlier pairing belong to that account.
+	_ = os.Remove(g.hintsPath())
 	cookies, e := ParseCookies(input)
 	if e != nil {
 		return e
@@ -170,6 +173,7 @@ func (g *Google) Connect(ctx context.Context) error {
 	if json.Unmarshal(b, &auth) != nil {
 		return errors.New("saved pairing is invalid")
 	}
+	g.loadHints()
 	g.attach(&auth)
 	g.started = time.Now()
 	deadline, cancel := context.WithTimeout(ctx, 45*time.Second)
@@ -186,8 +190,7 @@ func (g *Google) Connect(ctx context.Context) error {
 	probe, e := g.client.IsBugleDefault(deadline)
 	g.diagnose("phone_readiness", e)
 	if e != nil || !probe.GetSuccess() {
-		g.client.Disconnect()
-		return errors.New("phone readiness check failed")
+		return g.startUnready(e)
 	}
 	if e = g.Save(); e != nil {
 		g.client.Disconnect()
@@ -196,12 +199,31 @@ func (g *Google) Connect(ctx context.Context) error {
 	g.ready.Store(true)
 	return nil
 }
+
+// startUnready handles a failed startup readiness probe. Rejected credentials
+// stop startup. Otherwise the phone is only unreachable for now: start anyway,
+// unready, and let the recovery worker verify it with backoff, as after a
+// disconnect. Exiting instead would restart the service and probe every minute.
+func (g *Google) startUnready(err error) error {
+	if credentialError(err) {
+		if g.client != nil {
+			g.client.Disconnect()
+		}
+		return errors.New("phone readiness check failed")
+	}
+	g.noteFailure("phone_unreachable", false)
+	return nil
+}
 func (g *Google) Close() error {
 	g.ready.Store(false)
 	if g.client != nil {
 		g.client.Disconnect()
 	}
-	return g.Save()
+	hintsErr := g.saveHints()
+	if err := g.Save(); err != nil {
+		return err
+	}
+	return hintsErr
 }
 func (g *Google) Ready() bool {
 	return g.ready.Load() && !g.healthFailure.Load() && !g.overflow.Load() && g.client != nil && g.client.IsConnected()

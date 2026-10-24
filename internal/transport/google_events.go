@@ -211,6 +211,10 @@ func (g *Google) Run(ctx context.Context, incoming func(Incoming), pause func(),
 				g.noteFailure("storage_error", true)
 				pause()
 			}
+			// Hints are only a cache: a failed save costs lookups after a restart.
+			if g.saveHints() != nil {
+				g.diagnose("discovery_hints_save_failed", errors.New("save_failed"))
+			}
 		case event := <-g.updates:
 			if wrapped, ok := event.(connectionEvent); ok {
 				event = wrapped.event

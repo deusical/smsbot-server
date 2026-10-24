@@ -56,6 +56,7 @@ func (g *Google) cacheDiscoveryDetailLocked(c *gmproto.Conversation) {
 		g.discoveryDetails = map[string]*gmproto.Conversation{}
 	}
 	g.discoveryDetails[c.GetConversationID()] = c
+	g.hintsDirty.Store(true)
 }
 
 func (g *Google) discoveryDetail(id string) *gmproto.Conversation {
