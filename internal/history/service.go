@@ -103,12 +103,17 @@ type Service struct {
 	savedSchedule   string
 	nextDiscovery   time.Time
 	nextFallback    time.Time
-	now             func() time.Time
-	fetchTimeout    time.Duration
-	Store           *store.Store
-	Host            Host
-	tickMu          sync.Mutex
-	wake            chan struct{}
+	// Catch-up after missed capture: the earliest time messages may have been
+	// missed, cleared once a discovery pass that started after it finishes.
+	catchUpToken uint64
+	catchUpSince time.Time
+	catchUpFresh bool
+	now          func() time.Time
+	fetchTimeout time.Duration
+	Store        *store.Store
+	Host         Host
+	tickMu       sync.Mutex
+	wake         chan struct{}
 }
 
 const (
@@ -265,15 +270,34 @@ func (s *Service) Tick(ctx context.Context) {
 	}
 	// Saved jobs must advance even when discovery is unavailable. Discovery has
 	// its own cadence; a new page may seed jobs, never reorder the work rotation.
+	// Missed capture (an outage, or the service being down) starts a discovery
+	// pass now; the pass catches up the conversations active since then.
+	if src, ok := s.Host.(CatchUpSource); ok {
+		if since, next, missed := src.MissedSince(s.catchUpToken); missed || next != s.catchUpToken {
+			s.catchUpToken = next
+			if missed {
+				if s.catchUpSince.IsZero() || since.Before(s.catchUpSince) {
+					s.catchUpSince = since
+				}
+				s.catchUpFresh = false
+				s.nextDiscovery = time.Time{}
+			}
+		}
+	}
 	if !s.now().Before(s.nextDiscovery) {
 		s.nextDiscovery = s.now().Add(idleInterval)
+		paged, isPaged := s.Host.(DiscoveryPager)
+		if !isPaged || !paged.DiscoveryPending() {
+			s.catchUpFresh = true // this page starts a complete inbox pass
+		}
 		call, cancel := context.WithTimeout(transport.WithPhonePurpose(ctx, "discovery"), 20*time.Second)
 		list, err := s.Host.Discover(call)
 		cancel()
 		if err != nil {
 			s.nextDiscovery = s.now().Add(30 * time.Second)
 		} else {
-			if paged, ok := s.Host.(DiscoveryPager); ok && paged.DiscoveryPending() {
+			pending := isPaged && paged.DiscoveryPending()
+			if pending {
 				s.nextDiscovery = s.now().Add(activeInterval)
 			}
 			for _, c := range list {
@@ -286,7 +310,12 @@ func (s *Service) Tick(ctx context.Context) {
 				}
 				if _, err := s.Store.Archive(c.ID); errors.Is(err, sql.ErrNoRows) {
 					_ = s.Host.Commit(ctx, Commit{Work: SeedWork, Conversation: c, Policy: p})
+				} else if err == nil && missedActivity(c, s.catchUpSince) {
+					_ = s.Host.Commit(ctx, catchUp(c, p, s.catchUpSince, s.now()))
 				}
+			}
+			if s.catchUpFresh && !pending {
+				s.catchUpSince = time.Time{}
 			}
 		}
 	}

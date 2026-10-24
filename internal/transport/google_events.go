@@ -82,6 +82,8 @@ func (g *Google) beginOverflowRecovery(pause func()) {
 	pause()
 	// No work from before the gap may be submitted later. Refresh identities
 	// through the normal full-detail picker before accepting new commands.
+	// Dropped events are an outage for capture too.
+	g.outages.begin(time.Now())
 	g.invalidateIdentities()
 	g.mu.Lock()
 	g.settings = nil // A dropped settings event makes the overflow case different from reconnecting.
@@ -173,6 +175,9 @@ func (g *Google) Run(ctx context.Context, incoming func(Incoming), pause func(),
 			if g.finishOverflowRecovery() {
 				recoveringOverflow = false
 				g.diagnose("event_queue_drained", nil)
+				if !g.healthFailure.Load() {
+					g.outageEnded()
+				}
 			}
 		}
 		select {
@@ -188,6 +193,9 @@ func (g *Google) Run(ctx context.Context, incoming func(Incoming), pause func(),
 			if recovered {
 				interruptionHandled = false
 				g.diagnose("connection_recovered", nil)
+				if !g.overflow.Load() {
+					g.outageEnded()
+				}
 			} else if hard {
 				pause()
 				g.diagnose("recovery_blocked", result.err)

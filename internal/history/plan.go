@@ -3,6 +3,7 @@ package history
 import (
 	"context"
 	"github.com/deusical/smsbot-server/internal/store"
+	"github.com/deusical/smsbot-server/internal/transport"
 	"sort"
 	"time"
 )
@@ -21,7 +22,42 @@ type (
 	DiscoveryPager interface {
 		DiscoveryPending() bool
 	}
+	// CatchUpSource reports when live capture may have missed messages: after
+	// a connection outage, or (token 0) while the service was not running.
+	// It returns the earliest such time since token and the next token.
+	CatchUpSource interface {
+		MissedSince(token uint64) (since time.Time, next uint64, missed bool)
+	}
 )
+
+// missedActivity reports whether the phone lists activity in c at or after
+// since (allowing for the list's one-second resolution), so messages may
+// have been missed there.
+func missedActivity(c transport.Conversation, since time.Time) bool {
+	if since.IsZero() {
+		return false
+	}
+	at, err := time.Parse(time.RFC3339, c.LastMessageAt)
+	return err == nil && !at.Before(since.Add(-2*time.Minute))
+}
+
+// catchUp asks the recent workflow to page back to shortly before since. An
+// unfinished recent scan is extended instead of restarted.
+func catchUp(c transport.Conversation, p Policy, since, now time.Time) Commit {
+	from := since.Add(-30 * time.Minute)
+	return Commit{Work: RecentWork, Conversation: c, Policy: p, Apply: func(r *store.Archive) {
+		cp := &r.RecentCheckpoint
+		if cp.RecentStarted == "" {
+			cp.RecentStarted = now.UTC().Format(time.RFC3339Nano)
+			cp.RecentSince = from.UTC().Format(time.RFC3339Nano)
+			cp.RecentCursor = ""
+			return
+		}
+		if current := parseTime(cp.RecentSince); current.IsZero() || from.Before(current) {
+			cp.RecentSince = from.UTC().Format(time.RFC3339Nano)
+		}
+	}}
+}
 
 // pending reports whether a's checkpoint for w has work of its own, outside
 // the routine recent sweep, and when that work is next eligible. This one
