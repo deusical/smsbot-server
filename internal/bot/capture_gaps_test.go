@@ -157,7 +157,7 @@ func TestCaptureGapPersistsRepairsAndNeverRunsCommands(t *testing.T) {
 	if !e.InboxCaptureGap() {
 		t.Fatal("pending gap missing")
 	}
-	restarted := New(e.Store, e.Transport)
+	restarted := assemble(t, e.Store, e.Transport)
 	if !restarted.InboxCaptureGap() {
 		t.Fatal("gap lost on restart")
 	}

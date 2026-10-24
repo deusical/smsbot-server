@@ -7,8 +7,8 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/deusical/smsbot-server/internal/app"
 	"github.com/deusical/smsbot-server/internal/archive"
-	"github.com/deusical/smsbot-server/internal/bot"
 	"github.com/deusical/smsbot-server/internal/httpapi"
 	"github.com/deusical/smsbot-server/internal/store"
 	"github.com/deusical/smsbot-server/internal/transport"
@@ -393,18 +393,15 @@ func (o *options) serve(s *store.Store, v *vault.Vault, sessionPath string) erro
 			return errors.New("cannot load TLS certificate and key")
 		}
 	}
-	if e = s.Recover(); e != nil {
-		return e
-	}
-	if e = s.Pause(true); e != nil {
+	if e = app.PrepareStore(s); e != nil {
 		return e
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	var t transport.Transport = transport.NewFixture()
-	var google *transport.Google
+	var events app.EventSource
 	if !o.fixture {
-		google = transport.NewGoogle(v, sessionPath)
+		google := transport.NewGoogle(v, sessionPath)
 		google.Diagnostic = func(d transport.AuthDiagnostic) {
 			b, err := json.Marshal(d)
 			if err == nil {
@@ -415,55 +412,18 @@ func (o *options) serve(s *store.Store, v *vault.Vault, sessionPath string) erro
 			return e
 		}
 		t = google
+		events = google
 		defer google.Close()
 	}
-	engine := bot.New(s, t)
-	cfg, e := engine.Configuration()
-	if e != nil {
+	service := app.New(s, t, filepath.Join(filepath.Dir(s.Path), "archive"))
+	if e = service.Init(); e != nil {
 		return e
 	}
-	if _, e = s.Retention(cfg.Settings.RetentionDays); e != nil {
-		return e
-	}
-	adapterDone := make(chan struct{})
-	captureDone := make(chan struct{})
-	go func() { defer close(captureDone); engine.RunCapture(ctx) }()
-	archiveDone := make(chan struct{})
-	go func() { defer close(archiveDone); engine.Archive.Run(ctx) }()
-	defer func() { cancel(); <-archiveDone }()
-	historyDone := make(chan struct{})
-	go func() { defer close(historyDone); engine.History.Run(ctx) }()
-	defer func() { cancel(); <-historyDone }()
-	if google != nil {
-		go func() {
-			defer close(adapterDone)
-			google.Run(ctx, func(m transport.Incoming) {
-				if _, err := engine.Ingest(ctx, m); err != nil {
-					if !errors.Is(err, transport.ErrUnavailable) || engine.ConnectionInterrupted() != nil {
-						_ = engine.Pause(true)
-					}
-				}
-			}, func() { _ = engine.Pause(true) }, func(conv, txn, state, reported string) {
-				if engine.Reconcile(conv, txn, state, reported) != nil {
-					_ = engine.Pause(true)
-				}
-			}, engine.ConnectionInterrupted)
-		}()
-	} else {
-		close(adapterDone)
-	}
-	workerDone := make(chan struct{})
-	go func() {
-		defer close(workerDone)
-		engine.Run(ctx, func(err error) {
-			if errors.Is(err, transport.ErrUnavailable) && engine.ConnectionInterrupted() == nil {
-				return
-			}
-			_ = engine.Pause(true)
-			fmt.Fprintln(os.Stderr, "Worker: processing failed; automation paused; inspect activity locally")
-		})
-	}()
-	api := httpapi.New(engine, origin, o.fixture)
+	workers := service.Start(ctx, events, func() {
+		fmt.Fprintln(os.Stderr, "Worker: processing failed; automation paused; inspect activity locally")
+	})
+	defer workers.Stop()
+	api := httpapi.New(service.Engine, origin, o.fixture)
 	server := &http.Server{Addr: o.listen, Handler: api, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
 	if o.tlsCert != "" {
 		server.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{certificate}}
@@ -481,19 +441,11 @@ func (o *options) serve(s *store.Store, v *vault.Vault, sessionPath string) erro
 	case <-ctx.Done():
 	case err := <-errChan:
 		if !errors.Is(err, http.ErrServerClosed) {
-			cancel()
-			<-workerDone
-			<-adapterDone
-			<-captureDone
 			return errors.New("HTTP service failed")
 		}
 	}
 	cancel()
 	shutdown, done := context.WithTimeout(context.Background(), 10*time.Second)
 	defer done()
-	e = server.Shutdown(shutdown)
-	<-workerDone
-	<-adapterDone
-	<-captureDone
-	return e
+	return server.Shutdown(shutdown)
 }

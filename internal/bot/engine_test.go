@@ -2,6 +2,8 @@ package bot
 
 import (
 	"context"
+	"github.com/deusical/smsbot-server/internal/archive"
+	"github.com/deusical/smsbot-server/internal/history"
 	"github.com/deusical/smsbot-server/internal/store"
 	"github.com/deusical/smsbot-server/internal/transport"
 	"github.com/deusical/smsbot-server/internal/vault"
@@ -22,8 +24,20 @@ func setup(t *testing.T) (*Engine, *transport.Fixture) {
 	}
 	t.Cleanup(func() { s.DB.Close() })
 	f := transport.NewFixture()
-	engine := New(s, f)
-	return engine, f
+	return assemble(t, s, f), f
+}
+
+// assemble wires an engine with its workers as internal/app does (bot tests
+// cannot import app) and runs its startup work.
+func assemble(t *testing.T, s *store.Store, tr transport.Transport) *Engine {
+	t.Helper()
+	e := New(s, tr)
+	e.History = history.New(s, e.HistoryHost())
+	e.Archive = archive.New(s, filepath.Join(filepath.Dir(s.Path), "archive"), e.FileHost())
+	if err := e.Init(); err != nil {
+		t.Fatal(err)
+	}
+	return e
 }
 func incoming() transport.Incoming {
 	return transport.Incoming{ID: "test-message", ConversationID: "demo-chat", ParticipantID: "demo-peer", Text: "!ping", At: time.Now()}
