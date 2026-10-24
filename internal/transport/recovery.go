@@ -270,6 +270,13 @@ func (g *Google) finishRecovery(result recoveryResult, now time.Time) (recovered
 	r.next = time.Time{}
 	return true, false
 }
+
+// invalidateIdentities makes every authorizing path verify identity live
+// again after a connection gap. Discovery hints survive: they only list
+// conversations, never authorize, and individual conversation updates still
+// replace or drop them. Keeping them avoids re-reading every conversation's
+// details from the phone after each reconnect; the list pages are still
+// reread, since events may have been missed during the gap.
 func (g *Google) invalidateIdentities() {
 	g.identityEpoch.Add(1)
 	g.listMu.Lock()
@@ -277,7 +284,6 @@ func (g *Google) invalidateIdentities() {
 	g.listed = time.Time{}
 	g.list = nil
 	g.conversations = make(map[string]*gmproto.Conversation)
-	g.discoveryDetails = nil
 	g.mu.Unlock()
 	g.listMu.Unlock()
 	g.discovery.invalidate()

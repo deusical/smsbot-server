@@ -134,7 +134,7 @@ func TestDiscoveryLookupReusesCache(t *testing.T) {
 	}
 }
 
-func TestDiscoveryReuses317DetailsAcrossReconciliationWithoutPhone(t *testing.T) {
+func TestDiscoveryReuses317DetailsAcrossReconciliationAndReconnect(t *testing.T) {
 	g := NewGoogle(nil, "")
 	ids := make([]string, 317)
 	for i := range ids {
@@ -160,9 +160,20 @@ func TestDiscoveryReuses317DetailsAcrossReconciliationWithoutPhone(t *testing.T)
 	if _, err := g.DiscoveryLookup(context.Background(), "new-conversation"); !errors.Is(err, ErrUnavailable) {
 		t.Fatal("unknown ID did not require live lookup")
 	}
+	// A reconnect re-verifies identities but keeps listing hints, so the
+	// next discovery pass does not re-read every conversation from the phone.
 	g.invalidateIdentities()
-	if _, err := g.DiscoveryLookup(context.Background(), ids[0]); !errors.Is(err, ErrUnavailable) {
-		t.Fatal("connection invalidation retained discovery hints")
+	if c, err := g.DiscoveryLookup(context.Background(), ids[0]); err != nil || c.ParticipantID != "peer" {
+		t.Fatal("reconnect discarded discovery hints", err)
+	}
+	if _, err := g.LookupConversation(context.Background(), ids[0]); !errors.Is(err, ErrUnavailable) {
+		t.Fatal("reconnect left a verified identity usable without the phone")
+	}
+	g.mu.Lock()
+	verified := len(g.conversations)
+	g.mu.Unlock()
+	if verified != 0 {
+		t.Fatal("reconnect kept verified identities")
 	}
 }
 
