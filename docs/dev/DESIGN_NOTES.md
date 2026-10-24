@@ -254,6 +254,10 @@ Concurrent newer failures invalidate an older repair's completion checkpoint.
 Successful repair reports only that the available range was rechecked, and clears
 the active warning for that range; unavailable history can still contain gaps.
 Unknown scope is explicitly unverified and cannot be automatically declared repaired.
+A gap in a conversation that collection no longer applies to (a group, read-only,
+or not selected) is closed as `not_collected` after its identity lookup, instead of
+retrying; it no longer counts as an active warning. Repeated lookup failures back
+off like other history retries, up to one attempt a day.
 
 
 ## Phone wake budget

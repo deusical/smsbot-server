@@ -3,6 +3,7 @@ package collection
 import (
 	"context"
 	"encoding/json"
+	"github.com/deusical/smsbot-server/internal/store"
 	"github.com/deusical/smsbot-server/internal/transport"
 	"sync"
 	"time"
@@ -45,7 +46,7 @@ func (svc *Service) InboxCaptureGap() bool {
 		return true
 	}
 	for _, g := range gaps {
-		if g.State != "checked_available" {
+		if !store.GapSettled(g) {
 			return true
 		}
 	}
