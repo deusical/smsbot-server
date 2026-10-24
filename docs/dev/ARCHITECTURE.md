@@ -83,6 +83,45 @@ never change Live/Pause.
 - **Owner only.** There is a single owner. API calls need an owner browser session;
   bearer credentials are not accepted.
 
+## Who owns what
+
+- **Startup and lifecycle.** `internal/app` recovers interrupted sends and pauses before
+  any transport connects, publishes consent and preservation markers before the legacy
+  expiry pass, starts every worker, and stops them all on any exit path.
+- **Sync checkpoints.** The archive record embeds one checkpoint per workflow: import
+  (versioned by `generation`), recent reconciliation, and viewed section (versioned by
+  `refresh_generation`). Each history step commits through one transactional update
+  that changes only its own checkpoint (`store.UpdateArchive`, `history.Commit`).
+- **Scheduling.** `internal/history/plan.go` defines, per workflow, whether work is
+  pending and when it is next eligible; step selection and the worker's sleep both use it.
+- **Original files.** `internal/archive` owns retry timing (`RetryDelay`, `RetryAt`,
+  including legacy deadlines) and eligibility (`phoneWorkAllowed`); the store's
+  `mergeObserved` is the one rule for files the phone reports again.
+- **Sends.** `bot.Engine.Dispatch` runs named steps (`nextReady`, `memoryContext`,
+  `generateReply`, `prepareFiles`, `submit`) under the control lock, releasing it only
+  for provider generation and file upload. `submit` persists the transaction before the
+  single transport call.
+- **SQL.** Business-state queries live in `internal/store` as named operations. The
+  archive export and restore keep their deliberate snapshot SQL.
+- **Dashboard.** `useSession` and `useDashboard` own the session and app-wide polling;
+  in a conversation, `useConversationMessages` owns the message list and its one poll
+  loop, `useThreadScroll` owns scroll anchoring, and `useComposer` owns drafts and
+  one-intent-per-send.
+
+## Compatibility paths
+
+These exist for saved state or clients that predate the current design. Each lists what
+would justify retiring it.
+
+| Path | Why it exists | Retire when |
+|---|---|---|
+| `POST /conversations/{id}/history/import` and `/compose` (legacy, enrollment-based) | Pre-inbox bot history and sends; the legacy compose has no idempotency key, so only a definite rejection is retried | The dashboard still uses them for enrolled conversations while collection is off; retire only with that mode |
+| `archive_pending` preservation markers | Protect opted-in history from the legacy expiry pass until a verified archive record exists | Every installation has verified archive records for opted-in conversations |
+| Original-file deadlines with `retry_backoff_version` 0 | Failures saved before the daily cooldown adopt it locally, with no phone attempt | No saved file carries a version-0 failure deadline |
+| Legacy Google inline previews stored as originals | Imported before originals were separate; repaired once before any download | No saved file is a legacy preview |
+| `mark_read_when_viewed` as an optional field | Settings saved before the option existed keep the default (on) | Not retirable without a settings migration |
+| Archive policy tokens without effective capacity | Blocks saved before capacity comparison get one bounded attempt | No saved block lacks a token |
+
 ## Configuration and state
 
 State lives in a data directory (`smsbot.db`, the encrypted Google session, archived
