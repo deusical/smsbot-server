@@ -9,7 +9,6 @@ import (
 	"github.com/deusical/smsbot-server/internal/history"
 	"github.com/deusical/smsbot-server/internal/store"
 	"github.com/deusical/smsbot-server/internal/transport"
-	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -38,34 +37,58 @@ type Engine struct {
 	pendingGaps    map[string]pendingCaptureGap
 }
 
+// New wires an engine without touching storage or starting work. The caller
+// attaches the history and archive workers, then runs Init before use.
 func New(s *store.Store, t transport.Transport) *Engine {
 	var provider Provider = NewOpenRouter()
 	if _, offline := t.(*transport.Fixture); offline {
 		provider = SimulatedProvider{}
-		var models []Model
-		if err := s.GetPublicSetting("model_catalog", &models); err == nil && len(models) == 0 {
-			models, _ = provider.Models(context.Background())
-			_ = s.SetPublicSetting("model_catalog", models)
-		}
 	}
-	e := &Engine{Store: s, Transport: t, Provider: provider, now: time.Now, pending: map[string]context.CancelFunc{}, pendingGaps: map[string]pendingCaptureGap{}, captureQueue: make(chan captureItem, 512)}
-	e.History = history.New(s, archiveHost{e})
-	e.Archive = archive.New(s, filepath.Join(filepath.Dir(s.Path), "archive"), archiveFileHost{e})
-	if settings, err := e.InboxSettings(); err == nil {
-		e.publishCaptureConsent(settings)
-		// Preserve existing opted-in history before startup's legacy expiry pass.
-		// Pending records grant no viewing or collection rights before verification.
-		if settings.Enabled {
-			if settings.Scope == "all" {
-				_, _ = s.DB.Exec("INSERT OR IGNORE INTO archive_pending SELECT DISTINCT conversation FROM messages WHERE conversation NOT IN (SELECT conversation FROM archive_conversations)")
-			} else {
-				for _, b := range settings.Conversations {
-					_, _ = s.DB.Exec("INSERT OR IGNORE INTO archive_pending SELECT ? WHERE NOT EXISTS(SELECT 1 FROM archive_conversations WHERE conversation=?)", b.Conversation, b.Conversation)
-				}
+	return &Engine{Store: s, Transport: t, Provider: provider, now: time.Now, pending: map[string]context.CancelFunc{}, pendingGaps: map[string]pendingCaptureGap{}, captureQueue: make(chan captureItem, 512)}
+}
+
+// HistoryHost is the consent-checked adapter the history worker reads through.
+func (e *Engine) HistoryHost() history.Host { return archiveHost{e} }
+
+// FileHost is the consent-checked adapter the original-file worker uses.
+func (e *Engine) FileHost() archive.FileHost { return archiveFileHost{e} }
+
+// Init performs the engine's one-time startup work. It must run before the
+// legacy expiry pass and before any worker or transport event: it publishes
+// the collection consent snapshot capture reads, and marks existing opted-in
+// history for preservation. Those markers grant no viewing or collection
+// rights before verification.
+func (e *Engine) Init() error {
+	if _, offline := e.Transport.(*transport.Fixture); offline {
+		var models []Model
+		if err := e.Store.GetPublicSetting("model_catalog", &models); err != nil {
+			return err
+		}
+		if len(models) == 0 {
+			models, _ = e.Provider.Models(context.Background())
+			if err := e.Store.SetPublicSetting("model_catalog", models); err != nil {
+				return err
 			}
 		}
 	}
-	return e
+	settings, err := e.InboxSettings()
+	if err != nil {
+		return err
+	}
+	e.publishCaptureConsent(settings)
+	if !settings.Enabled {
+		return nil
+	}
+	if settings.Scope == "all" {
+		_, err = e.Store.DB.Exec("INSERT OR IGNORE INTO archive_pending SELECT DISTINCT conversation FROM messages WHERE conversation NOT IN (SELECT conversation FROM archive_conversations)")
+		return err
+	}
+	for _, b := range settings.Conversations {
+		if _, err = e.Store.DB.Exec("INSERT OR IGNORE INTO archive_pending SELECT ? WHERE NOT EXISTS(SELECT 1 FROM archive_conversations WHERE conversation=?)", b.Conversation, b.Conversation); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 func (e *Engine) Pause(value bool) error {
 	e.mu.Lock()

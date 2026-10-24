@@ -3,7 +3,7 @@ package httpapi
 import (
 	"bytes"
 	"encoding/json"
-	"github.com/deusical/smsbot-server/internal/bot"
+	"github.com/deusical/smsbot-server/internal/app"
 	"github.com/deusical/smsbot-server/internal/store"
 	"github.com/deusical/smsbot-server/internal/transport"
 	"github.com/deusical/smsbot-server/internal/vault"
@@ -22,7 +22,11 @@ func apiSetup(t *testing.T) *Server {
 	t.Cleanup(func() { s.DB.Close() })
 	s.AddCredential("fixture-owner", "test", "owner", 0)
 	s.AddCredential("fixture-client", "test", "session", 0)
-	return New(bot.New(s, transport.NewFixture()), "http://localhost:8787", true)
+	service := app.New(s, transport.NewFixture(), filepath.Join(filepath.Dir(s.Path), "archive"))
+	if err := service.Init(); err != nil {
+		t.Fatal(err)
+	}
+	return New(service.Engine, "http://localhost:8787", true)
 }
 func req(s *Server, method, path, body, token, origin string) *httptest.ResponseRecorder {
 	r := httptest.NewRequest(method, "http://localhost:8787"+path, bytes.NewBufferString(body))
