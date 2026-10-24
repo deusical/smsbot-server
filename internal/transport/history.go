@@ -66,24 +66,14 @@ func (g *Google) DiscoverConversations(ctx context.Context, cursor string) (Conv
 		if err != nil {
 			return ConversationPage{}, err
 		}
-		ids := make([]string, len(res.GetConversations()))
-		for i, c := range res.GetConversations() {
-			ids[i] = c.GetConversationID()
-		}
-		conversations, partial := discoveryConversations(ctx, ids, g.DiscoveryLookup)
-		summaries := res.GetConversations()
-		summaryByID := make(map[string]*gmproto.Conversation, len(summaries))
-		for _, s := range summaries {
-			if s != nil && s.GetConversationID() != "" {
-				summaryByID[s.GetConversationID()] = s
+		// Discovery lists only individual conversations that can be sent to.
+		conversations := []Conversation{}
+		for _, c := range res.GetConversations() {
+			if c.GetConversationID() != "" && eligible(c) {
+				conversations = append(conversations, listConversation(c))
 			}
 		}
-		for i, conv := range conversations {
-			if s := summaryByID[conv.ID]; s != nil {
-				conversations[i] = withListState(conv, s)
-			}
-		}
-		out := ConversationPage{Conversations: conversations, Partial: partial}
+		out := ConversationPage{Conversations: conversations}
 		if res.GetCursor() != nil {
 			b, err := proto.Marshal(res.GetCursor())
 			if err != nil {

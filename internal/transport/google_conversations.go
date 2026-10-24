@@ -1,13 +1,12 @@
 package transport
 
-// Conversation discovery and identity. Discovery hints (cached details for
-// listing) are kept separate from live identity lookups, which authorize
-// sends, captures and history reads.
+// Conversation discovery and identity. Lists are built from the phone's list
+// pages, whose records carry the same identity fields as a single-conversation
+// lookup; sends, captures and history reads still verify identity live.
 
 import (
 	"context"
 	"errors"
-	"sync"
 	"time"
 
 	"go.mau.fi/mautrix-gmessages/pkg/libgm/gmproto"
@@ -48,50 +47,26 @@ func (g *Google) cacheDetail(c *gmproto.Conversation) {
 		g.conversations = map[string]*gmproto.Conversation{}
 	}
 	g.conversations[c.GetConversationID()] = c
-	g.cacheDiscoveryDetailLocked(c)
 }
 
-func (g *Google) cacheDiscoveryDetailLocked(c *gmproto.Conversation) {
-	if g.discoveryDetails == nil {
-		g.discoveryDetails = map[string]*gmproto.Conversation{}
-	}
-	g.discoveryDetails[c.GetConversationID()] = c
-	g.hintsDirty.Store(true)
-}
-
-func (g *Google) discoveryDetail(id string) *gmproto.Conversation {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	c := g.discoveryDetails[id]
-	if id == "" || c.GetConversationID() != id {
-		return nil
-	}
-	return c
-}
-
-func (g *Google) DiscoveryLookup(ctx context.Context, id string) (Conversation, error) {
-	if err := ctx.Err(); err != nil {
-		return Conversation{}, err
-	}
-	if c := g.discoveryDetail(id); c != nil {
-		label := c.GetName()
-		if label == "" {
-			if c.GetIsGroupChat() {
-				label = "Group conversation"
-			} else {
-				label = "Individual conversation"
-			}
+// listConversation projects a phone conversation record for listing.
+func listConversation(c *gmproto.Conversation) Conversation {
+	label := c.GetName()
+	if label == "" {
+		if c.GetIsGroupChat() {
+			label = "Group conversation"
+		} else {
+			label = "Individual conversation"
 		}
-		return withListState(Conversation{
-			ID:            id,
-			ParticipantID: peer(c),
-			Label:         label,
-			Protocol:      c.GetType().String(),
-			Group:         c.GetIsGroupChat(),
-			Writable:      eligible(c),
-		}, c), nil
 	}
-	return g.LookupConversation(ctx, id)
+	return withListState(Conversation{
+		ID:            c.GetConversationID(),
+		ParticipantID: peer(c),
+		Label:         label,
+		Protocol:      c.GetType().String(),
+		Group:         c.GetIsGroupChat(),
+		Writable:      eligible(c),
+	}, c)
 }
 
 func (g *Google) LookupConversation(ctx context.Context, id string) (Conversation, error) {
@@ -140,116 +115,24 @@ func (g *Google) Conversations(ctx context.Context) ([]Conversation, error) {
 	if e != nil {
 		return nil, errors.New("conversation refresh failed")
 	}
+	// The list records are fresh phone reads: they also become the identity
+	// baselines that sends compare against their own live lookup.
 	out := []Conversation{}
-	ids := make([]string, len(res.GetConversations()))
-	for i, summary := range res.GetConversations() {
-		ids[i] = summary.GetConversationID()
-	}
-	var fetchedMu sync.Mutex
-	newFetched := make(map[string]bool)
-	fetchDetail := func(ctx context.Context, id string) (*gmproto.Conversation, error) {
-		if cached := g.discoveryDetail(id); cached != nil {
-			return cached, nil
-		}
-		g.countPhone(ctx, phoneLookup)
-		c, err := g.client.GetConversation(ctx, id)
-		if err != nil {
-			return nil, err
-		}
-		fetchedMu.Lock()
-		newFetched[id] = true
-		fetchedMu.Unlock()
-		return c, nil
-	}
-	details, e := conversationDetails(ctx, ids, fetchDetail)
-	if e != nil {
-		return nil, errors.New("conversation identity refresh failed")
-	}
-	summaries := res.GetConversations()
-	for i, c := range details {
-		label := c.GetName()
-		if label == "" {
-			if c.GetIsGroupChat() {
-				label = "Group conversation"
-			} else {
-				label = "Individual conversation"
-			}
-		}
-		conv := Conversation{
-			ID:            c.GetConversationID(),
-			ParticipantID: peer(c),
-			Label:         label,
-			Protocol:      c.GetType().String(),
-			Group:         c.GetIsGroupChat(),
-			Writable:      eligible(c),
-		}
-		conv = withListState(conv, c)
-		if i < len(summaries) && summaries[i] != nil {
-			conv = withListState(conv, summaries[i])
-		}
-		out = append(out, conv)
-	}
-	// Publish identities only after the entire refresh succeeds.
 	g.mu.Lock()
 	if g.conversations == nil {
 		g.conversations = map[string]*gmproto.Conversation{}
 	}
-	for _, c := range details {
-		id := c.GetConversationID()
-		if newFetched[id] {
-			g.conversations[id] = c
-			g.cacheDiscoveryDetailLocked(c)
+	for _, c := range res.GetConversations() {
+		if c.GetConversationID() == "" {
+			continue
 		}
+		g.conversations[c.GetConversationID()] = c
+		out = append(out, listConversation(c))
 	}
 	g.mu.Unlock()
 	g.list = out
 	g.listed = time.Now()
 	return append([]Conversation(nil), out...), nil
-}
-
-// Fetch independent details with bounded concurrency while preserving inbox order.
-func conversationDetails(ctx context.Context, ids []string, fetch func(context.Context, string) (*gmproto.Conversation, error)) ([]*gmproto.Conversation, error) {
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	results := make([]*gmproto.Conversation, len(ids))
-	errs := make([]error, len(ids))
-	jobs := make(chan int, len(ids))
-	for i := range ids {
-		jobs <- i
-	}
-	close(jobs)
-	var workers sync.WaitGroup
-	for worker := 0; worker < min(4, len(ids)); worker++ {
-		workers.Add(1)
-		go func() {
-			defer workers.Done()
-			for i := range jobs {
-				if ctx.Err() != nil {
-					return
-				}
-				c, err := fetch(ctx, ids[i])
-				if err == nil && (c == nil || ids[i] == "" || c.GetConversationID() != ids[i]) {
-					err = errors.New("conversation identity mismatch")
-				}
-				if err != nil {
-					errs[i] = err
-					cancel()
-					return
-				}
-				results[i] = c
-			}
-		}()
-	}
-	workers.Wait()
-	for _, err := range errs {
-		if err != nil {
-			return nil, err
-		}
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	return results, nil
 }
 
 // withListState copies the phone's ordering hints. The library reports the last

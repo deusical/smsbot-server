@@ -36,17 +36,14 @@ type Google struct {
 	list          []Conversation
 	settings      *gmproto.Settings
 	conversations map[string]*gmproto.Conversation
-	// Display/discovery hints have no TTL and never authorize phone operations.
-	discoveryDetails map[string]*gmproto.Conversation
-	hintsDirty       atomic.Bool // discoveryDetails changed since the last save
-	updates          chan any
-	queueMu          sync.Mutex
-	overflow         atomic.Bool
-	healthFailure    atomic.Bool
-	overflowWake     chan struct{}
-	started          time.Time
-	saveMu           sync.Mutex
-	Diagnostic       func(AuthDiagnostic)
+	updates       chan any
+	queueMu       sync.Mutex
+	overflow      atomic.Bool
+	healthFailure atomic.Bool
+	overflowWake  chan struct{}
+	started       time.Time
+	saveMu        sync.Mutex
+	Diagnostic    func(AuthDiagnostic)
 	// RequestLog, when set, receives every request the adapter sends to the phone.
 	RequestLog func(PhoneRequestLog)
 	// Reconnected, when set, runs after a connection outage ends (see OutagesSince).
@@ -114,8 +111,6 @@ func (g *Google) Pair(ctx context.Context, input string, showEmoji func(string))
 	if _, e := os.Stat(g.path); e == nil {
 		return errors.New("saved pairing exists; use a fresh state directory for a different account")
 	}
-	// Hints left from an earlier pairing belong to that account.
-	_ = os.Remove(g.hintsPath())
 	cookies, e := ParseCookies(input)
 	if e != nil {
 		return e
@@ -173,7 +168,8 @@ func (g *Google) Connect(ctx context.Context) error {
 	if json.Unmarshal(b, &auth) != nil {
 		return errors.New("saved pairing is invalid")
 	}
-	g.loadHints()
+	// Earlier versions cached conversation details here; nothing reads them now.
+	_ = os.Remove(g.path + ".hints")
 	g.attach(&auth)
 	g.started = time.Now()
 	deadline, cancel := context.WithTimeout(ctx, 45*time.Second)
@@ -219,11 +215,7 @@ func (g *Google) Close() error {
 	if g.client != nil {
 		g.client.Disconnect()
 	}
-	hintsErr := g.saveHints()
-	if err := g.Save(); err != nil {
-		return err
-	}
-	return hintsErr
+	return g.Save()
 }
 func (g *Google) Ready() bool {
 	return g.ready.Load() && !g.healthFailure.Load() && !g.overflow.Load() && g.client != nil && g.client.IsConnected()

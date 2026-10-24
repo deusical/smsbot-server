@@ -64,17 +64,6 @@ func TestDiscoveryCacheWaitHonorsCancellation(t *testing.T) {
 	close(release)
 	<-done
 }
-func TestDiscoverySkipsFailureAndMarksPartialWithoutChangingOrder(t *testing.T) {
-	p, partial := discoveryConversations(context.Background(), []string{"first", "missing", "group", "last"}, func(_ context.Context, id string) (Conversation, error) {
-		if id == "missing" {
-			return Conversation{}, errors.New("synthetic_deleted")
-		}
-		return Conversation{ID: id, ParticipantID: "synthetic-peer", Writable: true, Group: id == "group"}, nil
-	})
-	if !partial || len(p) != 2 || p[0].ID != "first" || p[1].ID != "last" {
-		t.Fatal("one failure hid the page or group exclusion/order was lost")
-	}
-}
 func TestDiscoveryCacheKeepsPagesUntilActivity(t *testing.T) {
 	var cache conversationPageCache
 	calls := 0

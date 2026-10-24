@@ -61,10 +61,6 @@ func (g *Google) rememberConversationEvent(c *gmproto.Conversation) bool {
 			g.conversations = map[string]*gmproto.Conversation{}
 		}
 		g.conversations[c.GetConversationID()] = c
-		g.cacheDiscoveryDetailLocked(c)
-	} else if changed {
-		delete(g.discoveryDetails, c.GetConversationID())
-		g.hintsDirty.Store(true)
 	}
 	return changed
 }
