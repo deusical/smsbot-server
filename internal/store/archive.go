@@ -13,7 +13,30 @@ import (
 
 // Archive holds encrypted verified identity and durable read-job checkpoints.
 // Consent is always checked separately; the record itself never authorizes sync.
+//
+// Each sync workflow owns one embedded checkpoint. Embedding keeps the stored
+// and API JSON flat and unchanged while making ownership explicit: a workflow
+// updates only its own checkpoint through UpdateArchive.
 type Archive struct {
+	ImportCheckpoint
+	RecentCheckpoint
+	ViewCheckpoint
+
+	Conversation transport.Conversation `json:"conversation"`
+	// Generation versions the import checkpoint: a restart or cancellation
+	// rejects an import page fetched for the previous request.
+	Generation int64 `json:"generation"`
+	// FocusAt is the owner's viewing heartbeat; it never changes fetch bounds.
+	FocusAt string `json:"focus_at,omitempty"`
+	// Skipped and Oldest summarize every committed page, whichever workflow
+	// fetched it.
+	Skipped int    `json:"skipped"`
+	Oldest  string `json:"oldest"`
+}
+
+// ImportCheckpoint is the deep import: an explicit owner request or automatic
+// backfill paging toward older history. Versioned by Archive.Generation.
+type ImportCheckpoint struct {
 	ScanRevision   int64  `json:"scan_revision,omitempty"`
 	RequestSource  string `json:"request_source,omitempty"`
 	RequestedAt    string `json:"requested_at,omitempty"`
@@ -23,36 +46,87 @@ type Archive struct {
 	Pages          int    `json:"pages"`
 	Updated        int    `json:"updated"`
 	ScannedThrough string `json:"scanned_through,omitempty"`
+	DeepCheckedAt  string `json:"deep_checked_at,omitempty"`
+	RetryAt        string `json:"retry_at,omitempty"`
+	Failures       int    `json:"failures"`
+	Duplicates     int    `json:"duplicates"`
+	Cursor         string `json:"cursor"`
+	Since          string `json:"since"`
+	State          string `json:"state"`
+	Imported       int    `json:"imported"`
+	Error          string `json:"error,omitempty"`
+}
 
-	DeepCheckedAt    string                 `json:"deep_checked_at,omitempty"`
-	RefreshSince     string                 `json:"refresh_since,omitempty"`
-	RefreshUntil     string                 `json:"refresh_until,omitempty"`
-	RefreshCursor    string                 `json:"refresh_cursor,omitempty"`
-	RefreshState     string                 `json:"refresh_state,omitempty"`
-	RefreshCheckedAt string                 `json:"refresh_checked_at,omitempty"`
-	RefreshRetryAt   string                 `json:"refresh_retry_at,omitempty"`
-	RefreshFailures  int                    `json:"refresh_failures,omitempty"`
-	RefreshError     string                 `json:"refresh_error,omitempty"`
-	FocusAt          string                 `json:"focus_at,omitempty"`
-	RecentRetryAt    string                 `json:"recent_retry_at,omitempty"`
-	RecentFailures   int                    `json:"recent_failures"`
-	RecentError      string                 `json:"recent_error,omitempty"`
-	RecentCursor     string                 `json:"recent_cursor"`
-	RecentSince      string                 `json:"recent_since"`
-	RecentStarted    string                 `json:"recent_started"`
-	RetryAt          string                 `json:"retry_at,omitempty"`
-	Failures         int                    `json:"failures"`
-	Duplicates       int                    `json:"duplicates"`
-	Skipped          int                    `json:"skipped"`
-	Conversation     transport.Conversation `json:"conversation"`
-	Cursor           string                 `json:"cursor"`
-	Since            string                 `json:"since"`
-	State            string                 `json:"state"`
-	Imported         int                    `json:"imported"`
-	Oldest           string                 `json:"oldest"`
-	LastSync         string                 `json:"last_sync"`
-	Error            string                 `json:"error,omitempty"`
-	Generation       int64                  `json:"generation"`
+// RecentCheckpoint is routine reconciliation of the newest messages.
+type RecentCheckpoint struct {
+	RecentRetryAt  string `json:"recent_retry_at,omitempty"`
+	RecentFailures int    `json:"recent_failures"`
+	RecentError    string `json:"recent_error,omitempty"`
+	RecentCursor   string `json:"recent_cursor"`
+	RecentSince    string `json:"recent_since"`
+	RecentStarted  string `json:"recent_started"`
+	LastSync       string `json:"last_sync"`
+}
+
+// ViewCheckpoint rechecks the time span the owner is viewing. ViewGeneration
+// rejects a page fetched for superseded view bounds without disturbing imports.
+type ViewCheckpoint struct {
+	RefreshSince     string `json:"refresh_since,omitempty"`
+	RefreshUntil     string `json:"refresh_until,omitempty"`
+	RefreshCursor    string `json:"refresh_cursor,omitempty"`
+	RefreshState     string `json:"refresh_state,omitempty"`
+	RefreshCheckedAt string `json:"refresh_checked_at,omitempty"`
+	RefreshRetryAt   string `json:"refresh_retry_at,omitempty"`
+	RefreshFailures  int    `json:"refresh_failures,omitempty"`
+	RefreshError     string `json:"refresh_error,omitempty"`
+	ViewGeneration   int64  `json:"refresh_generation,omitempty"`
+}
+
+// NewArchive is the initial record for a verified individual conversation.
+func NewArchive(c transport.Conversation) Archive {
+	return Archive{Conversation: c, Generation: 1, ImportCheckpoint: ImportCheckpoint{State: "queued"}}
+}
+
+// ErrArchiveMissing reports that an update required an existing record.
+var ErrArchiveMissing = errors.New("archive_missing")
+
+// UpdateArchive applies fn to the current record inside one transaction, so a
+// caller changes only the fields it owns and cannot overwrite concurrent
+// progress in another checkpoint. fn receives a zero record when none exists
+// and must not use the store. Returning an error leaves the record unchanged.
+func (s *Store) UpdateArchive(conv string, retention int, fn func(a *Archive, exists bool) error) (Archive, error) {
+	var a Archive
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return a, err
+	}
+	defer tx.Rollback()
+	var payload string
+	exists := true
+	switch err = tx.QueryRow("SELECT payload FROM archive_conversations WHERE conversation=?", conv).Scan(&payload); {
+	case errors.Is(err, sql.ErrNoRows):
+		exists = false
+	case err != nil:
+		return a, err
+	default:
+		b, err := s.Vault.Open("archive:"+Hash(conv), payload)
+		if err != nil {
+			return a, err
+		}
+		if err = json.Unmarshal(b, &a); err != nil {
+			return a, err
+		}
+	}
+	if err = fn(&a, exists); err != nil {
+		return a, err
+	}
+	if a.Conversation.ID != conv {
+		return a, errors.New("archive_identity_mismatch")
+	}
+	if err = s.saveArchive(tx, a, retention); err != nil {
+		return a, err
+	}
+	return a, tx.Commit()
 }
 
 func (s *Store) Archive(conv string) (Archive, error) {
@@ -69,6 +143,17 @@ func (s *Store) Archive(conv string) (Archive, error) {
 	return a, err
 }
 func (s *Store) SaveArchive(a Archive, retention int) error {
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err = s.saveArchive(tx, a, retention); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+func (s *Store) saveArchive(tx *sql.Tx, a Archive, retention int) error {
 	b, err := json.Marshal(a)
 	if err != nil {
 		return err
@@ -77,18 +162,11 @@ func (s *Store) SaveArchive(a Archive, retention int) error {
 	if err != nil {
 		return err
 	}
-	tx, err := s.DB.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
 	if _, err = tx.Exec("INSERT INTO archive_conversations VALUES(?,?,?) ON CONFLICT(conversation) DO UPDATE SET payload=excluded.payload,retention_days=excluded.retention_days", a.Conversation.ID, enc, retention); err != nil {
 		return err
 	}
-	if _, err = tx.Exec("DELETE FROM archive_pending WHERE conversation=?", a.Conversation.ID); err != nil {
-		return err
-	}
-	return tx.Commit()
+	_, err = tx.Exec("DELETE FROM archive_pending WHERE conversation=?", a.Conversation.ID)
+	return err
 }
 func (s *Store) Archives() ([]Archive, error) { return s.ArchivesContext(context.Background()) }
 func (s *Store) ArchivesContext(ctx context.Context) ([]Archive, error) {

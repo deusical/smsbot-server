@@ -31,14 +31,15 @@ func (h *deadlineHost) Fetch(ctx context.Context, c transport.Conversation, curs
 	// have its own deadline rather than inheriting the exhausted read budget.
 	return transport.HistoryPage{Messages: []transport.HistoricalMessage{{ID: "msg", Direction: "incoming", Text: "Synthetic fetched text", At: time.Now()}}}, nil
 }
-func (h *deadlineHost) Commit(ctx context.Context, a store.Archive, p Policy, page transport.HistoryPage, stateOnly bool) error {
+func (h *deadlineHost) Commit(ctx context.Context, c Commit) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if !stateOnly {
+	if c.Page != nil {
 		h.committed = true
 	}
-	return h.s.SaveArchive(a, 0)
+	_, err := h.s.UpdateArchive(c.Conversation.ID, 0, c.ApplyTo)
+	return err
 }
 func TestFetchDeadlineDoesNotConsumePersistenceBudget(t *testing.T) {
 	v, _ := vault.New(make([]byte, 32))
@@ -97,8 +98,9 @@ func (h *retryHost) Fetch(_ context.Context, _ transport.Conversation, cursor st
 	}
 	return transport.HistoryPage{}, nil
 }
-func (h *retryHost) Commit(_ context.Context, a store.Archive, _ Policy, _ transport.HistoryPage, _ bool) error {
-	return h.s.SaveArchive(a, 0)
+func (h *retryHost) Commit(_ context.Context, c Commit) error {
+	_, err := h.s.UpdateArchive(c.Conversation.ID, 0, c.ApplyTo)
+	return err
 }
 func TestIndependentRecentAndBackfillRetries(t *testing.T) {
 	v, _ := vault.New(make([]byte, 32))

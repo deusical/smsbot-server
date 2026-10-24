@@ -44,9 +44,14 @@ func TestViewedRefreshRepairsGapsAndEditsWithoutReplacingDeepImport(t *testing.T
 	if err != nil || queued.Cursor != a.Cursor || queued.Since != a.Since || queued.State != a.State {
 		t.Fatal("view replaced deep import", err)
 	}
-	// A phone page started before the new range request cannot overwrite its state.
-	if err := (archiveHost{e}).Commit(context.Background(), a, history.Policy{Revision: settings.Revision}, transport.HistoryPage{}, true); err == nil {
-		t.Fatal("superseded generation committed")
+	// A view page started before the new range request cannot overwrite its state.
+	if err := commitStep(e, history.ViewWork, a, history.Policy{Revision: settings.Revision}, nil); err == nil {
+		t.Fatal("superseded view committed")
+	}
+	// The range request does not supersede an import page already in flight.
+	live, _ := e.InboxSettings()
+	if err := commitStep(e, history.ImportWork, a, history.Policy{Revision: live.Revision}, nil); err != nil {
+		t.Fatal("view request discarded in-flight import progress", err)
 	}
 	e.History.Tick(context.Background())
 	e.History.Tick(context.Background())

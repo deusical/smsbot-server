@@ -71,7 +71,10 @@ func TestCompletedImportResolvesOnlyCoveredEarlierCaptureFailures(t *testing.T) 
 			if tc.cutoff {
 				a.Since = start.Add(-time.Hour).UTC().Format(time.RFC3339Nano)
 			}
-			if err := (archiveHost{e}).Commit(context.Background(), a, history.Policy{Revision: cfg.Revision, Deep: true, Retention: tc.retention}, transport.HistoryPage{}, false); err != nil {
+			if err := e.Store.SaveArchive(store.Archive{Conversation: a.Conversation, Generation: a.Generation}, 0); err != nil {
+				t.Fatal(err)
+			}
+			if err := commitStep(e, history.ImportWork, a, history.Policy{Revision: cfg.Revision, Retention: tc.retention}, &transport.HistoryPage{}); err != nil {
 				t.Fatal(err)
 			}
 			gaps, err := e.Store.CaptureGaps()
@@ -259,15 +262,18 @@ func TestDeepProgressCountsCheckedNewAndUpdatedSeparately(t *testing.T) {
 		}
 	}
 	a := store.Archive{Conversation: transport.Conversation{ID: "demo-chat", ParticipantID: "demo-peer", Writable: true}, Generation: 1, State: "running"}
+	if err := e.Store.SaveArchive(a, 0); err != nil {
+		t.Fatal(err)
+	}
 	page := transport.HistoryPage{Messages: []transport.HistoricalMessage{{ID: "edited", Direction: "incoming", Text: "synthetic new", At: at}, {ID: "same", Direction: "incoming", Text: "synthetic old", At: at}, {ID: "new", Direction: "incoming", Text: "synthetic added", At: at}}}
-	if err := (archiveHost{e}).Commit(context.Background(), a, history.Policy{Revision: cfg.Revision, Deep: true}, page, false); err != nil {
+	if err := commitStep(e, history.ImportWork, a, history.Policy{Revision: cfg.Revision}, &page); err != nil {
 		t.Fatal(err)
 	}
 	saved, _ := e.Store.Archive("demo-chat")
 	if saved.Checked != 3 || saved.Imported != 1 || saved.Updated != 1 || saved.Duplicates != 1 {
 		t.Fatalf("incorrect progress: checked=%d new=%d updated=%d unchanged=%d", saved.Checked, saved.Imported, saved.Updated, saved.Duplicates)
 	}
-	if err := (archiveHost{e}).Commit(context.Background(), saved, history.Policy{Revision: cfg.Revision}, page, false); err != nil {
+	if err := commitStep(e, history.RecentWork, saved, history.Policy{Revision: cfg.Revision}, &page); err != nil {
 		t.Fatal(err)
 	}
 	again, _ := e.Store.Archive("demo-chat")
@@ -293,9 +299,12 @@ func TestImportedSendAliasDoesNotCountAsNewSavedMessage(t *testing.T) {
 	a, err := e.Store.Archive("demo-chat")
 	if err != nil {
 		a = store.Archive{Conversation: transport.Conversation{ID: "demo-chat", ParticipantID: "demo-peer", Writable: true}, State: "running", Generation: 1}
+		if err := e.Store.SaveArchive(a, 0); err != nil {
+			t.Fatal(err)
+		}
 	}
 	page := transport.HistoryPage{Messages: []transport.HistoricalMessage{{ID: "new-upstream-alias", TransactionID: txn, Direction: "outgoing", Text: "pong", At: time.Now(), Status: "submitted"}}}
-	if err := (archiveHost{e}).Commit(context.Background(), a, history.Policy{Revision: cfg.Revision, Deep: true}, page, false); err != nil {
+	if err := commitStep(e, history.ImportWork, a, history.Policy{Revision: cfg.Revision}, &page); err != nil {
 		t.Fatal(err)
 	}
 	saved, _ := e.Store.Archive("demo-chat")

@@ -14,19 +14,88 @@ import (
 )
 
 type Policy struct {
-	Deep bool
-
 	Since     *time.Time
 	Snapshot  *int64
 	Revision  int64
 	Retention int
 }
+
+// Work names the workflow a history step belongs to. Each workflow owns one
+// archive checkpoint and publishes only that checkpoint when it commits.
+type Work int
+
+const (
+	// SeedWork records a newly discovered conversation; it never overwrites one.
+	SeedWork Work = iota
+	// ImportWork pages toward older history (ImportCheckpoint, versioned by Generation).
+	ImportWork
+	// RecentWork reconciles the newest messages (RecentCheckpoint).
+	RecentWork
+	// ViewWork rechecks the span the owner is viewing (ViewCheckpoint, versioned by ViewGeneration).
+	ViewWork
+	// GapWork repairs a capture gap; its progress lives in the gap, not the archive.
+	GapWork
+)
+
+// ErrJobChanged rejects a step whose checkpoint was restarted, cancelled or
+// re-targeted after its fetch began.
+var ErrJobChanged = errors.New("archive_job_changed")
+
+// Commit is one bounded step's result. Page is nil for a state-only update.
+// Apply changes only the checkpoint owned by Work.
+type Commit struct {
+	Work         Work
+	Conversation transport.Conversation
+	Token        int64 // checkpoint version read before the step started
+	Policy       Policy
+	Page         *transport.HistoryPage
+	Apply        func(*store.Archive)
+}
+
+// Check reports whether the step still applies to the current record.
+func (c Commit) Check(a store.Archive, exists bool) error {
+	if !exists {
+		if c.Work == SeedWork || c.Work == GapWork {
+			return nil
+		}
+		return ErrJobChanged
+	}
+	if a.Conversation.ParticipantID != c.Conversation.ParticipantID {
+		return ErrJobChanged
+	}
+	switch c.Work {
+	case ImportWork:
+		if a.Generation != c.Token {
+			return ErrJobChanged
+		}
+	case ViewWork:
+		if a.ViewGeneration != c.Token {
+			return ErrJobChanged
+		}
+	}
+	return nil
+}
+
+// ApplyTo publishes the step onto the current record; see Store.UpdateArchive.
+func (c Commit) ApplyTo(a *store.Archive, exists bool) error {
+	if err := c.Check(*a, exists); err != nil {
+		return err
+	}
+	if !exists {
+		*a = store.NewArchive(c.Conversation)
+	}
+	if c.Apply != nil {
+		c.Apply(a)
+	}
+	return nil
+}
+
 type Host interface {
 	Prune(context.Context) error
 	Discover(context.Context) ([]transport.Conversation, error)
 	Policy(transport.Conversation) (Policy, error)
 	Fetch(context.Context, transport.Conversation, string) (transport.HistoryPage, error)
-	Commit(context.Context, store.Archive, Policy, transport.HistoryPage, bool) error
+	Commit(context.Context, Commit) error
 }
 type Service struct {
 	backgroundAfter string
@@ -156,6 +225,10 @@ func (s *Service) Run(ctx context.Context) {
 		}
 	}
 }
+
+// Tick runs at most one step per workflow. Steps publish only their own
+// checkpoint, so one snapshot serves every lane; it is reloaded only after
+// discovery, which may seed new records.
 func (s *Service) Tick(ctx context.Context) {
 	s.tickMu.Lock()
 	defer s.tickMu.Unlock()
@@ -199,16 +272,12 @@ func (s *Service) Tick(ctx context.Context) {
 	}
 	if focus != nil {
 		if p, err := s.Host.Policy(focus.Conversation); err == nil {
-			_ = s.refreshStep(ctx, *focus, p)
+			_ = s.viewStep(ctx, *focus, p)
 		}
 	}
 	if manual != nil {
-		// Reload: a view may have advanced this archive's independent checkpoint.
-		if a, err := s.Store.Archive(manual.Conversation.ID); err == nil {
-			if p, err := s.Host.Policy(a.Conversation); err == nil {
-				a.RequestSource = "owner"
-				_ = s.step(ctx, a, p, a.Cursor, false)
-			}
+		if p, err := s.Host.Policy(manual.Conversation); err == nil {
+			_ = s.importStep(ctx, *manual, p, true)
 		}
 	}
 	if repair, ok := s.Host.(interface{ RepairCaptureGap(context.Context) error }); ok {
@@ -228,8 +297,7 @@ func (s *Service) Tick(ctx context.Context) {
 				s.nextDiscovery = s.now().Add(activeInterval)
 			}
 			for _, c := range list {
-				a := store.Archive{Conversation: c, State: "queued", Generation: 1}
-				if !eligibleArchive(a) {
+				if !eligibleArchive(store.NewArchive(c)) {
 					continue
 				}
 				p, err := s.Host.Policy(c)
@@ -237,7 +305,7 @@ func (s *Service) Tick(ctx context.Context) {
 					continue
 				}
 				if _, err := s.Store.Archive(c.ID); errors.Is(err, sql.ErrNoRows) {
-					_ = s.Host.Commit(ctx, a, p, transport.HistoryPage{}, true)
+					_ = s.Host.Commit(ctx, Commit{Work: SeedWork, Conversation: c, Policy: p})
 				}
 			}
 		}
@@ -270,7 +338,7 @@ func (s *Service) Tick(ctx context.Context) {
 		if fallback {
 			s.nextFallback = s.now().Add(idleInterval)
 		}
-		if err := s.step(ctx, a, p, a.RecentCursor, true); err != nil {
+		if err := s.recentStep(ctx, a, p); err != nil {
 			return
 		}
 		break
@@ -278,12 +346,6 @@ func (s *Service) Tick(ctx context.Context) {
 	if fallback {
 		s.nextFallback = s.now().Add(idleInterval)
 	}
-	// Reload after a recent scan so publishing a deep page cannot erase its state.
-	archives, err = s.Store.Archives()
-	if err != nil {
-		return
-	}
-	sort.Slice(archives, func(i, j int) bool { return archives[i].Conversation.ID < archives[j].Conversation.ID })
 	start = sort.Search(len(archives), func(i int) bool { return archives[i].Conversation.ID > s.backgroundAfter })
 	for n := 0; n < len(archives); n++ {
 		a := archives[(start+n)%len(archives)]
@@ -296,10 +358,9 @@ func (s *Service) Tick(ctx context.Context) {
 			continue
 		}
 		s.backgroundAfter = a.Conversation.ID
-		_ = s.step(ctx, a, p, a.Cursor, false)
+		_ = s.importStep(ctx, a, p, false)
 		break
 	}
-
 }
 func isExplicitArchive(a store.Archive) bool {
 	return a.RequestedAt != "" || a.RequestSource == "owner" || (a.RequestSource == "" && a.Since != "")
@@ -309,104 +370,128 @@ func eligibleArchive(a store.Archive) bool {
 	return !a.Conversation.Group && a.Conversation.Writable && a.Conversation.ParticipantID != ""
 }
 
-func (s *Service) step(ctx context.Context, a store.Archive, p Policy, cursor string, recent bool) error {
-	call, cancel := context.WithTimeout(ctx, s.fetchTimeout)
-	defer cancel()
+// fetch reads one page with a bounded deadline, after recording the change
+// watermark that protects newer live observations from this snapshot.
+func (s *Service) fetch(ctx context.Context, w Work, a store.Archive, p *Policy, cursor string) (transport.HistoryPage, error) {
 	snapshot, err := s.Store.ChangeWatermark(a.Conversation.ID)
 	if err != nil {
-		return err
+		return transport.HistoryPage{}, err
 	}
 	p.Snapshot = &snapshot
-	if !recent {
-		if cursor == "" && a.Pages == 0 {
-			a.ScanRevision = p.Revision
-		}
-		p.Deep = true
-		a.State = "running"
-		a.LastAttemptAt = s.now().UTC().Format(time.RFC3339Nano)
-		if err := s.Host.Commit(ctx, a, p, transport.HistoryPage{}, true); err != nil {
-			return err
-		}
-	}
-	purpose := "backfill"
-	if recent {
-		purpose = "recent"
-	}
-	page, err := s.Host.Fetch(transport.WithPhonePurpose(call, purpose), a.Conversation, cursor)
-	if err != nil {
-		if recent {
-			a.RecentError = "history_fetch_failed"
-			a.RecentFailures++
-			a.RecentRetryAt = s.retryAfter(a.RecentFailures)
-		} else {
-			a.Error = "history_fetch_failed"
-			a.Failures++
-			a.RetryAt = s.retryAfter(a.Failures)
-			a.State = "retrying"
-		}
-		_ = s.Host.Commit(ctx, a, p, transport.HistoryPage{}, true)
-		return errors.New("history_fetch_failed")
-	}
-	if recent {
-		if a.RecentStarted == "" {
-			a.RecentStarted = s.now().UTC().Format(time.RFC3339Nano)
-			since, err := time.Parse(time.RFC3339Nano, a.LastSync)
-			if err != nil {
-				since = s.now()
-			}
-			a.RecentSince = since.Add(-30 * time.Minute).UTC().Format(time.RFC3339Nano)
-		}
-		a.RecentCursor = page.NextCursor
-		since, _ := time.Parse(time.RFC3339Nano, a.RecentSince)
-		done := page.NextCursor == "" || page.NextCursor == cursor
-		for _, m := range page.Messages {
-			if m.At.Before(since) {
-				done = true
-			}
-		}
-		if done {
-			a.LastSync = a.RecentStarted
-			a.RecentStarted = ""
-			a.RecentCursor = ""
-		}
-	}
-	if !recent {
-		a.Pages++
-		a.LastProgressAt = s.now().UTC().Format(time.RFC3339Nano)
-		for _, m := range page.Messages {
-			if m.At.IsZero() {
-				continue
-			}
-			previous, _ := time.Parse(time.RFC3339Nano, a.ScannedThrough)
-			if previous.IsZero() || m.At.Before(previous) {
-				a.ScannedThrough = m.At.UTC().Format(time.RFC3339Nano)
-			}
-		}
-		a.State = "running"
-		a.Cursor = page.NextCursor
-		if a.Cursor == "" || a.Cursor == cursor {
-			a.State = "available_pages_exhausted"
-			a.Cursor = ""
-		}
-		since, _ := store.ParseArchiveSince(a.Since)
-		for _, m := range page.Messages {
-			if !since.IsZero() && m.At.Before(since) {
-				a.State = "cutoff_reached"
-				a.Cursor = ""
-			}
-		}
-	}
-	if !recent && (a.State == "available_pages_exhausted" || a.State == "cutoff_reached") {
-		a.DeepCheckedAt = s.now().UTC().Format(time.RFC3339Nano)
-	}
-	if recent {
-		a.RecentError, a.RecentRetryAt, a.RecentFailures = "", "", 0
-	} else {
-		a.Error, a.RetryAt, a.Failures = "", "", 0
-	}
+	call, cancel := context.WithTimeout(ctx, s.fetchTimeout)
+	defer cancel()
+	purpose := map[Work]string{ImportWork: "backfill", RecentWork: "recent", ViewWork: "view"}[w]
+	return s.Host.Fetch(transport.WithPhonePurpose(call, purpose), a.Conversation, cursor)
+}
+
+// publish commits a fetched page with its own persistence deadline: a page
+// that arrived at the fetch deadline must not inherit an exhausted budget.
+func (s *Service) publish(ctx context.Context, c Commit) error {
 	persist, stop := context.WithTimeout(ctx, 5*time.Second)
 	defer stop()
-	return s.Host.Commit(persist, a, p, page, false)
+	return s.Host.Commit(persist, c)
+}
+
+// importStep fetches one deep import page. owner marks an explicit request.
+func (s *Service) importStep(ctx context.Context, a store.Archive, p Policy, owner bool) error {
+	cp := a.ImportCheckpoint
+	commit := func(page *transport.HistoryPage) Commit {
+		checkpoint := cp
+		return Commit{Work: ImportWork, Conversation: a.Conversation, Token: a.Generation, Policy: p, Page: page,
+			Apply: func(r *store.Archive) { r.ImportCheckpoint = checkpoint }}
+	}
+	if owner {
+		cp.RequestSource = "owner"
+	}
+	cursor := cp.Cursor
+	if cursor == "" && cp.Pages == 0 {
+		cp.ScanRevision = p.Revision
+	}
+	cp.State = "running"
+	cp.LastAttemptAt = s.now().UTC().Format(time.RFC3339Nano)
+	if err := s.Host.Commit(ctx, commit(nil)); err != nil {
+		return err
+	}
+	page, err := s.fetch(ctx, ImportWork, a, &p, cursor)
+	if err != nil {
+		cp.Error = "history_fetch_failed"
+		cp.Failures++
+		cp.RetryAt = s.retryAfter(cp.Failures)
+		cp.State = "retrying"
+		_ = s.Host.Commit(ctx, commit(nil))
+		return errors.New("history_fetch_failed")
+	}
+	cp.Pages++
+	cp.LastProgressAt = s.now().UTC().Format(time.RFC3339Nano)
+	for _, m := range page.Messages {
+		if m.At.IsZero() {
+			continue
+		}
+		previous, _ := time.Parse(time.RFC3339Nano, cp.ScannedThrough)
+		if previous.IsZero() || m.At.Before(previous) {
+			cp.ScannedThrough = m.At.UTC().Format(time.RFC3339Nano)
+		}
+	}
+	cp.State = "running"
+	cp.Cursor = page.NextCursor
+	if cp.Cursor == "" || cp.Cursor == cursor {
+		cp.State = "available_pages_exhausted"
+		cp.Cursor = ""
+	}
+	since, _ := store.ParseArchiveSince(cp.Since)
+	for _, m := range page.Messages {
+		if !since.IsZero() && m.At.Before(since) {
+			cp.State = "cutoff_reached"
+			cp.Cursor = ""
+		}
+	}
+	if cp.State == "available_pages_exhausted" || cp.State == "cutoff_reached" {
+		cp.DeepCheckedAt = s.now().UTC().Format(time.RFC3339Nano)
+	}
+	cp.Error, cp.RetryAt, cp.Failures = "", "", 0
+	return s.publish(ctx, commit(&page))
+}
+
+// recentStep fetches one page of routine reconciliation.
+func (s *Service) recentStep(ctx context.Context, a store.Archive, p Policy) error {
+	cp := a.RecentCheckpoint
+	commit := func(page *transport.HistoryPage) Commit {
+		checkpoint := cp
+		return Commit{Work: RecentWork, Conversation: a.Conversation, Policy: p, Page: page,
+			Apply: func(r *store.Archive) { r.RecentCheckpoint = checkpoint }}
+	}
+	cursor := cp.RecentCursor
+	page, err := s.fetch(ctx, RecentWork, a, &p, cursor)
+	if err != nil {
+		cp.RecentError = "history_fetch_failed"
+		cp.RecentFailures++
+		cp.RecentRetryAt = s.retryAfter(cp.RecentFailures)
+		_ = s.Host.Commit(ctx, commit(nil))
+		return errors.New("history_fetch_failed")
+	}
+	if cp.RecentStarted == "" {
+		cp.RecentStarted = s.now().UTC().Format(time.RFC3339Nano)
+		since, err := time.Parse(time.RFC3339Nano, cp.LastSync)
+		if err != nil {
+			since = s.now()
+		}
+		cp.RecentSince = since.Add(-30 * time.Minute).UTC().Format(time.RFC3339Nano)
+	}
+	cp.RecentCursor = page.NextCursor
+	since, _ := time.Parse(time.RFC3339Nano, cp.RecentSince)
+	done := page.NextCursor == "" || page.NextCursor == cursor
+	for _, m := range page.Messages {
+		if m.At.Before(since) {
+			done = true
+		}
+	}
+	if done {
+		cp.LastSync = cp.RecentStarted
+		cp.RecentStarted = ""
+		cp.RecentCursor = ""
+	}
+	cp.RecentError, cp.RecentRetryAt, cp.RecentFailures = "", "", 0
+	return s.publish(ctx, commit(&page))
 }
 
 func (s *Service) retryAfter(failures int) string {
@@ -414,45 +499,43 @@ func (s *Service) retryAfter(failures int) string {
 	return s.now().Add(delay).UTC().Format(time.RFC3339Nano)
 }
 
-func (s *Service) refreshStep(ctx context.Context, a store.Archive, p Policy) error {
-	call, cancel := context.WithTimeout(ctx, s.fetchTimeout)
-	defer cancel()
-	snapshot, err := s.Store.ChangeWatermark(a.Conversation.ID)
-	if err != nil {
-		return err
+// viewStep fetches one page of the owner's viewed span.
+func (s *Service) viewStep(ctx context.Context, a store.Archive, p Policy) error {
+	cp := a.ViewCheckpoint
+	commit := func(page *transport.HistoryPage) Commit {
+		checkpoint := cp
+		return Commit{Work: ViewWork, Conversation: a.Conversation, Token: cp.ViewGeneration, Policy: p, Page: page,
+			Apply: func(r *store.Archive) { r.ViewCheckpoint = checkpoint }}
 	}
-	p.Snapshot = &snapshot
-	page, err := s.Host.Fetch(transport.WithPhonePurpose(call, "view"), a.Conversation, a.RefreshCursor)
+	page, err := s.fetch(ctx, ViewWork, a, &p, cp.RefreshCursor)
 	if err != nil {
-		a.RefreshState = "retrying"
-		a.RefreshError = "history_fetch_failed"
-		a.RefreshFailures++
-		a.RefreshRetryAt = s.retryAfter(a.RefreshFailures)
-		_ = s.Host.Commit(ctx, a, p, transport.HistoryPage{}, true)
+		cp.RefreshState = "retrying"
+		cp.RefreshError = "history_fetch_failed"
+		cp.RefreshFailures++
+		cp.RefreshRetryAt = s.retryAfter(cp.RefreshFailures)
+		_ = s.Host.Commit(ctx, commit(nil))
 		return errors.New("history_fetch_failed")
 	}
-	since, err := store.ParseArchiveSince(a.RefreshSince)
+	since, err := store.ParseArchiveSince(cp.RefreshSince)
 	if err != nil {
 		return err
 	}
 	p.Since = &since
-	done := page.NextCursor == "" || page.NextCursor == a.RefreshCursor
+	done := page.NextCursor == "" || page.NextCursor == cp.RefreshCursor
 	for _, m := range page.Messages {
 		if m.At.Before(since) {
 			done = true
 		}
 	}
-	a.RefreshCursor = page.NextCursor
-	a.RefreshState = "running"
-	a.RefreshError = ""
-	a.RefreshFailures = 0
-	a.RefreshRetryAt = ""
+	cp.RefreshCursor = page.NextCursor
+	cp.RefreshState = "running"
+	cp.RefreshError = ""
+	cp.RefreshFailures = 0
+	cp.RefreshRetryAt = ""
 	if done {
-		a.RefreshState = "checked_available"
-		a.RefreshCursor = ""
-		a.RefreshCheckedAt = s.now().UTC().Format(time.RFC3339Nano)
+		cp.RefreshState = "checked_available"
+		cp.RefreshCursor = ""
+		cp.RefreshCheckedAt = s.now().UTC().Format(time.RFC3339Nano)
 	}
-	persist, stop := context.WithTimeout(ctx, 5*time.Second)
-	defer stop()
-	return s.Host.Commit(persist, a, p, page, false)
+	return s.publish(ctx, commit(&page))
 }

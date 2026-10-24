@@ -119,9 +119,12 @@ func TestArchiveOldestTimestampAndHeadlessRetention(t *testing.T) {
 	cfg := enableInbox(t, e)
 	c := transport.Conversation{ID: "demo-chat", ParticipantID: "demo-peer", Writable: true}
 	a := store.Archive{Conversation: c, Generation: 1, State: "cancelled"}
+	if err := e.Store.SaveArchive(a, 0); err != nil {
+		t.Fatal(err)
+	}
 	base := time.Now().AddDate(0, 0, -10).Truncate(time.Second)
 	page := transport.HistoryPage{Messages: []transport.HistoricalMessage{{ID: "second", Direction: "incoming", Text: "Synthetic second", At: base}, {ID: "subsecond", Direction: "incoming", Text: "Synthetic fraction", At: base.Add(500 * time.Millisecond)}}}
-	if err := (archiveHost{e}).Commit(context.Background(), a, history.Policy{Revision: cfg.Revision}, page, false); err != nil {
+	if err := commitStep(e, history.RecentWork, a, history.Policy{Revision: cfg.Revision}, &page); err != nil {
 		t.Fatal(err)
 	}
 	a, _ = e.Store.Archive(c.ID)
@@ -198,6 +201,11 @@ func TestArchiveCancelAndRevokeDuringFetch(t *testing.T) {
 			if err := e.SetInboxSettings(context.Background(), cfg); err != nil {
 				t.Fatal(err)
 			}
+			// Hold an owner-requested import page; routine recent checks wait.
+			later := time.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano)
+			if err := e.Store.SaveArchive(store.Archive{Conversation: transport.Conversation{ID: "demo-chat", ParticipantID: "demo-peer", Writable: true}, Generation: 1, State: "queued", RequestSource: "owner", RequestedAt: time.Now().UTC().Format(time.RFC3339Nano), RecentRetryAt: later}, 0); err != nil {
+				t.Fatal(err)
+			}
 			held := &heldArchiveTransport{Fixture: f, started: make(chan struct{}, 1), release: make(chan struct{})}
 			e.Transport = held
 			done := make(chan struct{})
@@ -260,7 +268,7 @@ func TestArchiveSyncRunsPausedAndNeverRoutesHistory(t *testing.T) {
 	old := a
 	old.Generation = cancelled.Generation - 1
 	settings, _ := e.InboxSettings()
-	if err = (archiveHost{e}).Commit(context.Background(), old, history.Policy{Revision: settings.Revision}, transport.HistoryPage{}, true); err == nil {
+	if err = commitStep(e, history.ImportWork, old, history.Policy{Revision: settings.Revision}, nil); err == nil {
 		t.Fatal("cancelled fetch committed")
 	}
 }

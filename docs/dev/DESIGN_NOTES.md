@@ -171,7 +171,8 @@ page never deletes local history or proves that Google history is complete.
 
 Refresh cursor/state/backoff and focus timestamps are encrypted in the existing
 archive record, independently of deep-import progress. Superseding a range bumps
-the generation so old reads cannot publish. Consent revisions, exact participant
+the view's own generation (`refresh_generation`) so old view reads cannot publish;
+it does not disturb an import page already in flight. Consent revisions, exact participant
 checks, group exclusion and per-message change watermarks still guard commits.
 An active section gets the first history turn, followed by one round-robin
 background conversation. Recent reconciliation continues; completed old-history
@@ -199,8 +200,16 @@ Connection interruption cancels queued, generating and approval work without cha
 Explicit older-history requests carry an encrypted requested time and advance one
 bounded page before routine discovery on each worker turn. Multiple explicit jobs
 rotate by last attempt. Visible-section reads keep their own checkpoint; ordinary
-recent and deep background reconciliation still get a turn. Cancellation and
-changed requests invalidate in-flight work through the existing generation check.
+recent and deep background reconciliation still get a turn.
+
+The archive record holds one checkpoint per workflow: import (versioned by
+`generation`), recent reconciliation, and viewed section (versioned by
+`refresh_generation`), plus shared identity, focus and page totals. The stored and
+API JSON stays flat. Each step reads the record before its fetch and commits through
+one transactional update that changes only its own checkpoint, after consent,
+participant and version checks; so steps never erase one another's progress.
+Cancelling or restarting an import rejects that import's in-flight page; routine
+recent reconciliation and gap repair continue while collection remains enabled.
 Existing date-limited pending requests receive the same priority on upgrade. Imports of newly discovered conversations are identified as automatic rather than a new owner request.
 
 Older-history progress records pages and messages checked, newly saved messages,

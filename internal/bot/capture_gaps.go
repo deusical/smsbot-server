@@ -251,7 +251,7 @@ func (h archiveHost) RepairCaptureGap(ctx context.Context) error {
 		existing, lookupErr := e.Store.Archive(c.ID)
 		a = existing
 		if errors.Is(lookupErr, sql.ErrNoRows) {
-			a = store.Archive{Conversation: c, Generation: 1, State: "queued"}
+			a = store.NewArchive(c)
 		}
 		e.mu.Unlock()
 		if lookupErr == nil && existing.Conversation.ParticipantID != c.ParticipantID {
@@ -334,8 +334,8 @@ func (h archiveHost) RepairCaptureGap(ctx context.Context) error {
 	}
 	persist, stop := context.WithTimeout(ctx, 5*time.Second)
 	defer stop()
-	// Commit performs consent, revision, participant and generation checks again.
-	if err = h.Commit(persist, a, policy, page, false); err != nil {
+	// Commit performs consent, revision and participant checks again.
+	if err = h.Commit(persist, history.Commit{Work: history.GapWork, Conversation: c, Policy: policy, Page: &page}); err != nil {
 		return e.finishGapAttempt(*selected, err)
 	}
 	g.Pages++
