@@ -23,46 +23,46 @@ import (
 
 // Google is opt-in and never instantiated by fixture mode.
 type Google struct {
-	recovery            recoveryControl
-	recoveryWake        chan struct{}
-	recoveryProbe       func(context.Context) error // offline fault injection; nil in production
-	fullMedia           fullMediaRequests
-	client              *libgm.Client
-	vault               *vault.Vault
-	path                string
-	ready               atomic.Bool
-	mu                  sync.Mutex
-	listMu              sync.Mutex
-	listed              time.Time
-	list                []Conversation
-	settings            *gmproto.Settings
-	conversations       map[string]*gmproto.Conversation
-	conversationFetched map[string]time.Time
-	updates             chan any
-	queueMu             sync.Mutex
-	overflow            atomic.Bool
-	healthFailure       atomic.Bool
-	overflowWake        chan struct{}
-	started             time.Time
-	saveMu              sync.Mutex
-	Diagnostic          func(AuthDiagnostic)
-	discovery           conversationPageCache
-	phoneRequests       phoneRequests
-	phonePurposes       phoneRequests
-	relayMetrics        relayMetrics
-	activity            activityState
-	identityEpoch       atomic.Uint64
+	recovery      recoveryControl
+	recoveryWake  chan struct{}
+	recoveryProbe func(context.Context) error // offline fault injection; nil in production
+	fullMedia     fullMediaRequests
+	client        *libgm.Client
+	vault         *vault.Vault
+	path          string
+	ready         atomic.Bool
+	mu            sync.Mutex
+	listMu        sync.Mutex
+	listed        time.Time
+	list          []Conversation
+	settings      *gmproto.Settings
+	conversations map[string]*gmproto.Conversation
+	// Display/discovery hints have no TTL and never authorize phone operations.
+	discoveryDetails map[string]*gmproto.Conversation
+	updates          chan any
+	queueMu          sync.Mutex
+	overflow         atomic.Bool
+	healthFailure    atomic.Bool
+	overflowWake     chan struct{}
+	started          time.Time
+	saveMu           sync.Mutex
+	Diagnostic       func(AuthDiagnostic)
+	discovery        conversationPageCache
+	phoneRequests    phoneRequests
+	phonePurposes    phoneRequests
+	relayMetrics     relayMetrics
+	activity         activityState
+	identityEpoch    atomic.Uint64
 }
 
 func NewGoogle(v *vault.Vault, path string) *Google {
 	return &Google{
-		recoveryWake:        make(chan struct{}, 1),
-		vault:               v,
-		path:                path,
-		updates:             make(chan any, 256),
-		overflowWake:        make(chan struct{}, 1),
-		conversations:       map[string]*gmproto.Conversation{},
-		conversationFetched: map[string]time.Time{},
+		recoveryWake:  make(chan struct{}, 1),
+		vault:         v,
+		path:          path,
+		updates:       make(chan any, 256),
+		overflowWake:  make(chan struct{}, 1),
+		conversations: map[string]*gmproto.Conversation{},
 	}
 }
 func (g *Google) attach(auth *libgm.AuthData) {
@@ -312,28 +312,6 @@ func eligible(c *gmproto.Conversation) bool {
 	return c != nil && !c.GetIsGroupChat() && !c.GetReadOnly() && peer(c) != "" && c.GetDefaultOutgoingID() != ""
 }
 
-const conversationDetailTTL = 10 * time.Minute
-
-func (g *Google) cachedDetail(id string) *gmproto.Conversation {
-	if id == "" {
-		return nil
-	}
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	if g.conversations == nil || g.conversationFetched == nil {
-		return nil
-	}
-	c, ok := g.conversations[id]
-	if !ok || c == nil || c.GetConversationID() != id {
-		return nil
-	}
-	fetched, ok := g.conversationFetched[id]
-	if !ok || time.Since(fetched) > conversationDetailTTL {
-		return nil
-	}
-	return c
-}
-
 func (g *Google) cacheDetail(c *gmproto.Conversation) {
 	if c == nil || c.GetConversationID() == "" {
 		return
@@ -343,15 +321,32 @@ func (g *Google) cacheDetail(c *gmproto.Conversation) {
 	if g.conversations == nil {
 		g.conversations = map[string]*gmproto.Conversation{}
 	}
-	if g.conversationFetched == nil {
-		g.conversationFetched = map[string]time.Time{}
-	}
 	g.conversations[c.GetConversationID()] = c
-	g.conversationFetched[c.GetConversationID()] = time.Now()
+	g.cacheDiscoveryDetailLocked(c)
+}
+
+func (g *Google) cacheDiscoveryDetailLocked(c *gmproto.Conversation) {
+	if g.discoveryDetails == nil {
+		g.discoveryDetails = map[string]*gmproto.Conversation{}
+	}
+	g.discoveryDetails[c.GetConversationID()] = c
+}
+
+func (g *Google) discoveryDetail(id string) *gmproto.Conversation {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	c := g.discoveryDetails[id]
+	if id == "" || c.GetConversationID() != id {
+		return nil
+	}
+	return c
 }
 
 func (g *Google) DiscoveryLookup(ctx context.Context, id string) (Conversation, error) {
-	if c := g.cachedDetail(id); c != nil {
+	if err := ctx.Err(); err != nil {
+		return Conversation{}, err
+	}
+	if c := g.discoveryDetail(id); c != nil {
 		label := c.GetName()
 		if label == "" {
 			if c.GetIsGroupChat() {
@@ -423,9 +418,9 @@ func (g *Google) Conversations(ctx context.Context) ([]Conversation, error) {
 		ids[i] = summary.GetConversationID()
 	}
 	var fetchedMu sync.Mutex
-	newFetched := make(map[string]time.Time)
+	newFetched := make(map[string]bool)
 	fetchDetail := func(ctx context.Context, id string) (*gmproto.Conversation, error) {
-		if cached := g.cachedDetail(id); cached != nil {
+		if cached := g.discoveryDetail(id); cached != nil {
 			return cached, nil
 		}
 		g.countPhone(ctx, phoneLookup)
@@ -433,9 +428,8 @@ func (g *Google) Conversations(ctx context.Context) ([]Conversation, error) {
 		if err != nil {
 			return nil, err
 		}
-		now := time.Now()
 		fetchedMu.Lock()
-		newFetched[id] = now
+		newFetched[id] = true
 		fetchedMu.Unlock()
 		return c, nil
 	}
@@ -472,14 +466,11 @@ func (g *Google) Conversations(ctx context.Context) ([]Conversation, error) {
 	if g.conversations == nil {
 		g.conversations = map[string]*gmproto.Conversation{}
 	}
-	if g.conversationFetched == nil {
-		g.conversationFetched = map[string]time.Time{}
-	}
 	for _, c := range details {
 		id := c.GetConversationID()
-		g.conversations[id] = c
-		if fetchedAt, ok := newFetched[id]; ok {
-			g.conversationFetched[id] = fetchedAt
+		if newFetched[id] {
+			g.conversations[id] = c
+			g.cacheDiscoveryDetailLocked(c)
 		}
 	}
 	g.mu.Unlock()

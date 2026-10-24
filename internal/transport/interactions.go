@@ -60,13 +60,10 @@ func (g *Google) rememberConversationEvent(c *gmproto.Conversation) bool {
 		if g.conversations == nil {
 			g.conversations = map[string]*gmproto.Conversation{}
 		}
-		if g.conversationFetched == nil {
-			g.conversationFetched = map[string]time.Time{}
-		}
 		g.conversations[c.GetConversationID()] = c
-		g.conversationFetched[c.GetConversationID()] = time.Now()
-	} else if changed && g.conversationFetched != nil {
-		delete(g.conversationFetched, c.GetConversationID())
+		g.cacheDiscoveryDetailLocked(c)
+	} else if changed {
+		delete(g.discoveryDetails, c.GetConversationID())
 	}
 	return changed
 }

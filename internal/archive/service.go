@@ -161,6 +161,8 @@ func (s *Service) Tick(ctx context.Context) {
 			}
 		}
 	}
+	var policyUsed int64
+	var usageRead bool
 	for _, record := range records {
 		if ctx.Err() != nil {
 			return
@@ -182,6 +184,20 @@ func (s *Service) Tick(ctx context.Context) {
 			if time.Now().Before(retry) {
 				continue
 			}
+			// Repair can authorize or refresh against the phone. A blocked
+			// source must pass local eligibility before any of that work.
+			if file.ArchiveState == "policy_limited" {
+				if !usageRead {
+					policyUsed, err = s.usage()
+					if err != nil {
+						return
+					}
+					usageRead = true
+				}
+				if !policyCanRetry(file.RetryPolicy, policy, policyUsed) {
+					continue
+				}
+			}
 			if repairer, ok := s.Host.(interface {
 				Repair(context.Context, transport.Conversation, string, media.File) (bool, error)
 			}); ok {
@@ -192,12 +208,6 @@ func (s *Service) Tick(ctx context.Context) {
 			}
 			if file.BlobID != "" || (file.ArchiveState == "unavailable" && file.RemoteID == "" && len(file.Data) == 0 && file.ActionID == "") {
 				continue
-			}
-			if file.ArchiveState == "policy_limited" {
-				used, err := s.usage()
-				if err != nil || file.RetryPolicy == policyToken(policy, used) {
-					continue
-				}
 			}
 			call, cancel := context.WithTimeout(ctx, 90*time.Second)
 			revision, err := s.Host.Authorize(call, a.Conversation)
@@ -308,6 +318,34 @@ func policyToken(p Policy, used int64) string {
 		used = 0
 	}
 	return fmt.Sprintf("%d:%d:%d", p.MaxFileMiB, p.QuotaMiB, used)
+}
+
+// Capacity includes the same reserved encryption overhead as ingest. Comparing
+// effective limits avoids probing again when usage grows, limits tighten, or a
+// policy change leaves the limiting condition unchanged. Tokens remain compatible
+// with previously persisted blocks, including unknown-size download attempts.
+func policyCapacity(p Policy, used int64) int64 {
+	limit := int64(math.MaxInt64)
+	if p.MaxFileMiB > 0 {
+		limit = p.MaxFileMiB << 20
+	}
+	if p.QuotaMiB > 0 {
+		limit = min(limit, max(int64(0), (p.QuotaMiB<<20)-used-1024))
+	}
+	return limit
+}
+
+func policyCanRetry(token string, p Policy, used int64) bool {
+	parts := strings.Split(token, ":")
+	if len(parts) != 3 {
+		return true // A legacy/unknown block gets one bounded attempt.
+	}
+	var previous Policy
+	var previousUsed int64
+	if _, err := fmt.Sscanf(token, "%d:%d:%d", &previous.MaxFileMiB, &previous.QuotaMiB, &previousUsed); err != nil || previous.Validate() != nil || previousUsed < 0 {
+		return true
+	}
+	return policyCapacity(p, used) > policyCapacity(previous, previousUsed)
 }
 func (s *Service) ingest(ctx context.Context, c transport.Conversation, revision int64, message string, file media.File, p Policy) {
 	updated := file

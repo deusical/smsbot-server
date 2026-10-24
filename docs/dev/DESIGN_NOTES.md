@@ -277,6 +277,26 @@ return-to-page checks and retries independently of archive UI mounting. Message
 pagination and attachment viewing remain in Conversations. Collection consent,
 participant checks, command freshness and Live/Pause semantics are unchanged.
 
+## Avoiding redundant phone reads
+
+Conversation discovery and list display reuse per-conversation detail hints across
+routine reconciliation sweeps. These hints have no time-based expiry: new IDs or
+missing hints require a lookup, ordinary conversation events update the affected
+hint, and identity changes discard that hint while preserving the send baseline
+until a verified lookup. Connection/identity reset clears all hints. List scans
+still reconcile inventory and ordering. Cached discovery hints never replace live
+participant checks for sending, capture, history or original-file access.
+
+Original-file policy blocks survive repeated observations of the same source and
+worker restarts. The worker checks a block locally before repair, authorization or
+download. Its persisted policy token records the limits and usage at the blocked
+attempt; retry requires a larger effective byte budget. Growing usage, stricter
+limits and irrelevant policy changes do not retry a blocked source. Freeing space,
+relaxing the limiting policy or observing a changed source allows acquisition to
+resume. Unknown-size downloads get a bounded attempt under the current budget;
+smaller eligible sources can still fit. Identity and consent checks continue to
+apply to every attempt and commit.
+
 ## CI execution
 
 Offline checks run once per pull request commit and on main pushes. Superseded
