@@ -91,7 +91,9 @@ func (a *Service) Start(ctx context.Context, events EventSource, dispatchFailed 
 	w.start(func() { a.Archive.Run(ctx) })
 	w.start(func() { a.History.Run(ctx) })
 	if events != nil {
-		w.start(func() { events.Run(ctx, a.ingest(ctx), func() { _ = e.Pause(true) }, a.receipt, e.ConnectionInterrupted) })
+		w.start(func() {
+			events.Run(ctx, a.ingest(ctx), func() { _ = e.Pause(true) }, a.receipt, e.ConnectionInterrupted)
+		})
 	}
 	w.start(func() {
 		e.Run(ctx, func(err error) {
