@@ -2,8 +2,9 @@ package httpapi
 
 import (
 	"encoding/json"
-	"github.com/deusical/smsbot-server/internal/transport"
 	"testing"
+
+	"github.com/deusical/smsbot-server/internal/transport"
 )
 
 type recoveringFixture struct{ *transport.Fixture }
@@ -15,7 +16,7 @@ func TestStateReportsRecoveryWithoutChangingLiveChoice(t *testing.T) {
 	s := apiSetup(t)
 	fixture := transport.NewFixture()
 	fixture.Online = false
-	s.Engine.Transport = &recoveringFixture{fixture}
+	useTransport(s, &recoveringFixture{fixture})
 	if err := s.Engine.Pause(false); err != nil {
 		t.Fatal(err)
 	}

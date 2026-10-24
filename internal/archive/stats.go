@@ -31,7 +31,7 @@ func (s *Service) Stats(ctx context.Context) (Stats, error) {
 		return result, err
 	}
 	result.QuotaBytes = policy.QuotaMiB << 20
-	if err = s.Store.DB.QueryRowContext(ctx, `SELECT count(*) FROM messages WHERE conversation IN (SELECT conversation FROM archive_conversations)`).Scan(&result.Messages); err != nil {
+	if result.Messages, err = s.Store.ArchivedMessageCount(ctx); err != nil {
 		return result, err
 	}
 	for _, suffix := range []string{"", "-wal", "-shm"} {

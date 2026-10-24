@@ -35,12 +35,9 @@ func (e *Engine) Receive(ctx context.Context, m transport.Incoming) (bool, error
 // A repeat acknowledges the original intent without creating another job,
 // even if limits or global pause changed after the lost acknowledgement.
 func (e *Engine) existingCompose(id, conv, text string, files []media.File, replyTarget ...string) (bool, error) {
-	var n int
-	if err := e.Store.DB.QueryRow("SELECT count(*) FROM jobs WHERE id=? AND conversation=? AND command='manual'", id, conv).Scan(&n); err != nil {
+	recorded, err := e.Store.ManualJobExists(id, conv)
+	if err != nil || !recorded {
 		return false, err
-	}
-	if n == 0 {
-		return false, nil
 	}
 	digest, err := e.Store.GetSecretSetting("compose_intent:"+id, "compose-intent:"+id)
 	if err != nil {

@@ -232,7 +232,6 @@ func (e *Engine) dispatchReaction(ctx context.Context, j store.Job, p store.Plan
 
 // Mutation status contains no raw provider errors, message text, or identities.
 func (e *Engine) ReactionStatus(conv, id string) (map[string]string, error) {
-	var state, code string
-	err := e.Store.DB.QueryRow("SELECT j.state,j.code FROM jobs j JOIN interaction_intents a ON a.job=j.id WHERE j.id=? AND j.conversation=?", id, conv).Scan(&state, &code)
+	state, code, err := e.Store.ReactionJobStatus(conv, id)
 	return map[string]string{"id": id, "state": state, "code": code}, err
 }

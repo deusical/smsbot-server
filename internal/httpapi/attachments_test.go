@@ -4,14 +4,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"github.com/deusical/smsbot-server/internal/media"
-	"github.com/deusical/smsbot-server/internal/store"
-	"github.com/deusical/smsbot-server/internal/transport"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/deusical/smsbot-server/internal/media"
+	"github.com/deusical/smsbot-server/internal/store"
+	"github.com/deusical/smsbot-server/internal/transport"
 )
 
 func TestUnlimitedAttachmentsRemoveOldBodyAndDownloadCaps(t *testing.T) {
@@ -38,7 +39,7 @@ func TestUnlimitedAttachmentsRemoveOldBodyAndDownloadCaps(t *testing.T) {
 	if err := s.Engine.Dispatch(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	page, err := s.Engine.Store.OwnerMessagePage("demo-chat", "", "", 50)
+	page, err := s.Store.OwnerMessagePage("demo-chat", "", "", 50)
 	if err != nil || len(page.Messages) != 1 || len(page.Messages[0].Attachments) != 5 {
 		t.Fatal("unlimited files not retained", err)
 	}
@@ -110,11 +111,11 @@ func TestFileOnlyComposeAPIAndPayloadValidation(t *testing.T) {
 
 func TestLegacyHistoryNeverContainsAttachmentMetadata(t *testing.T) {
 	s := apiSetup(t)
-	s.Engine.Store.Enroll("demo-chat", "demo-peer")
+	s.Store.Enroll("demo-chat", "demo-peer")
 	files, _ := media.Prepare([]media.Upload{{Name: "synthetic-private-file.txt", Data: []byte("Synthetic file")}})
 	// Even a public legacy message row cannot expose file metadata on this API.
-	s.Engine.Store.SaveMessage(store.Hash("demo-chat\x00synthetic-public-upstream"), "demo-chat", "incoming", "Synthetic public text")
-	s.Engine.Store.SaveObservedFiles("demo-chat", "synthetic-public-upstream", "", "incoming", "", "phone", "", time.Now(), files)
+	s.Store.SaveMessage(store.Hash("demo-chat\x00synthetic-public-upstream"), "demo-chat", "incoming", "Synthetic public text")
+	s.Store.SaveObservedFiles("demo-chat", "synthetic-public-upstream", "", "incoming", "", "phone", "", time.Now(), files)
 	settings, _ := s.Collection.Settings()
 	if settings.Enabled {
 		t.Fatal("fixture inbox should be disabled")

@@ -4,11 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/deusical/smsbot-server/internal/store"
-	"github.com/deusical/smsbot-server/internal/transport"
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/deusical/smsbot-server/internal/store"
+	"github.com/deusical/smsbot-server/internal/transport"
 )
 
 func TestInteractionOwnerAPIAndReplyCompatibility(t *testing.T) {

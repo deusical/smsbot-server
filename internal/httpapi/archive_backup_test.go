@@ -4,15 +4,16 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"github.com/deusical/smsbot-server/internal/media"
-	"github.com/deusical/smsbot-server/internal/store"
-	"github.com/deusical/smsbot-server/internal/transport"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/deusical/smsbot-server/internal/media"
+	"github.com/deusical/smsbot-server/internal/store"
+	"github.com/deusical/smsbot-server/internal/transport"
 )
 
 func TestSavedOriginalReadOfflineRangeAndCorruption(t *testing.T) {
@@ -28,14 +29,14 @@ func TestSavedOriginalReadOfflineRangeAndCorruption(t *testing.T) {
 	}
 	s.Collection.Archive.Tick(context.Background())
 	message := store.Hash("demo-chat\x00original")
-	file, err := s.Engine.Store.Attachment("demo-chat", message, files[0].ID)
+	file, err := s.Store.Attachment("demo-chat", message, files[0].ID)
 	if err != nil || file.BlobID == "" {
 		t.Fatal("file not archived", err)
 	}
 	settings, _ = s.Collection.Settings()
 	settings.Enabled = false
 	s.Collection.SetSettings(context.Background(), settings)
-	s.Engine.Transport = nil // any phone lookup would panic; local reads must not use it
+	useTransport(s, nil) // any phone lookup would panic; local reads must not use it
 	url := "/api/v1/inbox/conversations/demo-chat/messages/" + message + "/attachments/" + file.ID
 	if w := ownerRequest(s, "GET", url, ""); w.Code != 200 || !bytes.Equal(w.Body.Bytes(), files[0].Data) {
 		t.Fatal("offline archive file unavailable", w.Code)

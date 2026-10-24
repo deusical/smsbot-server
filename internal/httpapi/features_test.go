@@ -3,10 +3,11 @@ package httpapi
 import (
 	"bytes"
 	"encoding/json"
-	"github.com/deusical/smsbot-server/internal/bot"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/deusical/smsbot-server/internal/bot"
 )
 
 func TestConfigurationRecipeAndOfflineExecutionAPI(t *testing.T) {
@@ -106,11 +107,11 @@ func TestHistoryImportNeverCreatesJobs(t *testing.T) {
 	if w.Code != 200 {
 		t.Fatal(w.Code)
 	}
-	jobs, err := s.Engine.Store.Jobs()
+	jobs, err := s.Store.Jobs()
 	if err != nil || len(jobs) != 0 {
 		t.Fatal("historical command executed")
 	}
-	messages, err := s.Engine.Store.Messages("demo-chat")
+	messages, err := s.Store.Messages("demo-chat")
 	if err != nil || len(messages) != 1 {
 		t.Fatal("history not retained")
 	}

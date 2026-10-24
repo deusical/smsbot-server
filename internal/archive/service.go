@@ -136,8 +136,8 @@ func (s *Service) Tick(ctx context.Context) {
 	}
 	// Read the watermark before the batch so an insertion racing the empty
 	// batch cannot be absorbed into its idle baseline without being processed.
-	var sequence int64
-	if err := s.Store.DB.QueryRowContext(ctx, "SELECT coalesce(max(seq),0) FROM message_changes").Scan(&sequence); err != nil {
+	sequence, err := s.Store.LatestChange(ctx)
+	if err != nil {
 		return
 	}
 	focus, err := s.focusBatch(ctx)

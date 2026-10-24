@@ -3,17 +3,18 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
-	"github.com/deusical/smsbot-server/internal/collection"
-	"github.com/deusical/smsbot-server/internal/transport"
 	"testing"
 	"time"
+
+	"github.com/deusical/smsbot-server/internal/collection"
+	"github.com/deusical/smsbot-server/internal/transport"
 )
 
 type botSettings = collection.Settings
 
 func fixtureOf(t *testing.T, s *Server) *transport.Fixture {
 	t.Helper()
-	f, ok := s.Engine.Transport.(*transport.Fixture)
+	f, ok := s.Transport.(*transport.Fixture)
 	if !ok {
 		t.Fatal("expected fixture transport")
 	}
@@ -186,7 +187,7 @@ func TestConversationListForcesPhoneReadOnlyWhenAskedAndStateReportsPhoneRequest
 	s := apiSetup(t)
 	setInbox(t, s, func(c *botSettings) { c.Enabled = true })
 	f := &refreshingFixture{Fixture: fixtureOf(t, s)}
-	s.Engine.Transport = f
+	useTransport(s, f)
 	for _, path := range []string{"/api/v1/inbox/conversations", "/api/v1/inbox/conversations?refresh=0", "/api/v1/inbox/conversations?refresh=1"} {
 		if w := ownerRequest(s, "GET", path, ""); w.Code != 200 {
 			t.Fatal(path, w.Code)

@@ -74,8 +74,8 @@ func (svc *Service) captureConnectionEpoch() uint64 {
 func (svc *Service) captureDigest(m transport.Incoming, consent *captureConsent) ([32]byte, error) {
 	// File commits do not emit message changes. Include their encrypted local
 	// version as well, without retaining the payload in the cache.
-	var files string
-	if err := svc.Store.DB.QueryRow("SELECT coalesce((SELECT payload FROM message_attachments WHERE message=?),'')", store.Hash(m.ConversationID+"\x00"+m.ID)).Scan(&files); err != nil {
+	files, err := svc.Store.AttachmentVersion(store.Hash(m.ConversationID + "\x00" + m.ID))
+	if err != nil {
 		return [32]byte{}, err
 	}
 	// The digest and resource hash stay in bounded process memory; no personal

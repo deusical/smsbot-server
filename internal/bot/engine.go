@@ -93,8 +93,7 @@ func (e *Engine) ConnectionInterrupted() error {
 	for _, cancel := range e.pending {
 		cancel()
 	}
-	_, err := e.Store.DB.Exec("UPDATE jobs SET state='cancelled',code='connection_interrupted',plan='' WHERE state IN ('queued','generating','awaiting_approval')")
-	return err
+	return e.Store.CancelUnsentJobs("connection_interrupted")
 }
 
 func (e *Engine) Unenroll(id string) error {
@@ -211,11 +210,11 @@ func (e *Engine) Accept(ctx context.Context, m transport.Incoming) (bool, error)
 
 	text := strings.TrimSpace(m.Text)
 	id := store.Hash(m.ConversationID + "\x00" + m.ID)
-	var exists int
-	if err = e.Store.DB.QueryRow("SELECT count(*) FROM jobs WHERE id=?", id).Scan(&exists); err != nil {
+	exists, err := e.Store.JobExists(id)
+	if err != nil {
 		return false, err
 	}
-	if exists > 0 {
+	if exists {
 		return false, nil
 	}
 	parts := strings.Fields(text)
@@ -455,10 +454,8 @@ func (e *Engine) Dispatch(ctx context.Context) error {
 		for _, turn := range history {
 			reserve += m.InputPrice * float64(len(turn.Content)+64)
 		}
-		var spent float64
-		var unknown int
 		day := e.now().UTC().Format("2006-01-02") + "T00:00:00Z"
-		err = e.Store.DB.QueryRow("SELECT coalesce(sum(u.cost),0),coalesce(sum(CASE WHEN u.cost IS NULL THEN 1 ELSE 0 END),0) FROM usage u JOIN jobs j ON j.id=u.job WHERE j.created>=?", day).Scan(&spent, &unknown)
+		spent, unknown, err := e.Store.SpendSince(day)
 		if err != nil {
 			e.mu.Unlock()
 			return err
@@ -689,7 +686,7 @@ func (e *Engine) Dispatch(ctx context.Context) error {
 	if p.Manual {
 		origin = "web"
 	}
-	if _, err = e.Store.DB.Exec("INSERT INTO message_meta VALUES(?,?,'submitted',?) ON CONFLICT(message) DO UPDATE SET origin=excluded.origin,owner_only=excluded.owner_only,status=CASE WHEN message_meta.status IN ('read','delivered') THEN message_meta.status ELSE 'submitted' END", txn, origin, p.InboxOwnerOnly); err != nil {
+	if err = e.Store.RecordSubmitted(txn, origin, p.InboxOwnerOnly); err != nil {
 		e.mu.Unlock()
 		return err
 	}
@@ -823,12 +820,8 @@ func (e *Engine) Reconcile(conv, txn, state, reported string) error {
 	if !ok || desired == 0 {
 		return nil
 	}
-	var id, current string
-	err := e.Store.DB.QueryRow("SELECT id,state FROM jobs WHERE conversation=? AND txn=?", conv, txn).Scan(&id, &current)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil
-	}
-	if err != nil {
+	id, current, found, err := e.Store.JobByTransaction(conv, txn)
+	if err != nil || !found {
 		return err
 	}
 	previous, ok := rank[current]

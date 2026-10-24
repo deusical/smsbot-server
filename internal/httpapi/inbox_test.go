@@ -3,12 +3,13 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
-	"github.com/deusical/smsbot-server/internal/transport"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/deusical/smsbot-server/internal/transport"
 )
 
 func TestInboxOwnerOnlyAndLegacyVisibility(t *testing.T) {
@@ -16,7 +17,7 @@ func TestInboxOwnerOnlyAndLegacyVisibility(t *testing.T) {
 	cfg, _ := s.Collection.Settings()
 	cfg.Enabled = true
 	s.Collection.SetSettings(context.Background(), cfg)
-	s.Engine.Store.Enroll("demo-chat", "demo-peer")
+	s.Store.Enroll("demo-chat", "demo-peer")
 	s.Collection.Observe(context.Background(), transport.Incoming{ID: "synthetic-message", ConversationID: "demo-chat", ParticipantID: "demo-peer", Text: "Synthetic private message", At: time.Now()})
 	if w := req(s, "GET", "/api/v1/conversations/demo-chat/history", "", "fixture-client", ""); w.Code != 200 || strings.Contains(w.Body.String(), "Synthetic private message") {
 		t.Fatal("private text exposed on legacy history")
@@ -26,7 +27,7 @@ func TestInboxOwnerOnlyAndLegacyVisibility(t *testing.T) {
 	}
 }
 func ownerRequest(s *Server, method, path, body string) *httptest.ResponseRecorder {
-	s.Engine.Store.AddCredential("synthetic-session", "test", "session", 0)
+	s.Store.AddCredential("synthetic-session", "test", "session", 0)
 	r := httptest.NewRequest(method, "http://localhost:8787"+path, strings.NewReader(body))
 	r.AddCookie(&http.Cookie{Name: "smsbot_session", Value: "synthetic-session"})
 	r.Header.Set("Origin", "http://localhost:8787")
@@ -80,7 +81,7 @@ func TestInboxWithoutArchiveKeepsSnapshotPolling(t *testing.T) {
 	if err := s.Collection.SetSettings(context.Background(), cfg); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Engine.Store.Archive("demo-chat"); err == nil {
+	if _, err := s.Store.Archive("demo-chat"); err == nil {
 		t.Fatal("test requires no archive record")
 	}
 	path := "/api/v1/inbox/conversations/demo-chat/history"
@@ -96,7 +97,7 @@ func TestInboxWithoutArchiveKeepsSnapshotPolling(t *testing.T) {
 		t.Fatal("snapshot advertises unavailable archive feed")
 	}
 	// A subsequent snapshot must include newly retained messages.
-	if err := s.Engine.Store.SaveObservedFiles("demo-chat", "new-snapshot-message", "", "incoming", "Synthetic latest message", "phone", "", time.Now(), nil); err != nil {
+	if err := s.Store.SaveObservedFiles("demo-chat", "new-snapshot-message", "", "incoming", "Synthetic latest message", "phone", "", time.Now(), nil); err != nil {
 		t.Fatal(err)
 	}
 	w = ownerRequest(s, "GET", path, "")

@@ -178,8 +178,8 @@ func (svc *Service) persistHistoryPage(ctx context.Context, conv string, message
 			r.skipped++
 			continue
 		}
-		var before int
-		if err := svc.Store.DB.QueryRow(`SELECT EXISTS(SELECT 1 FROM messages WHERE conversation=? AND (id=? OR id IN (SELECT message FROM message_alias WHERE alias=?) OR (?='outgoing' AND id=? AND EXISTS(SELECT 1 FROM jobs WHERE conversation=? AND txn=?))))`, conv, store.Hash(conv+"\x00"+m.ID), store.Hash(conv+"\x00"+m.ID), m.Direction, m.TransactionID, conv, m.TransactionID).Scan(&before); err != nil {
+		known, err := svc.Store.MessageKnown(conv, m.ID, m.Direction, m.TransactionID)
+		if err != nil {
 			return r, err
 		}
 		watermark, err := svc.Store.ChangeWatermark(conv)
@@ -194,7 +194,7 @@ func (svc *Service) persistHistoryPage(ctx context.Context, conv string, message
 			if err != nil {
 				return r, err
 			}
-			if before == 0 {
+			if !known {
 				r.imported++
 			} else if changed {
 				r.updated++

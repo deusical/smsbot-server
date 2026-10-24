@@ -2,15 +2,16 @@ package httpapi
 
 import (
 	"bytes"
-	"github.com/deusical/smsbot-server/internal/collection"
-	"github.com/deusical/smsbot-server/internal/media"
-	"github.com/deusical/smsbot-server/internal/store"
-	"github.com/deusical/smsbot-server/internal/transport"
 	"io"
 	"mime"
 	"net/http"
 	"strconv"
 	"time"
+
+	"github.com/deusical/smsbot-server/internal/collection"
+	"github.com/deusical/smsbot-server/internal/media"
+	"github.com/deusical/smsbot-server/internal/store"
+	"github.com/deusical/smsbot-server/internal/transport"
 )
 
 func (s *Server) inboxRoutes() {
@@ -47,11 +48,11 @@ func (s *Server) saveInboxSettings(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Server) inboxConversations(w http.ResponseWriter, r *http.Request) {
 	var p transport.ConversationPage
-	if s.Engine.Transport.Ready() {
-		source, ok := s.Engine.Transport.(transport.ConversationPageSource)
+	if s.Transport.Ready() {
+		source, ok := s.Transport.(transport.ConversationPageSource)
 		// The dashboard asks for one phone read when it returns to the foreground,
 		// for changes the phone may not push. The transport spaces these reads.
-		if refresher, can := s.Engine.Transport.(transport.ConversationRefresher); can && ok && r.URL.Query().Get("refresh") == "1" {
+		if refresher, can := s.Transport.(transport.ConversationRefresher); can && ok && r.URL.Query().Get("refresh") == "1" {
 			refresher.RequestConversationRefresh()
 		}
 		if ok {
@@ -91,7 +92,7 @@ func (s *Server) inboxConversations(w http.ResponseWriter, r *http.Request) {
 	}
 	p.Conversations = eligible
 
-	latest, _ := s.Engine.Store.LatestMessageTimes(r.Context())
+	latest, _ := s.Store.LatestMessageTimes(r.Context())
 	settings, settingsErr := s.Collection.Settings()
 	var previewIDs []string
 	for _, c := range p.Conversations {
@@ -99,9 +100,9 @@ func (s *Server) inboxConversations(w http.ResponseWriter, r *http.Request) {
 			previewIDs = append(previewIDs, c.ID)
 		}
 	}
-	previews, _ := s.Engine.Store.LatestPreviews(r.Context(), previewIDs)
+	previews, _ := s.Store.LatestPreviews(r.Context(), previewIDs)
 	for i := range p.Conversations {
-		p.Conversations[i].Enrolled = s.Engine.Store.Enrolled(p.Conversations[i].ID, p.Conversations[i].ParticipantID)
+		p.Conversations[i].Enrolled = s.Store.Enrolled(p.Conversations[i].ID, p.Conversations[i].ParticipantID)
 		p.Conversations[i].LastMessageAt = newestTime(p.Conversations[i].LastMessageAt, latest[p.Conversations[i].ID])
 		if v, ok := previews[p.Conversations[i].ID]; ok {
 			p.Conversations[i].Preview, p.Conversations[i].PreviewFromMe = v.Text, v.FromMe
@@ -123,7 +124,7 @@ func (s *Server) inboxHistory(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	var p store.InboxPage
-	_, archiveErr := s.Engine.Store.Archive(r.PathValue("id"))
+	_, archiveErr := s.Store.Archive(r.PathValue("id"))
 	if archiveErr == nil {
 		p, err = s.localArchivePage(r.PathValue("id"), r.URL.Query().Get("cursor"), r.URL.Query().Get("search"), limit)
 	} else {

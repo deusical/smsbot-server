@@ -126,8 +126,7 @@ func (svc *Service) legacyGooglePreview(conv, message string, file media.File) (
 	if _, ok := svc.Transport.(transport.FileRefresher); !ok || file.MessageID != "" || file.RemoteID != "" || !strings.HasPrefix(file.MIME, "image/") {
 		return false, time.Time{}
 	}
-	var origin, at string
-	err := svc.Store.DB.QueryRow(`SELECT coalesce(meta.origin,''),m.at FROM messages m LEFT JOIN message_meta meta ON meta.message=m.id WHERE m.conversation=? AND m.id=?`, conv, message).Scan(&origin, &at)
+	origin, at, err := svc.Store.MessageOrigin(conv, message)
 	if err != nil || origin == "web" {
 		return false, time.Time{}
 	}

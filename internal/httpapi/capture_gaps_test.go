@@ -1,16 +1,17 @@
 package httpapi
 
 import (
-	"github.com/deusical/smsbot-server/internal/store"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/deusical/smsbot-server/internal/store"
 )
 
 func TestCaptureGapDetailsAreCookieOwnerOnlyAndHideCheckpoints(t *testing.T) {
 	s := apiSetup(t)
-	if err := s.Engine.Store.SaveCaptureGap(store.CaptureGap{Conversation: "synthetic-private-conversation", Since: "2026-10-16T12:00:00Z", Until: "2026-10-16T12:01:00Z", Reason: "capture_delayed", State: "queued", Cursor: "synthetic-private-cursor", Generation: 7}); err != nil {
+	if err := s.Store.SaveCaptureGap(store.CaptureGap{Conversation: "synthetic-private-conversation", Since: "2026-10-16T12:00:00Z", Until: "2026-10-16T12:01:00Z", Reason: "capture_delayed", State: "queued", Cursor: "synthetic-private-cursor", Generation: 7}); err != nil {
 		t.Fatal(err)
 	}
 	login := req(s, "POST", "/api/v1/login", `{"token":"fixture-owner"}`, "", "http://localhost:8787")

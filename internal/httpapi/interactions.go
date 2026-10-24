@@ -51,11 +51,11 @@ func (s *Server) interactionRoutes() {
 	}))
 	s.mux.HandleFunc("GET /api/v1/inbox/conversations/{id}/messages/{message}/window", s.protected(func(w http.ResponseWriter, r *http.Request) {
 		conv := r.PathValue("id")
-		if _, err := s.Engine.Store.Archive(conv); err != nil {
+		if _, err := s.Store.Archive(conv); err != nil {
 			s.bad(w, 404, "archive_unavailable")
 			return
 		}
-		p, err := s.Engine.Store.MessageWindow(conv, r.PathValue("message"))
+		p, err := s.Store.MessageWindow(conv, r.PathValue("message"))
 		if err != nil {
 			s.bad(w, 404, "message_unavailable")
 			return
