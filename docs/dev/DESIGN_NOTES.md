@@ -314,7 +314,10 @@ Conversation discovery and list display reuse per-conversation detail hints acro
 routine reconciliation sweeps. These hints have no time-based expiry: new IDs or
 missing hints require a lookup, ordinary conversation events update the affected
 hint, and identity changes discard that hint while preserving the send baseline
-until a verified lookup. Connection/identity reset clears all hints. List scans
+until a verified lookup. A connection or identity reset clears every verified
+identity and the cached list pages, but keeps the hints: they only list
+conversations, and re-reading all of them after each reconnect cost about 400 phone
+requests per reconnect in the field (several reconnects a day). List scans
 still reconcile inventory and ordering. Cached discovery hints never replace live
 participant checks for sending, capture, history or original-file access.
 
