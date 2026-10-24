@@ -29,6 +29,9 @@ type Settings struct {
 	MaxChars        int                   `json:"max_chars"`
 	Favorites       []string              `json:"favorites"`
 	ModelGeneration map[string]Generation `json:"model_generation"`
+	// OwnerCommands lets the owner run commands from their own phone in
+	// conversations with bot replies on.
+	OwnerCommands bool `json:"owner_commands"`
 }
 type Command struct {
 	Name                 string      `json:"name"`

@@ -161,6 +161,7 @@ export type Settings = {
   max_chars: number;
   favorites: string[];
   model_generation: Record<string, Generation>;
+  owner_commands?: boolean;
 };
 export type Configuration = {
   settings: Settings;

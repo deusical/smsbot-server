@@ -25,7 +25,7 @@ func (e *Engine) Receive(ctx context.Context, m transport.Incoming) (bool, error
 	}
 
 	e.Collection.ObserveNow(ctx, m)
-	accepted, err := e.Accept(ctx, m)
+	accepted, err := e.Accept(ctx, e.commandSighting(m))
 	if accepted && err == nil {
 		err = e.Store.PublishCommandMessage(store.Hash(m.ConversationID + "\x00" + m.ID))
 	}
@@ -163,4 +163,15 @@ func (e *Engine) ComposeInboxFiles(ctx context.Context, conv, text, requestID st
 	}
 	_, err = e.Store.Enqueue(id, conv, "manual", store.Plan{ReplyTarget: replyTarget, ReplyWireTarget: wireTarget, Participant: c.ParticipantID, Reply: text, MaxChars: cfg.Settings.MaxChars, Manual: true, InboxOwnerOnly: true, Attachments: files})
 	return id, err
+}
+
+// commandSighting marks a repeat sighting of an outgoing command as
+// historical for routing. The phone reports a sent message again at each
+// status change, and only the first report may start an owner command.
+func (e *Engine) commandSighting(m transport.Incoming) transport.Incoming {
+	if m.Outgoing && m.ID != "" && !m.Historical && strings.HasPrefix(strings.TrimSpace(m.Text), "!") {
+		first, err := e.Store.FirstObservation(m.ConversationID, m.ID)
+		m.Historical = err != nil || !first
+	}
+	return m
 }
