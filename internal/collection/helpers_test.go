@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
-	"time"
 )
 
 // setup assembles a collection service with its workers over the offline
@@ -46,10 +45,6 @@ func enableInbox(t *testing.T, svc *Service) Settings {
 	}
 	s, _ = svc.Settings()
 	return s
-}
-
-func incoming() transport.Incoming {
-	return transport.Incoming{ID: "test-message", ConversationID: "demo-chat", ParticipantID: "demo-peer", Text: "!ping", At: time.Now()}
 }
 
 // arm enrolls the fixture conversation and turns sending on, so a test can
