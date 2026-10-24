@@ -7,10 +7,10 @@ For what each page does, see the [user guide](../docs/USER_GUIDE.md).
 
 | Path | Purpose |
 |---|---|
-| `src/main.tsx` | App shell: session, polling lanes, page routing |
-| `src/pages/` | `Conversations`, `ConversationHistory` (list and thread), `ArchivePage`, `Commands`, `Settings`, `Activity` |
+| `src/main.tsx` | App shell: navigation, layout, theme, save bar; composes the hooks below |
+| `src/pages/` | `Home`, `Conversations`, `ConversationHistory` (list and thread), `ArchivePage`, `Commands`, `Settings`, `Activity` |
 | `src/components/` | Shared pieces: `ui`, `Icon`, `Confirmation`, `Attachments`, `MessageActions`, `Generation`, and the archive widgets `HistorySync`, `ArchiveSettings`, `CaptureChecks` |
-| `src/lib/` | No-UI code: `api` (typed `fetch` wrapper and API types), `workspace` (shared draft state), `conversationOrder`, `pendingSends`, `pendingActions`, `typing`, `useViewedHistoryRefresh` |
+| `src/lib/` | No-UI code: `useSession` (sign-in, expiry, session generation), `useDashboard` (state, activity, settings and conversation-list polling), `api` (typed `fetch` wrapper and API types), `connection` (phone status labels), `workspace` (shared draft state), `conversationOrder`, `pendingSends`, `pendingActions`, `typing`, `useViewedHistoryRefresh` |
 | `src/styles/` | Stylesheet split by area; `index.css` imports the parts in cascade order, so keep that order |
 | `src/test/` | Vitest setup; unit tests sit next to their source files |
 | `tests/` | Playwright browser specs |
