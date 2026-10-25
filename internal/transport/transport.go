@@ -43,6 +43,13 @@ type Incoming struct {
 type ConversationLookup interface {
 	LookupConversation(context.Context, string) (Conversation, error)
 }
+
+// CachedLookup returns the phone record already held for a conversation
+// without a phone round trip. Use it only to decide what to show; anything
+// that acts must check again with Lookup.
+type CachedLookup interface {
+	CachedConversation(string) (Conversation, bool)
+}
 type Receipt struct {
 	State     string
 	MessageID string

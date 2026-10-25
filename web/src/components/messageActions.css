@@ -3,7 +3,7 @@
 
 /* Trigger: a small round button beside the bubble, centred on it. The pseudo-element
    bridges the gap so the hover state survives the move from bubble to button. */
-.message-options { position: absolute; z-index: 2; top: 50%; right: -36px; translate: 0 -50%; width: 28px; height: 28px; padding: 0; border-radius: 50%; color: var(--muted); opacity: 0; transition: opacity 0.12s, background 0.15s, color 0.15s; }
+button.message-options.icon { position: absolute; z-index: 2; top: 50%; right: -36px; translate: 0 -50%; width: 28px; height: 28px; padding: 0; border-radius: 50%; color: var(--muted); opacity: 0; transition: opacity 0.12s, background 0.15s, color 0.15s; }
 .bubble.outgoing .message-options { right: auto; left: -36px; }
 .bubble::after { content: ""; position: absolute; top: 0; bottom: 0; right: -40px; width: 40px; }
 .bubble.outgoing::after { right: auto; left: -40px; }
@@ -44,9 +44,9 @@ button.message-quote:hover:not(:disabled) { background: color-mix(in srgb, var(-
 /* Closing is Escape or a click outside. The button stays for keyboards and assistive
    technology as a visually hidden control (a 1px box overlays nothing, and screen
    reader activation still works); it appears when focused and in the details view. */
-button.message-action-close { position: absolute; top: 6px; right: 6px; width: 1px; height: 1px; padding: 0; overflow: hidden; border: 0; opacity: 0; z-index: 1; }
+button.message-action-close.icon { position: absolute; top: 6px; right: 6px; width: 1px; height: 1px; padding: 0; overflow: hidden; border: 0; opacity: 0; z-index: 1; }
 button.message-action-close svg { display: none; }
-button.message-action-close:focus-visible, .message-action-panel.details button.message-action-close { width: 28px; height: 28px; border: 1px solid transparent; opacity: 1; background: var(--raised); }
+button.message-action-close.icon:focus-visible, .message-action-panel.details button.message-action-close.icon { width: 28px; height: 28px; border: 1px solid transparent; opacity: 1; background: var(--raised); }
 button.message-action-close:focus-visible svg, .message-action-panel.details button.message-action-close svg { display: block; }
 .message-action-heading { display: flex; align-items: center; gap: 4px; padding: 0 34px 6px 0; }
 .message-action-heading strong { font-size: 13px; font-weight: 600; }

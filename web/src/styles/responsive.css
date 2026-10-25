@@ -328,7 +328,7 @@ label {
 .message-attachment {
   width: min(320px, 100%);
   margin: 4px 0 8px;
-  border: 1px solid currentColor;
+  border: 1px solid color-mix(in srgb, currentColor 22%, transparent);
   border-radius: 12px;
   overflow: hidden;
 }

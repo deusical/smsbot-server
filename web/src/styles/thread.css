@@ -15,7 +15,7 @@
 .unread-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--signal); }
 
 /* ---------- thread: jump to latest and drop target ---------- */
-.jump-latest {
+button.jump-latest.icon {
   position: absolute;
   bottom: 120px;
   right: 22px;
@@ -26,10 +26,10 @@
   border-radius: 50%;
   background: var(--surface);
   color: var(--text);
-  box-shadow: var(--shadow-pop);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.16);
   animation: open 0.15s var(--ease);
 }
-.jump-latest:hover:not(:disabled) { background: var(--raised); border-color: var(--signal); }
+button.jump-latest.icon:hover:not(:disabled) { background: var(--raised); border-color: var(--signal); }
 .composer-box.dragging { border-color: var(--signal); box-shadow: 0 0 0 3px var(--signal-soft); }
 
 /* ---------- selected image thumbnails, pending sends ---------- */

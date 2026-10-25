@@ -4,6 +4,7 @@ import (
 	"context"
 	"github.com/deusical/smsbot-server/internal/store"
 	"github.com/deusical/smsbot-server/internal/transport"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -400,5 +401,63 @@ func TestUncachedInteractionOwnerResolvedAfterVerifiedLookup(t *testing.T) {
 	status, err := e.ReactionStatus("demo-chat", id)
 	if err != nil || status["state"] != "reaction_confirmed" {
 		t.Fatal("owner-less stream snapshot not reconciled", err)
+	}
+}
+
+type cachedLookupFixture struct {
+	*transport.Fixture
+	cached    transport.Conversation
+	protocol  string
+	liveReads atomic.Int32
+}
+
+func (f *cachedLookupFixture) CachedConversation(id string) (transport.Conversation, bool) {
+	return f.cached, f.cached.ID == id
+}
+func (f *cachedLookupFixture) Conversations(ctx context.Context) ([]transport.Conversation, error) {
+	f.liveReads.Add(1)
+	return []transport.Conversation{{ID: "demo-chat", ParticipantID: "demo-peer", Protocol: f.protocol, Writable: true}}, nil
+}
+
+func TestMessageActionsUseCachedConversationButReactionsCheckLive(t *testing.T) {
+	e, f := setup(t)
+	enableInbox(t, e)
+	e.Pause(false)
+	ctx := context.Background()
+	wrapper := &cachedLookupFixture{Fixture: f, cached: transport.Conversation{ID: "demo-chat", ParticipantID: "demo-peer", Protocol: "RCS", Writable: true}, protocol: "RCS"}
+	useTransport(e, wrapper)
+	m := interactionMessage("synthetic-cached", "RCS")
+	if err := e.Collection.Observe(ctx, m); err != nil {
+		t.Fatal(err)
+	}
+	target := store.Hash("demo-chat\x00" + m.ID)
+	wrapper.liveReads.Store(0)
+
+	// A send holding the engine lock must not stall the menu.
+	e.mu.Lock()
+	done := make(chan MessageActions, 1)
+	go func() {
+		a, _ := e.MessageActions(ctx, "demo-chat", target)
+		done <- a
+	}()
+	var a MessageActions
+	select {
+	case a = <-done:
+	case <-time.After(2 * time.Second):
+		e.mu.Unlock()
+		t.Fatal("message actions waited for the engine lock")
+	}
+	e.mu.Unlock()
+	if !a.React || !a.Reply || wrapper.liveReads.Load() != 0 {
+		t.Fatalf("actions=%+v live reads=%d", a, wrapper.liveReads.Load())
+	}
+
+	// Acting still asks the phone: a conversation that is no longer RCS is refused.
+	wrapper.protocol = "SMS"
+	if _, err := e.QueueReaction(ctx, "demo-chat", target, "👍", "add", a.Version, "synthetic-cached-request"); err == nil {
+		t.Fatal("reaction queued from a cached record")
+	}
+	if wrapper.liveReads.Load() == 0 {
+		t.Fatal("reaction did not look up the conversation live")
 	}
 }

@@ -32,7 +32,7 @@
 .archive-progress-counts .metric { padding: 10px 14px; }
 .archive-progress-counts .metric strong { font-size: 20px; }
 .export-status { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; font-size: 13px; color: var(--muted); }
-a.button { display: inline-flex; background: var(--surface); color: var(--text); align-items: center; height: 36px; padding: 0 14px; border: 1px solid var(--line); border-radius: var(--r-control); font-weight: 550; font-size: 13px; text-decoration: none; }
+a.button { display: inline-flex; background: var(--surface); color: var(--text); align-items: center; height: 38px; padding: 0 14px; border: 1px solid var(--line); border-radius: var(--r-control); font-weight: 550; font-size: 13px; text-decoration: none; }
 a.button:active { transform: translateY(1px); }
 a.button:hover { background: var(--hover); border-color: var(--line-strong); }
 .archive-page .capture-checks { max-height: none; overflow: visible; padding: 10px 0; }
