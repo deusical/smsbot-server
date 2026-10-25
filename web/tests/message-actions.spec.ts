@@ -183,3 +183,18 @@ test("touch: tapping the message opens the bottom sheet", async ({browser}) => {
     expect(message!.y + message!.height).toBeLessThanOrEqual(sheet!.y);
   } finally {await context.close();}
 });
+
+test("unavailable actions say why and are asked for again on the next open", async ({page}) => {
+  const world = await prepare(page);
+  world.capabilities = {...world.capabilities, reply: false, react: false, reason: "message_protocol_unsupported"} as typeof world.capabilities;
+  await original(page).hover();await original(page).getByRole("button", {name: "Message actions", exact: true}).click();
+  const menu = page.getByRole("dialog", {name: "Message actions", exact: true});
+  await expect(menu.getByRole("status")).toHaveText("Reply and reactions appear once your phone confirms this message.");
+  await expect(menu.getByRole("button", {name: "Reply", exact: true})).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  // The phone confirms the message: the next open shows the actions.
+  world.capabilities = {...world.capabilities, reply: true, react: true, reason: undefined} as typeof world.capabilities;
+  await original(page).hover();await original(page).getByRole("button", {name: "Message actions", exact: true}).click();
+  await expect(menu.getByRole("button", {name: "Reply", exact: true})).toBeVisible();
+  await expect(menu.getByRole("status")).toHaveCount(0);
+});
