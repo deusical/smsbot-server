@@ -76,3 +76,33 @@ test("a notification link opens its conversation", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Conversations", exact: true })).toBeVisible();
   await expect(page).toHaveURL(/\/$/);
 });
+
+test("on a phone, a long inbox and unbreakable names stay inside the screen", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const conversations = Array.from({ length: 120 }, (_, i) => ({ id: `synthetic-${i}`, participant_id: `peer-${i}`, label: i === 7 ? "7777777774*827*48458777777**5755847085787707*8" : `Synthetic contact ${i}`, protocol: "RCS", writable: true, archived: false, enrolled: false }));
+  await page.route(/\/api\/v1\/inbox\/conversations(\?.*)?$/, (route) => route.fulfill({ json: { conversations, next_cursor: "" } }));
+  await login(page);
+  for (const d of await devices(page)) await page.request.delete(`/api/v1/notifications/devices/${d.id}`, { headers });
+  const nav = page.getByRole("navigation", { name: "Main navigation" });
+  await nav.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("navigation", { name: "Settings sections" }).getByRole("button", { name: "Notifications" }).click();
+  const name = page.getByLabel("Device name");
+  await expect(name).toBeVisible();
+  expect((await name.boundingBox())!.height).toBeGreaterThanOrEqual(34);
+  await page.getByRole("button", { name: "Turn on notifications" }).click();
+  const picker = page.getByRole("group", { name: "Muted conversations" });
+  await expect(picker.getByRole("button", { name: /7777777774/ })).toBeAttached();
+  expect((await picker.boundingBox())!.height).toBeLessThanOrEqual(250);
+  const wide = await page.evaluate(() => {
+    const w = document.getElementById("workspace")!;
+    return { doc: document.documentElement.scrollWidth - innerWidth, workspace: w.scrollWidth - w.clientWidth };
+  });
+  expect(wide).toEqual({ doc: 0, workspace: 0 });
+  // Muting puts the conversation first and finding narrows the list.
+  await picker.getByRole("button", { name: "Synthetic contact 99" }).click();
+  await expect(picker.getByRole("button").first()).toHaveAccessibleName(/Synthetic contact 99/);
+  await page.getByRole("searchbox", { name: "Find a conversation" }).fill("contact 42");
+  await expect(picker.getByRole("button")).toHaveCount(1);
+  await page.screenshot({ path: "test-results/notifications-phone.png" });
+  for (const d of await devices(page)) await page.request.delete(`/api/v1/notifications/devices/${d.id}`, { headers });
+});

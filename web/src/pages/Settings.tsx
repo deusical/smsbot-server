@@ -582,7 +582,7 @@ function InboxSection({
                       }
                     >
                       {on && <Icon name="check" size={13} />}
-                      {c.label}
+                      <span className="chip-label">{c.label}</span>
                     </button>
                   );
                 })}

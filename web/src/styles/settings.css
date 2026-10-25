@@ -157,6 +157,7 @@
 /* notifications */
 .device-prefs {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 16px;
   margin: 4px 0 16px;
 }
@@ -192,7 +193,10 @@
 .device-row small {
   color: var(--muted);
 }
-.inline-form > input {
-  flex: 1;
-  min-width: 0;
+/* A long inbox scrolls inside its own box instead of stretching the page. */
+.chip-picker {
+  max-height: 240px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 2px;
 }

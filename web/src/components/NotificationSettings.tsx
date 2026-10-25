@@ -11,7 +11,7 @@ import {
   type NotificationState,
 } from "../lib/notifications";
 import { Icon } from "./Icon";
-import { Group, Notice, Segmented, StatusPill, Switch } from "./ui";
+import { Field, Group, Notice, Segmented, StatusPill, Switch } from "./ui";
 
 const messageModes: { value: NotificationPrefs["messages"]; label: string }[] = [
   { value: "all", label: "All" },
@@ -125,7 +125,9 @@ export function NotificationSettings({ conversations, notify }: { conversations:
           </>
         ) : (
           <div className="inline-form">
-            <input aria-label="Device name" value={name} maxLength={60} onChange={(e) => setName(e.target.value)} />
+            <Field label="Device name" hint="Shown in the device list, so you can tell your devices apart.">
+              <input value={name} maxLength={60} onChange={(e) => setName(e.target.value)} />
+            </Field>
             <button type="button" className="primary" disabled={busy || !name.trim()} onClick={() => void run(async () => {
               const d = await enableThisDevice(state.public_key, name.trim());
               setMine(d.id);
@@ -213,7 +215,11 @@ function DevicePrefs({
   };
 
   const listKey = prefs.messages === "chosen" ? "conversations" : "muted";
-  const shown = conversations.filter((c) => (c.label || "").toLocaleLowerCase().includes(query.toLocaleLowerCase()));
+  // Picked conversations come first so they stay visible in a long inbox.
+  const picked = new Set(prefs[listKey]);
+  const shown = conversations
+    .filter((c) => (c.label || "").toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))
+    .sort((a, b) => Number(picked.has(b.id)) - Number(picked.has(a.id)));
   return (
     <div className="device-prefs">
       <div className="field">
@@ -243,18 +249,18 @@ function DevicePrefs({
           <Switch label="Show message text" hint="Off shows only who wrote." checked={prefs.show_text} onChange={(v) => set("show_text", v)} />
           <div className="field">
             <span className="label">{listKey === "conversations" ? "Notify for" : "Muted conversations"}</span>
-            {conversations.length > 8 && <input type="search" aria-label="Filter conversations" placeholder="Filter" value={query} onChange={(e) => setQuery(e.target.value)} />}
-            <div className="chips" role="group" aria-label={listKey === "conversations" ? "Conversations to notify for" : "Muted conversations"}>
+            {conversations.length > 8 && <input type="search" aria-label="Find a conversation" placeholder="Find a conversation" value={query} onChange={(e) => setQuery(e.target.value)} />}
+            <div className="chips chip-picker" role="group" aria-label={listKey === "conversations" ? "Conversations to notify for" : "Muted conversations"}>
               {shown.map((c) => {
-                const on = prefs[listKey].includes(c.id);
+                const on = picked.has(c.id);
                 return (
-                  <button key={c.id} type="button" className={"chip" + (on ? " on" : "")} aria-pressed={on} onClick={() => toggle(listKey, c.id)}>
+                  <button key={c.id} type="button" className={"chip" + (on ? " on" : "")} aria-pressed={on} title={c.label || "Conversation"} onClick={() => toggle(listKey, c.id)}>
                     {on && <Icon name="check" size={13} />}
-                    {c.label || "Conversation"}
+                    <span className="chip-label">{c.label || "Conversation"}</span>
                   </button>
                 );
               })}
-              {shown.length === 0 && <span className="muted">No conversations loaded yet.</span>}
+              {shown.length === 0 && <span className="muted">{conversations.length ? "No conversation matches." : "No conversations loaded yet."}</span>}
             </div>
           </div>
         </>
