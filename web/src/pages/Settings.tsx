@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
+import { NotificationSettings } from "../components/NotificationSettings";
 import {
   api,
   defaultAttachmentLimits,
@@ -21,6 +22,7 @@ const sections = [
   { id: "providers", label: "Providers", icon: "key" },
   { id: "limits", label: "Limits & quiet hours", icon: "gauge" },
   { id: "inbox", label: "Messages & privacy", icon: "inbox" },
+  { id: "notifications", label: "Notifications", icon: "bell" },
   { id: "devices", label: "Devices", icon: "phone" },
   { id: "backup", label: "Import & export", icon: "download" },
 ] as const;
@@ -88,6 +90,9 @@ export function SettingsPage({
         {section === "limits" && <LimitsSection {...shared} />}
         {section === "inbox" && (
           <InboxSection {...shared} conversations={conversations} />
+        )}
+        {section === "notifications" && (
+          <NotificationSettings conversations={conversations} notify={notify} />
         )}
         {section === "devices" && <DevicesSection {...shared} state={state} />}
         {section === "backup" && <BackupSection {...shared} />}

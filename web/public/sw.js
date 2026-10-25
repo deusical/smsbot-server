@@ -78,3 +78,43 @@ self.addEventListener("fetch", (event) => {
   else if (url.pathname.startsWith("/assets/")) event.respondWith(cacheFirst(request));
   else event.respondWith(networkFirst(event, request));
 });
+
+// Web Push. Every push must show a notification, so a malformed payload
+// still shows a plain one. The tag groups notifications per conversation or
+// alert; a newer one replaces the older and alerts again.
+self.addEventListener("push", (event) => {
+  let p = {};
+  try {
+    p = event.data ? event.data.json() : {};
+  } catch (e) {
+    p = {};
+  }
+  event.waitUntil(
+    self.registration.showNotification(p.title || "SmsBot", {
+      body: p.body || "",
+      tag: p.tag || undefined,
+      renotify: !!p.tag,
+      icon: "/icons/icon-192.png",
+      data: { url: p.url || "/" },
+    }),
+  );
+});
+
+// A tap focuses an open dashboard and tells it where to go, or opens one.
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const target = new URL((event.notification.data && event.notification.data.url) || "/", self.location.origin);
+  if (target.origin !== self.location.origin) return;
+  event.waitUntil(
+    (async () => {
+      const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+      const open = windows.find((w) => new URL(w.url).origin === self.location.origin);
+      if (open) {
+        await open.focus();
+        open.postMessage({ type: "open", url: target.pathname + target.search });
+        return;
+      }
+      await self.clients.openWindow(target.href);
+    })(),
+  );
+});

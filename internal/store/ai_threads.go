@@ -46,7 +46,10 @@ func (s *Store) migrateAIThreads() error {
 	if err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+	return s.migrate()
 }
 func (s *Store) sealAI(scope string, v any) (string, error) {
 	b, err := json.Marshal(v)

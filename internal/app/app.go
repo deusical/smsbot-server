@@ -10,6 +10,7 @@ import (
 	"github.com/deusical/smsbot-server/internal/bot"
 	"github.com/deusical/smsbot-server/internal/collection"
 	"github.com/deusical/smsbot-server/internal/history"
+	"github.com/deusical/smsbot-server/internal/notify"
 	"github.com/deusical/smsbot-server/internal/store"
 	"github.com/deusical/smsbot-server/internal/transport"
 	"sync"
@@ -24,6 +25,7 @@ type Service struct {
 	Collection *collection.Service
 	History    *history.Service
 	Archive    *archive.Service
+	Notify     *notify.Service
 }
 
 // PrepareStore recovers sends interrupted by the last shutdown and pauses
@@ -56,7 +58,7 @@ func New(s *store.Store, t transport.Transport, archiveRoot string) *Service {
 		cfg, err := e.Configuration()
 		return cfg.Settings.RetentionDays, err
 	}
-	return &Service{Store: s, Transport: t, Engine: e, Collection: c, History: c.History, Archive: c.Archive}
+	return &Service{Store: s, Transport: t, Engine: e, Collection: c, History: c.History, Archive: c.Archive, Notify: notify.New(s, t, "")}
 }
 
 // Init runs one-time startup work in order: collection publishes consent and
@@ -113,6 +115,7 @@ func (a *Service) Start(ctx context.Context, events EventSource, dispatchFailed 
 	w.start(func() { a.Collection.RunCapture(ctx) })
 	w.start(func() { a.Archive.Run(ctx) })
 	w.start(func() { a.History.Run(ctx) })
+	w.start(func() { a.Notify.Run(ctx) })
 	if events != nil {
 		w.start(func() {
 			events.Run(ctx, a.ingest(ctx), func() { _ = e.Pause(true) }, a.receipt, e.ConnectionInterrupted)

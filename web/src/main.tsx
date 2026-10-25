@@ -96,6 +96,33 @@ function App() {
     // Phones scroll the workspace rather than the document.
     document.getElementById("workspace")?.scrollTo(0, 0);
   }
+  // Notifications link to a page or conversation: "/?open=conversation&id=…".
+  // A tap opens the dashboard at that link, or messages an open one.
+  const navigateRef = useRef(navigate);
+  navigateRef.current = navigate;
+  useEffect(() => {
+    if (!signedIn) return;
+    const open = (search: string) => {
+      const params = new URLSearchParams(search);
+      const target = params.get("open");
+      if (target === "conversation" && params.get("id")) {
+        navigateRef.current("Conversations");
+        setSelected(params.get("id")!);
+      } else if (target === "activity") navigateRef.current("Activity");
+      else if (target === "settings") navigateRef.current("Settings");
+      else if (target === "home") navigateRef.current("Home");
+    };
+    if (window.location.search) {
+      open(window.location.search);
+      window.history.replaceState(null, "", "/");
+    }
+    const onMessage = (event: MessageEvent) => {
+      if (event.data?.type === "open" && typeof event.data.url === "string")
+        open(new URL(event.data.url, window.location.origin).search);
+    };
+    navigator.serviceWorker?.addEventListener("message", onMessage);
+    return () => navigator.serviceWorker?.removeEventListener("message", onMessage);
+  }, [signedIn]);
   async function act(fn: () => Promise<unknown>, refreshAfter = true) {
     setBusy(true);
     setError("");

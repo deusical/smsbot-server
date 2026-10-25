@@ -98,11 +98,14 @@ func (s *Store) migrate() error {
 	if e := s.DB.QueryRow("PRAGMA user_version").Scan(&version); e != nil {
 		return e
 	}
-	if version > 7 {
+	if version > 8 {
 		return errors.New("database is newer than this service")
 	}
-	if version == 7 {
+	if version == 8 {
 		return nil
+	}
+	if version == 7 {
+		return s.migratePush()
 	}
 	if version == 6 {
 		return s.migrateAIThreads()

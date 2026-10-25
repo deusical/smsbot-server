@@ -1170,6 +1170,84 @@ paths:
         '206': {description: Requested byte range}
         '409': {description: Job incomplete or no longer available}
 
+  /notifications:
+    get:
+      summary: Web Push application server key and registered devices (capability push_notifications)
+      description: Devices never include their push endpoint or keys. Each device has its own notification settings.
+      responses:
+        '200':
+          description: Notification state
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [public_key, devices]
+                properties:
+                  public_key: {type: string, description: 'VAPID public key, base64url; generated once and kept'}
+                  devices: {type: array, items: {$ref: '#/components/schemas/NotificationDevice'}}
+        '500': {description: Keys or devices could not be read}
+        '503': {description: Notifications not wired in this process}
+  /notifications/devices:
+    post:
+      summary: Register this browser's push subscription
+      description: >-
+        The device ID derives from the endpoint, so registering again refreshes keys and keeps the
+        label, settings and creation time. A new device starts with all messages and every alert on.
+        With existing_only, a device that is not registered (for example removed from another device)
+        is not re-created and the response is 404.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [endpoint, keys]
+              properties:
+                endpoint: {type: string, maxLength: 2048, description: 'HTTPS push service URL; local, private and tailnet hosts are refused'}
+                keys:
+                  type: object
+                  required: [p256dh, auth]
+                  properties:
+                    p256dh: {type: string, maxLength: 200}
+                    auth: {type: string, maxLength: 100}
+                label: {type: string, maxLength: 60, description: 'Empty keeps the current label'}
+                existing_only: {type: boolean, default: false}
+      responses:
+        '200': {description: Device, content: {application/json: {schema: {$ref: '#/components/schemas/NotificationDevice'}}}}
+        '400': {description: Invalid subscription}
+        '404': {description: existing_only and the device is not registered}
+  /notifications/devices/{id}:
+    parameters:
+    - {name: id, in: path, required: true, schema: {type: string}}
+    put:
+      summary: Change one device's name and notification settings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [label, prefs]
+              properties:
+                label: {type: string, maxLength: 60}
+                prefs: {$ref: '#/components/schemas/NotificationPrefs'}
+      responses:
+        '200': {description: Device, content: {application/json: {schema: {$ref: '#/components/schemas/NotificationDevice'}}}}
+        '400': {description: Invalid settings}
+        '404': {description: Unknown device}
+    delete:
+      summary: Stop notifications for a device
+      responses:
+        '200': {description: Removed}
+        '404': {description: Unknown device}
+  /notifications/devices/{id}/test:
+    post:
+      summary: Send a sample notification to one device
+      responses:
+        '200': {description: Accepted by the push service}
+        '404': {description: Unknown device}
+        '502': {description: 'Push service refused (test_not_delivered) or no longer knows the device (device_unsubscribed, which also removes it)'}
+
 components:
   securitySchemes:
     browserSession:
@@ -1177,6 +1255,25 @@ components:
       in: cookie
       name: smsbot_session
   schemas:
+    NotificationPrefs:
+      type: object
+      required: [messages]
+      properties:
+        messages: {type: string, enum: [all, bot_on, chosen, off], description: 'Which incoming messages notify; alerts are separate'}
+        conversations: {type: array, maxItems: 1000, items: {type: string}, description: 'Conversation IDs notified when messages is chosen'}
+        muted: {type: array, maxItems: 1000, items: {type: string}, description: 'Conversation IDs never notified'}
+        show_text: {type: boolean, description: 'Include message text; otherwise only the sender is shown'}
+        approvals: {type: boolean, description: 'A reply awaits approval'}
+        problems: {type: boolean, description: 'A reply failed or its delivery is uncertain'}
+        connection: {type: boolean, description: 'The phone is unreachable for two minutes, and when it returns'}
+    NotificationDevice:
+      type: object
+      required: [id, label, created, prefs]
+      properties:
+        id: {type: string}
+        label: {type: string}
+        created: {type: string, format: date-time}
+        prefs: {$ref: '#/components/schemas/NotificationPrefs'}
     State:
       type: object
       required:

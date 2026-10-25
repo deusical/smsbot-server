@@ -1,6 +1,7 @@
 const paths: Record<string, string> = {
  info: "M12 11v6m0-10v.01M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z",
   archive: "M3 4h18v5H3V4Zm2 5v12h14V9M9 13h6",
+  bell: "M6 8a6 6 0 1 1 12 0c0 7 3 9 3 9H3s3-2 3-9Zm4 13a2 2 0 0 0 4 0",
   home: "M3 10.5 12 3l9 7.5M5 9v12h14V9M9 21v-8h6v8",
   conversations:
     "M21 11.5a8.5 8.5 0 0 1-8.5 8.5H4l-1 1 1-5.5A8.5 8.5 0 1 1 21 11.5Z",

@@ -50,6 +50,13 @@ pair a real account.
   any context you opted in go to OpenRouter or the compatible endpoint you configured;
   cleartext HTTP is allowed only for loopback endpoints. Keys are write-only and never
   returned. Configure only endpoints you trust.
+- **Notifications.** Off until you turn them on for a device. Each notification goes
+  through that browser's push service (Google's for Chrome and Edge), encrypted end to
+  end with keys only the browser holds, so the push service sees when and to which
+  device, never the content. With **Show message text** on, notifications carry the
+  sender's name and the message text; turn it off for a device to send only the
+  sender. Device endpoints and keys are sealed at rest, never returned by the API, and
+  only HTTPS push service hosts are accepted. Notifications never log content.
 - **Sending safety.** Intent is persisted before submission; an uncertain submission is
   never retried automatically; pause cannot retract what was already submitted.
 
