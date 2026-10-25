@@ -8,6 +8,22 @@ func (s *Store) EnrolledParticipant(conv string) (string, bool) {
 	return peer, s.DB.QueryRow("SELECT participant FROM enrollment WHERE conversation=?", conv).Scan(&peer) == nil
 }
 
+// SentByBotIdentity recognizes only exact send transactions or recorded AI
+// answer IDs. Text equality is not proof for a native thread follow-up.
+func (s *Store) SentByBotIdentity(conv, txn, wire string) (bool, error) {
+	if txn != "" {
+		var ours bool
+		if err := s.DB.QueryRow("SELECT EXISTS(SELECT 1 FROM jobs WHERE conversation=? AND txn=? AND command LIKE '!%')", conv, txn).Scan(&ours); err != nil || ours {
+			return ours, err
+		}
+	}
+	if wire == "" {
+		return false, nil
+	}
+	answer, err := s.FindAIParent(conv, wire)
+	return answer != nil, err
+}
+
 // SentByBot reports whether an outgoing message observed from the phone is a
 // command reply this service sent: its transaction names one, or its text
 // matches one of the latest replies sent into conv. Owner commands use it so

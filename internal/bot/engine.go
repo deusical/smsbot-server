@@ -216,7 +216,15 @@ func (e *Engine) Accept(ctx context.Context, m transport.Incoming) (bool, error)
 		if peer, ok = e.Store.EnrolledParticipant(m.ConversationID); !ok {
 			return false, nil
 		}
-		ours, err := e.Store.SentByBot(m.ConversationID, m.TransactionID, m.Text)
+		var ours bool
+		var err error
+		if parent != nil {
+			// A native reply is an explicit follow-up. A genuine owner message can
+			// repeat an earlier answer, so only exact provenance identifies an echo.
+			ours, err = e.Store.SentByBotIdentity(m.ConversationID, m.TransactionID, m.ID)
+		} else {
+			ours, err = e.Store.SentByBot(m.ConversationID, m.TransactionID, m.Text)
+		}
 		if err != nil || ours {
 			return false, err
 		}
