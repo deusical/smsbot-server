@@ -157,7 +157,7 @@ func (e *Engine) SetConfiguration(c Configuration) error {
 		}
 		consented := false
 		for _, current := range c.Commands {
-			if current.Name == previous.Name && current.Memory && current.Enabled {
+			if current.Name == previous.Name && current.Memory && current.Enabled && current.Type == previous.Type {
 				consented = true
 				break
 			}
@@ -166,6 +166,7 @@ func (e *Engine) SetConfiguration(c Configuration) error {
 			if err = e.Store.InvalidateMemory(); err != nil {
 				return err
 			}
+			e.cancelClearedThreadRuns()
 			break
 		}
 	}

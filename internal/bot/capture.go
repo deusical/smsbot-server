@@ -9,6 +9,11 @@ import (
 // Ingest keeps optional collection off the transport control-event consumer.
 // Only failures in the existing command path propagate to its pause handler.
 func (e *Engine) Ingest(ctx context.Context, m transport.Incoming) (bool, error) {
+	if m.Outgoing && m.TransactionID != "" && m.ID != "" && (m.Status == "submitted" || m.Status == "delivered" || m.Status == "read") {
+		if err := e.recordAIAnswer(m); err != nil {
+			return false, err
+		}
+	}
 	if m.ID != "" && !m.Outgoing {
 		first, err := e.Store.FirstObservation(m.ConversationID, m.ID)
 		if err != nil {

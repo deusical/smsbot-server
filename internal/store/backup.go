@@ -146,6 +146,23 @@ func (s *Store) ExportBackup() ([]byte, error) {
 			rows.Close()
 			return nil, e
 		}
+		// Thread ancestry is memory, excluded from filtered backups. Restore never
+		// replays plans, so preserve job/transaction evidence without this snapshot.
+		if v.Plan != "" {
+			raw, err := s.Vault.Open("plan:"+v.ID, v.Plan)
+			if err != nil {
+				rows.Close()
+				return nil, err
+			}
+			var plan Plan
+			if err = json.Unmarshal(raw, &plan); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			if plan.Thread != nil {
+				v.Plan = ""
+			}
+		}
 		b.Jobs = append(b.Jobs, v)
 	}
 	e = rows.Err()

@@ -1394,7 +1394,13 @@ components:
           - ai
           - fixed
         enabled: *id001
-        memory: *id001
+        memory:
+          type: boolean
+          description: >-
+            For the AI ask command, retain encrypted reply-linked threads. Each
+            unquoted ask starts fresh; native replies to its recorded AI answers
+            continue that branch. Other AI commands retain rolling memory.
+            Thread lifetime follows memory_hours and retention_days.
         approval: *id001
         model: *id002
         profile_id: *id002

@@ -156,6 +156,9 @@ func (s *Store) ClearMemory(conv string) error {
 		return err
 	}
 	defer tx.Rollback()
+	if err = clearAIThreads(tx, conv); err != nil {
+		return err
+	}
 	if _, err = tx.Exec("DELETE FROM memory WHERE scope LIKE ?", Hash(conv)+":%"); err != nil {
 		return err
 	}
@@ -197,6 +200,9 @@ func (s *Store) InvalidateMemory() error {
 	err = rows.Err()
 	rows.Close()
 	if err != nil {
+		return err
+	}
+	if err = clearAIThreads(tx, ""); err != nil {
 		return err
 	}
 	if _, err = tx.Exec("DELETE FROM memory"); err != nil {

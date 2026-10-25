@@ -172,8 +172,20 @@ func (e *Engine) validConversation(ctx context.Context, conv, peer string) (bool
 	return false, nil
 }
 func (e *Engine) Accept(ctx context.Context, m transport.Incoming) (bool, error) {
-	// Ordinary chat text never needs a command identity RPC or engine lock.
-	if !strings.HasPrefix(strings.TrimSpace(m.Text), "!") {
+	// Plain chat only enters command handling for an exact local AI-answer reference.
+	text := strings.TrimSpace(m.Text)
+	if text == "" {
+		return false, nil
+	}
+	var parent *store.AIParent
+	if m.Interaction != nil && m.Interaction.ReplyTo != "" && strings.Contains(strings.ToUpper(m.Interaction.Protocol), "RCS") {
+		var err error
+		parent, err = e.Store.FindAIParent(m.ConversationID, m.Interaction.ReplyTo)
+		if err != nil {
+			return false, err
+		}
+	}
+	if !strings.HasPrefix(text, "!") && parent == nil {
 		return false, nil
 	}
 	e.mu.Lock()
@@ -227,7 +239,6 @@ func (e *Engine) Accept(ctx context.Context, m transport.Incoming) (bool, error)
 		return false, nil
 	}
 
-	text := strings.TrimSpace(m.Text)
 	id := store.Hash(m.ConversationID + "\x00" + m.ID)
 	exists, err := e.Store.JobExists(id)
 	if err != nil {
@@ -237,11 +248,17 @@ func (e *Engine) Accept(ctx context.Context, m transport.Incoming) (bool, error)
 		return false, nil
 	}
 	parts := strings.Fields(text)
-	if len(parts) == 0 || !strings.HasPrefix(parts[0], "!") {
+	if len(parts) == 0 {
 		return false, nil
 	}
-	name := strings.TrimPrefix(parts[0], "!")
-	input := strings.TrimSpace(strings.TrimPrefix(text, parts[0]))
+	name, input := "ask", text
+	if strings.HasPrefix(parts[0], "!") {
+		name = strings.TrimPrefix(parts[0], "!")
+		input = strings.TrimSpace(strings.TrimPrefix(text, parts[0]))
+		if name != "ask" && name != "deepseek" {
+			parent = nil
+		}
+	}
 	limitOK, err := e.Store.Limits(e.now().UTC(), cfg.Settings.HourlyLimit, cfg.Settings.DailyLimit, 0, 0)
 	if err != nil || !limitOK {
 		return false, err
@@ -276,6 +293,7 @@ func (e *Engine) Accept(ctx context.Context, m transport.Incoming) (bool, error)
 		if err = e.Store.ClearMemory(m.ConversationID); err != nil {
 			return false, err
 		}
+		e.cancelClearedThreadRuns()
 		p.Reply = "Conversation memory cleared."
 	case "more":
 		if input != "" {
@@ -288,15 +306,25 @@ func (e *Engine) Accept(ctx context.Context, m transport.Incoming) (bool, error)
 			return false, nil
 		}
 		name = cmd.Name
+		// Only the canonical AI ask uses explicit threads. Other command memory stays unchanged.
+		threaded := cmd.Name == "ask" && cmd.Type == "ai"
+		if parent != nil && (!threaded || !cmd.Memory) {
+			return false, nil
+		}
 		p.Memory = cmd.Memory
+		if threaded && !cmd.Memory {
+			p.Memory = false
+		}
 		if p.Memory {
 			p.MemoryEpoch, err = e.Store.MemoryEpoch(m.ConversationID)
 			if err != nil {
 				return false, err
 			}
-			p.Context, err = e.Store.Memory(memoryScope(m.ConversationID, "!"+name, model), e.now())
-			if err != nil {
-				return false, err
+			if !threaded {
+				p.Context, err = e.Store.Memory(memoryScope(m.ConversationID, "!"+name, model), e.now())
+				if err != nil {
+					return false, err
+				}
 			}
 		}
 		p.MemoryHours = cfg.Settings.MemoryHours
@@ -321,6 +349,17 @@ func (e *Engine) Accept(ctx context.Context, m transport.Incoming) (bool, error)
 			p.Model = model
 			p.Instructions = instructions
 			p.Generation, _ = json.Marshal(g)
+			if threaded {
+				if input == "" {
+					p.Model = ""
+					p.Memory = false
+					p.Reply = "Send !ask followed by a question. Reply to an AI answer to continue it."
+				} else if cmd.Memory {
+					if err = e.planAIThread(m, &p, parent, selectedModel, g, cfg.Settings); err != nil {
+						return false, err
+					}
+				}
+			}
 		}
 	}
 	accepted, err := e.Store.Enqueue(id, m.ConversationID, "!"+name, p)
@@ -386,6 +425,17 @@ func (e *Engine) check(ctx context.Context, j store.Job, p store.Plan) (Configur
 	}
 	if p.Owner && !cfg.Settings.OwnerCommands {
 		return cfg, "owner_commands_disabled", nil
+	}
+	if p.Thread != nil {
+		cmd, _, _, _, enabled := resolve(cfg, strings.TrimPrefix(j.Command, "!"))
+		if !enabled || cmd.Type != "ai" || !cmd.Memory {
+			return cfg, "thread_unavailable", nil
+		}
+		if err := e.Store.CheckAIThread(j.ConversationID, p.Participant, j.Command, p, e.now(), cfg.Settings.MemoryHours, cfg.Settings.RetentionDays); errors.Is(err, store.ErrAIThreadUnavailable) {
+			return cfg, "thread_unavailable", nil
+		} else if err != nil {
+			return cfg, "", err
+		}
 	}
 	valid, err := e.validConversation(ctx, j.ConversationID, p.Participant)
 	if err != nil {
@@ -687,14 +737,20 @@ func (e *Engine) submit(ctx context.Context, j store.Job, p store.Plan, cfg Conf
 		}
 	}
 	txn := store.TransactionID()
-	if err = e.Store.Submitting(j.ID, txn); err != nil {
+	if err = e.Store.SubmittingPlan(j.ID, txn, p, e.now()); err != nil {
 		return err
 	}
 	// The send is serialized with pause/enrollment; once invoked its outcome may be uncertain.
 	sendctx, cancelSend := context.WithTimeout(ctx, 30*time.Second)
 	var receipt transport.Receipt
 	var senderr error
-	if p.ReplyTarget != "" {
+	if p.Thread != nil && p.Thread.ReplyWire != "" {
+		if sender, ok := e.Transport.(transport.ReplySender); ok {
+			receipt, senderr = sender.SendReply(sendctx, j.ConversationID, txn, p.Reply, p.Thread.ReplyWire, nil)
+		} else {
+			senderr = transport.ErrNotSubmitted
+		}
+	} else if p.ReplyTarget != "" {
 		if sender, ok := e.Transport.(transport.ReplySender); ok {
 			receipt, senderr = sender.SendReply(sendctx, j.ConversationID, txn, p.Reply, p.ReplyWireTarget, p.Attachments)
 		} else {
@@ -730,6 +786,11 @@ func (e *Engine) submit(ctx context.Context, j store.Job, p store.Plan, cfg Conf
 	if err != nil {
 		return err
 	}
+	if p.Thread != nil && p.Thread.ReplyWire != "" {
+		if err = e.Store.SaveReplyRelationship(txn, j.ConversationID, p.Thread.ReplyWire); err != nil {
+			return err
+		}
+	}
 	if p.ReplyTarget != "" {
 		if err = e.Store.SaveReplyRelationship(txn, j.ConversationID, p.ReplyWireTarget); err != nil {
 			return err
@@ -742,7 +803,7 @@ func (e *Engine) submit(ctx context.Context, j store.Job, p store.Plan, cfg Conf
 	if err = e.Store.RecordSubmitted(txn, origin, p.InboxOwnerOnly); err != nil {
 		return err
 	}
-	if p.Model != "" && p.Memory {
+	if p.Model != "" && p.Memory && p.Thread == nil {
 		cmd, _, _, _, ok := resolve(cfg, strings.TrimPrefix(j.Command, "!"))
 		epoch, epochErr := e.Store.MemoryEpoch(j.ConversationID)
 		if epochErr != nil {
@@ -753,6 +814,11 @@ func (e *Engine) submit(ctx context.Context, j store.Job, p store.Plan, cfg Conf
 			if err = e.Store.Remember(memoryScope(j.ConversationID, j.Command, p.Model), history, e.now().Add(time.Duration(p.MemoryHours)*time.Hour)); err != nil {
 				return err
 			}
+		}
+	}
+	if p.Thread != nil {
+		if err = e.Store.TouchAIThread(j.ID, e.now(), cfg.Settings.MemoryHours, cfg.Settings.RetentionDays); err != nil {
+			return err
 		}
 	}
 	err = e.Store.Complete(j.ID, "submitted", "")
@@ -851,6 +917,9 @@ func (e *Engine) Run(ctx context.Context, report func(error)) {
 			cfg, err := e.Configuration()
 			if err == nil {
 				_, err = e.Store.Retention(cfg.Settings.RetentionDays)
+				if err == nil {
+					err = e.Store.PruneAIThreads(e.now(), cfg.Settings.MemoryHours, cfg.Settings.RetentionDays)
+				}
 			}
 			if err != nil {
 				report(err)
