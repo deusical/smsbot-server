@@ -412,3 +412,62 @@ func TestAskConcurrentSiblingPromptsSnapshotSameParent(t *testing.T) {
 		t.Fatal("concurrent branches mixed context")
 	}
 }
+
+func TestOwnerThreadFollowupMatchingAIAnswerUsesExactProvenance(t *testing.T) {
+	for _, mode := range []string{"new-transaction", "missing-transaction", "bot-transaction", "bot-message-id"} {
+		t.Run(mode, func(t *testing.T) {
+			e, _ := setup(t)
+			arm(t, e)
+			cfg := configureAI(t, e, true, false)
+			cfg.Settings.OwnerCommands = true
+			if err := e.SetConfiguration(cfg); err != nil {
+				t.Fatal(err)
+			}
+			e.Provider = &transcriptProvider{}
+			root := threadPrompt("root", "!ask hello", "")
+			threadAccept(t, e, root)
+			if err := e.Dispatch(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			threadEcho(t, e, root, "answer-root")
+			m := threadPrompt("owner-followup", "AI: hello", "answer-root")
+			m.Outgoing = true
+			m.ParticipantID = "self"
+			m.Status = "submitted"
+			m.TransactionID = "new-owner-transaction"
+			want := true
+			switch mode {
+			case "missing-transaction":
+				m.TransactionID = ""
+			case "bot-transaction":
+				m.Text = "!ask changed bot echo"
+				if err := e.Store.DB.QueryRow("SELECT txn FROM jobs WHERE id=?", store.Hash("demo-chat\x00root")).Scan(&m.TransactionID); err != nil {
+					t.Fatal(err)
+				}
+				want = false
+			case "bot-message-id":
+				m.Text = "!ask changed bot echo"
+				m.ID = "answer-root"
+				m.TransactionID = ""
+				want = false
+			}
+			m.Interaction.UpstreamID = m.ID
+			accepted, err := e.Ingest(context.Background(), m)
+			if err != nil || accepted != want {
+				t.Fatalf("accepted=%t want=%t error=%v", accepted, want, err)
+			}
+			if want {
+				_, p, err := e.Store.JobPlan(store.Hash("demo-chat\x00" + m.ID))
+				if err != nil || !p.Owner || p.Thread == nil || len(p.Context) != 2 || p.Input != "AI: hello" {
+					t.Fatal("followup lost its context", err)
+				}
+				if err = e.Dispatch(context.Background()); err != nil {
+					t.Fatal(err)
+				}
+				if stateOf(t, e, store.Hash("demo-chat\x00"+m.ID)) != "submitted" {
+					t.Fatal("genuine followup was not sent")
+				}
+			}
+		})
+	}
+}
