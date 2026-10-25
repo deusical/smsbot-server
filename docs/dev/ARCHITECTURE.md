@@ -135,3 +135,16 @@ operations described in [BACKUP.md](../BACKUP.md).
 processing, history synchronization, attachments, archive module, reconnection,
 sync scheduling, storage statistics and instant send. The API contract is
 [api/openapi.yaml](../../api/openapi.yaml).
+
+
+## Reply-linked AI threads
+
+AI ask memory uses encrypted thread and exchange records plus a hashed upstream
+answer index, independently of the optional message archive. A root ask has empty
+context; a continuation snapshots only its selected parent's ancestry. Jobs still
+own send state. The exact prepared answer and transaction association are durable
+before submission; upstream echoes register reply targets only by exact chat and
+transaction evidence. Receipt echoes do not extend lifetime repeatedly. No inbox
+or history scan is used to classify a reply. Reset epochs and live command/identity
+checks protect generation and submission. Filtered exports exclude thread tables
+and thread context plans; message-history retention remains separate.

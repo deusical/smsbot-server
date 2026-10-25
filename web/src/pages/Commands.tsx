@@ -448,7 +448,7 @@ function CommandEditor({
         {command.type === "ai" && (
           <Switch
             label="Remember the conversation"
-            hint={`Sends recent messages with this command (last ${settings.memory_hours}h).`}
+            hint={command.name === "ask" ? `Reply to an AI answer to continue its thread (up to ${settings.memory_hours}h inactive). A new !ask starts fresh.` : `Sends recent messages with this command (last ${settings.memory_hours}h).`}
             checked={command.memory}
             onChange={(memory) => onChange({ memory })}
           />

@@ -13,6 +13,7 @@ import (
 	"github.com/deusical/smsbot-server/internal/store"
 	"github.com/deusical/smsbot-server/internal/transport"
 	"sync"
+	"time"
 )
 
 // Service is the assembled application.
@@ -73,6 +74,9 @@ func (a *Service) Init() error {
 		return err
 	}
 	_, err = a.Store.Retention(cfg.Settings.RetentionDays)
+	if err == nil {
+		err = a.Store.PruneAIThreads(time.Now(), cfg.Settings.MemoryHours, cfg.Settings.RetentionDays)
+	}
 	return err
 }
 

@@ -35,6 +35,7 @@ type Job struct {
 	RequestedReasoning string   `json:"requested_reasoning,omitempty"`
 }
 type Plan struct {
+	Thread          *AIThreadPlan   `json:"thread,omitempty"`
 	ReplyTarget     string          `json:"reply_target,omitempty"`
 	ReplyWireTarget string          `json:"reply_wire_target,omitempty"`
 	Mutation        *MutationIntent `json:"mutation,omitempty"`
@@ -97,11 +98,14 @@ func (s *Store) migrate() error {
 	if e := s.DB.QueryRow("PRAGMA user_version").Scan(&version); e != nil {
 		return e
 	}
-	if version > 6 {
+	if version > 7 {
 		return errors.New("database is newer than this service")
 	}
-	if version == 6 {
+	if version == 7 {
 		return nil
+	}
+	if version == 6 {
+		return s.migrateAIThreads()
 	}
 	if version == 5 {
 		tx, err := s.DB.Begin()
@@ -116,7 +120,10 @@ func (s *Store) migrate() error {
 		if err != nil {
 			return err
 		}
-		return tx.Commit()
+		if err = tx.Commit(); err != nil {
+			return err
+		}
+		return s.migrate()
 	}
 	if version == 4 {
 		tx, err := s.DB.Begin()
@@ -309,6 +316,11 @@ func (s *Store) Enqueue(id, conv, command string, p Plan) (bool, error) {
 	if e != nil {
 		return false, e
 	}
+	if n == 1 && p.Thread != nil {
+		if err := s.enqueueAIExchange(tx, id, conv, command, p, time.Now()); err != nil {
+			return false, err
+		}
+	}
 	if n == 1 && p.Mutation != nil {
 		b, err := json.Marshal(p.Mutation)
 		if err != nil {
@@ -349,15 +361,31 @@ func (s *Store) Next() (Job, Plan, error) {
 	return j, p, e
 }
 func (s *Store) Submitting(id, txn string) error {
-	r, e := s.DB.Exec("UPDATE jobs SET state='submitting',txn=? WHERE id=? AND state='queued'", txn, id)
-	if e != nil {
-		return e
+	return s.SubmittingPlan(id, txn, Plan{}, time.Now())
+}
+func (s *Store) SubmittingPlan(id, txn string, p Plan, now time.Time) error {
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return err
 	}
-	n, e := r.RowsAffected()
+	defer tx.Rollback()
+	if p.Thread != nil {
+		if err = s.prepareAIAnswer(tx, id, txn, p, now); err != nil {
+			return err
+		}
+	}
+	r, err := tx.Exec("UPDATE jobs SET state='submitting',txn=? WHERE id=? AND state='queued'", txn, id)
+	if err != nil {
+		return err
+	}
+	n, err := r.RowsAffected()
+	if err != nil {
+		return err
+	}
 	if n != 1 {
 		return errors.New("job is no longer queued")
 	}
-	return e
+	return tx.Commit()
 }
 func (s *Store) Complete(id, state, code string) error {
 	_, e := s.DB.Exec("UPDATE jobs SET state=?,code=?,plan='' WHERE id=?", state, code, id)

@@ -169,7 +169,19 @@ func (e *Engine) ComposeInboxFiles(ctx context.Context, conv, text, requestID st
 // historical for routing. The phone reports a sent message again at each
 // status change, and only the first report may start an owner command.
 func (e *Engine) commandSighting(m transport.Incoming) transport.Incoming {
-	if m.Outgoing && m.ID != "" && !m.Historical && strings.HasPrefix(strings.TrimSpace(m.Text), "!") {
+	if !m.Outgoing || m.ID == "" || m.Historical {
+		return m
+	}
+	command := strings.HasPrefix(strings.TrimSpace(m.Text), "!")
+	if !command && m.Interaction != nil && m.Interaction.ReplyTo != "" {
+		parent, err := e.Store.FindAIParent(m.ConversationID, m.Interaction.ReplyTo)
+		if err != nil {
+			m.Historical = true
+			return m
+		}
+		command = parent != nil
+	}
+	if command {
 		first, err := e.Store.FirstSighting(m.ConversationID, m.ID)
 		m.Historical = err != nil || !first
 	}

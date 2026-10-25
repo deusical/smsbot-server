@@ -90,6 +90,30 @@ goes to that conversation. The daily spend control is a
 conservative reported-spend threshold, not a billing guarantee; unknown pricing blocks
 further AI use once it is on.
 
+### Continuing an AI conversation
+
+For the AI `ask` command, turn on **Remember the conversation** to keep encrypted
+AI threads across restarts. Each unquoted `!ask` starts fresh. Use the native Reply
+action on an AI answer to continue it; the follow-up does not need `!ask`.
+Replying to an older answer branches from that point, excluding later discussion.
+Ordinary chat, copied quotations and replies to manual/fixed replies do not invoke AI.
+The legacy `!deepseek` alias follows the same rules as `!ask`.
+
+Follow-ups require reliable native reply metadata (currently RCS). Without it,
+send a new `!ask`. Text-only, freshness, enrollment, pause, quiet-hours, approval
+and spending rules still apply. Owner follow-ups require Commands from your phone.
+Turning memory off keeps new asks stateless. Other AI commands keep their existing
+rolling-memory behavior.
+
+Threads expire after the configured memory window without a successful answer
+(default 24 hours), with an absolute cap from creation equal to bot retention
+(default seven days). The model receives the newest complete ancestor exchanges
+that fit a bounded context budget; it does not have unlimited recall. Changing
+models preserves an active thread's transcript. `!new` clears AI context for the
+chat and invalidates unsent thread requests, without deleting archived messages.
+Deleted answers no longer trigger plain follow-ups. Thread context does not
+require full archive collection and is excluded from filtered backups/exports.
+
 ## Activity
 
 Filters (all, needs approval, in progress, sent, problems) and search. Rows expand to show
