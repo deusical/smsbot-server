@@ -1,6 +1,7 @@
 /* ---------- conversations ---------- */
 .page-conversations .workspace {
   height: 100vh;
+  height: 100dvh;
   display: flex;
   flex-direction: column;
   padding-bottom: 20px;
@@ -39,6 +40,7 @@
 .conversation-list {
   flex: 1;
   overflow-y: auto;
+  overscroll-behavior: contain;
   list-style: none;
   margin: 0;
   padding: 0 8px 8px;
@@ -155,6 +157,7 @@
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 20px 24px 12px;
   display: flex;
   flex-direction: column;
@@ -267,7 +270,7 @@
   height: 28px;
   border-radius: 99px;
   font-size: 12px;
-  box-shadow: var(--shadow-pop);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.16);
 }
 .history-end {
   flex-shrink: 0;

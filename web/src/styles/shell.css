@@ -9,6 +9,7 @@
   display: grid;
   grid-template-columns: var(--rail-w) minmax(0, 1fr);
   min-height: 100vh;
+  min-height: 100dvh;
 }
 .skip-link {
   position: absolute;
@@ -27,6 +28,7 @@
   position: sticky;
   top: 0;
   height: 100vh;
+  height: 100dvh;
   display: flex;
   flex-direction: column;
   gap: 22px;

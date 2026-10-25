@@ -114,6 +114,11 @@ test.describe("phone layout", () => {
     const box = page.getByLabel("Message", { exact: true });
     await expect(box).toBeVisible();
     await expect(nav).toBeHidden();
+    // The thread scrolls inside itself; the page behind it never moves, so the
+    // header cannot slide away when the browser bar changes the viewport.
+    expect(
+      await page.evaluate(() => getComputedStyle(document.documentElement).overflowY),
+    ).toBe("hidden");
     // Touch keyboards: Enter adds a line rather than sending.
     await box.fill("first line");
     await box.press("Enter");
