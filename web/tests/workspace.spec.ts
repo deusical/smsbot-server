@@ -456,6 +456,13 @@ for (const viewport of [
           }).length,
       );
       expect(clipped).toBe(0);
+      // Icon-only buttons are circles: equal sides at every size.
+      const uneven = await page.locator("button.icon").evaluateAll((buttons) =>
+        buttons
+          .map((button) => button.getBoundingClientRect())
+          .filter((r) => r.width > 2 && Math.abs(r.width - r.height) > 0.5).length,
+      );
+      expect(uneven).toBe(0);
       await page.screenshot({
         path: `test-results/ui-${viewport.name}-${screen.toLowerCase()}.png`,
         animations: "disabled",

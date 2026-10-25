@@ -78,17 +78,23 @@ export function MessageActions({message, conversation, label, writable, eligibil
   }
   // Touch screens have no hover: tapping the bubble itself opens the menu.
   const showRef = useRef(show); showRef.current = show;
+  // Ask for the actions as the finger lands, so they are usually ready when the menu opens.
+  const prefetchRef = useRef(() => void capabilities()); prefetchRef.current = () => void capabilities();
   useEffect(() => {
     const bubble = anchor.current?.closest<HTMLElement>(".bubble");
     if (!bubble) return;
+    function press(e: PointerEvent) {
+      if (e.pointerType === "touch" && !(e.target as HTMLElement).closest("button, a, input, textarea, select, video, audio, summary")) prefetchRef.current();
+    }
     function tap(e: MouseEvent) {
       if (!window.matchMedia("(hover: none)").matches) return;
       if ((e.target as HTMLElement).closest("button, a, input, textarea, select, video, audio, summary")) return;
       if (window.getSelection()?.toString()) return;
       showRef.current();
     }
+    bubble.addEventListener("pointerdown", press);
     bubble.addEventListener("click", tap);
-    return () => bubble.removeEventListener("click", tap);
+    return () => {bubble.removeEventListener("pointerdown", press); bubble.removeEventListener("click", tap);};
   }, []);
   // Place the menu beside the message, never on top of it: below when it fits,
   // otherwise above, otherwise to the side. Phones use a bottom sheet instead and
@@ -173,7 +179,7 @@ export function MessageActions({message, conversation, label, writable, eligibil
     void post({request_id: crypto.randomUUID(), emoji, operation, version: caps.version, state: "posting"});
   }
   return <>
-    <button ref={anchor} type="button" className="message-options icon ghost" aria-label="Message actions" aria-haspopup="dialog" aria-expanded={open} aria-busy={false} onClick={show}><Icon name="more" size={18}/></button>
+    <button ref={anchor} type="button" className="message-options icon ghost" aria-label="Message actions" aria-haspopup="dialog" aria-expanded={open} aria-busy={false} onPointerDown={() => prefetchRef.current()} onClick={show}><Icon name="more" size={18}/></button>
     {!!message.reactions?.length && <div className="reaction-chips" role="group" aria-label="Reactions">
       {message.reactions.map((r, i) => <button key={`${r.emoji}-${i}`} type="button" className={`reaction-chip${r.mine ? " mine" : ""}`} aria-label={`${r.unsupported ? "Unsupported reaction" : r.emoji}: ${r.mine ? "You" : label}${r.count > 1 ? ` and ${r.mine ? label : "you"}` : ""}`} title={`${r.mine ? "You" : label}${r.count > 1 ? ` and ${r.mine ? label : "you"}` : ""}`} onClick={show}>{r.unsupported ? "◌" : r.emoji}{r.count > 1 && <span>{r.count}</span>}</button>)}
     </div>}

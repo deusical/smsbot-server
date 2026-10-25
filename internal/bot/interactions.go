@@ -39,7 +39,11 @@ func (e *Engine) replyTarget(ctx context.Context, c transport.Conversation, targ
 	}
 	return v, nil
 }
-func (e *Engine) actionPolicy(ctx context.Context, conv, target string) (MessageActions, transport.Conversation, error) {
+
+// actionPolicy decides which actions a message allows. With live false it may
+// use the conversation record the transport already holds, which is enough to
+// show the menu; anything that acts must pass live true.
+func (e *Engine) actionPolicy(ctx context.Context, conv, target string, live bool) (MessageActions, transport.Conversation, error) {
 	a := MessageActions{EditReason: "editing_unavailable_in_companion_transport"}
 	v, err := e.Store.Interaction(conv, target)
 	if err != nil {
@@ -68,9 +72,15 @@ func (e *Engine) actionPolicy(ctx context.Context, conv, target string) (Message
 		a.Reason = "collection_or_transport_unavailable"
 		return a, transport.Conversation{}, nil
 	}
-	c, err := e.lookupConversation(ctx, conv)
-	if err != nil {
-		return a, c, err
+	var c transport.Conversation
+	cached := false
+	if cache, ok := e.Transport.(transport.CachedLookup); ok && !live {
+		c, cached = cache.CachedConversation(conv)
+	}
+	if !cached {
+		if c, err = e.lookupConversation(ctx, conv); err != nil {
+			return a, c, err
+		}
 	}
 	archive, err := e.Store.Archive(conv)
 	if err != nil || archive.Conversation.ParticipantID != c.ParticipantID || !settings.Allows(c) || c.Group || !c.Writable || !isRCS(c.Protocol) {
@@ -101,10 +111,11 @@ func (e *Engine) actionPolicy(ctx context.Context, conv, target string) (Message
 	}
 	return a, c, nil
 }
+
+// MessageActions only reads, so it neither waits for a send holding the
+// engine lock nor asks the phone again; QueueReaction re-checks both.
 func (e *Engine) MessageActions(ctx context.Context, conv, target string) (MessageActions, error) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	a, _, err := e.actionPolicy(ctx, conv, target)
+	a, _, err := e.actionPolicy(ctx, conv, target, false)
 	return a, err
 }
 func validEmoji(s string) bool {
@@ -142,7 +153,7 @@ func (e *Engine) QueueReaction(ctx context.Context, conv, target, emoji, operati
 	if !errors.Is(err, sql.ErrNoRows) {
 		return "", err
 	}
-	a, c, err := e.actionPolicy(ctx, conv, target)
+	a, c, err := e.actionPolicy(ctx, conv, target, true)
 	if err != nil {
 		return "", err
 	}

@@ -92,11 +92,30 @@ func (g *Google) LookupConversation(ctx context.Context, id string) (Conversatio
 		return Conversation{}, errors.New("ineligible_conversation")
 	}
 	g.cacheDetail(c)
+	return detailConversation(id, c), nil
+}
+
+// CachedConversation projects the last phone record seen for id, from a
+// lookup, the conversation list or a phone update.
+func (g *Google) CachedConversation(id string) (Conversation, bool) {
+	if !g.Ready() {
+		return Conversation{}, false
+	}
+	g.mu.Lock()
+	c := g.conversations[id]
+	g.mu.Unlock()
+	if c == nil || c.GetConversationID() != id {
+		return Conversation{}, false
+	}
+	return detailConversation(id, c), true
+}
+
+func detailConversation(id string, c *gmproto.Conversation) Conversation {
 	label := c.GetName()
 	if label == "" {
 		label = "Individual conversation"
 	}
-	return withListState(Conversation{ID: id, ParticipantID: peer(c), Label: label, Protocol: c.GetType().String(), Group: c.GetIsGroupChat(), Writable: eligible(c)}, c), nil
+	return withListState(Conversation{ID: id, ParticipantID: peer(c), Label: label, Protocol: c.GetType().String(), Group: c.GetIsGroupChat(), Writable: eligible(c)}, c)
 }
 
 func (g *Google) Conversations(ctx context.Context) ([]Conversation, error) {
