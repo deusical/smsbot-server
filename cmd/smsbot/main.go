@@ -424,6 +424,8 @@ func (o *options) serve(s *store.Store, v *vault.Vault, sessionPath string) erro
 		defer google.Close()
 	}
 	service := app.New(s, t, filepath.Join(filepath.Dir(s.Path), "archive"))
+	// Push services require a contact for the sending server: its origin.
+	service.Notify.Subject = origin
 	if e = service.Init(); e != nil {
 		return e
 	}
@@ -432,6 +434,7 @@ func (o *options) serve(s *store.Store, v *vault.Vault, sessionPath string) erro
 	})
 	defer workers.Stop()
 	api := httpapi.New(service.Engine, service.Collection, origin, o.fixture)
+	api.Notify = service.Notify
 	server := &http.Server{Addr: o.listen, Handler: api, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
 	if o.tlsCert != "" {
 		server.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{certificate}}

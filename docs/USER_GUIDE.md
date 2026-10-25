@@ -150,6 +150,7 @@ messages. Importing and viewing history never run old commands.
 | Providers | OpenRouter key and an OpenAI-compatible URL and key (write-only) |
 | Limits & quiet hours | Hourly and daily limits, spend threshold, quiet hours, reply length, commands from your phone |
 | Messages & privacy | Collection, scope, older history, automatic replies, read receipts, attachment limits, retention, memory window |
+| Notifications | Turn notifications on for this device and set what each device is notified about |
 | Devices | Phone connection details, **Sign out everywhere** |
 | Import & export | Recipes: share commands, profiles and settings as a file (never keys) |
 
@@ -158,6 +159,23 @@ changes. A save bar appears when something differs from the saved state; **Save 
 (or Ctrl/Cmd+S) commits it and **Discard** restores the saved state. Provider keys save
 immediately from their own forms. Importing a recipe replaces your configuration with
 every command disabled; review before enabling.
+
+### Notifications
+
+Open **Settings > Notifications** on each device that should be notified, such as your
+computer or a spare phone, and choose **Turn on notifications**. They arrive even when
+SmsBot is closed. Each device has its own settings, which save as you change them:
+
+- **Message notifications:** every incoming message, only conversations with bot
+  replies on, only conversations you choose, or none. Mute conversations you never want
+  to hear about, and turn off **Show message text** to see only who wrote.
+- **Alerts:** a reply waiting for approval, a failed or uncertain reply, and the phone
+  being unreachable for two minutes (and back).
+
+Messages older than ten minutes when SmsBot sees them, such as history caught up after
+an outage, do not notify. Tapping a notification opens its conversation or Activity.
+**Other devices** lists every device that gets notifications; edit or remove any of
+them from here. On iPhone and iPad, add SmsBot to the Home Screen first.
 
 ## Files and attachments
 
