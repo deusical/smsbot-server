@@ -97,6 +97,14 @@ test.describe("phone layout", () => {
   }) => {
     await login(page);
     const nav = page.getByRole("navigation", { name: "Main navigation" });
+    // Every page scrolls inside the workspace, so the browser bar never
+    // collapses mid-scroll and drags the header or bottom navigation with it.
+    expect(
+      await page.evaluate(() => [
+        getComputedStyle(document.documentElement).overflowY,
+        getComputedStyle(document.getElementById("workspace")!).overflowY,
+      ]),
+    ).toEqual(["hidden", "auto"]);
     await nav.getByRole("button", { name: "Conversations" }).tap();
     await expect(nav).toBeVisible();
     // The list only refreshes on events, so enroll through the UI rather than the API.

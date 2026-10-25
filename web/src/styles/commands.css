@@ -128,6 +128,7 @@
 }
 .editor {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 20px;
 }
 .editor-head {
@@ -239,10 +240,13 @@
 /* model picker */
 .model-picker {
   position: relative;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr);
 }
 .picker-trigger {
   justify-content: space-between;
   width: 100%;
+  min-width: 0;
   height: 38px;
   padding: 0 12px;
   background: var(--bg);
@@ -253,8 +257,10 @@
   background: var(--surface);
 }
 .picker-trigger span {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .picker-trigger .placeholder {
   color: var(--faint);
@@ -267,7 +273,7 @@
   top: calc(100% + 6px);
   left: 0;
   right: 0;
-  min-width: 300px;
+  min-width: min(300px, calc(100vw - 32px));
   z-index: 40;
   display: grid;
   border: 1px solid var(--line);
