@@ -370,11 +370,19 @@ input[type="checkbox"] {
   gap: 6px;
 }
 .chip {
+  max-width: 100%;
   height: 30px;
   padding: 0 12px;
   border-radius: 99px;
   font-weight: 500;
   color: var(--muted);
+}
+/* Names without spaces (long numbers, codes) end in an ellipsis instead of
+   widening their container. */
+.chip-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .chip.on {
   background: var(--signal-soft);
