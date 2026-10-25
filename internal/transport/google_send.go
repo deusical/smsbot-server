@@ -24,18 +24,8 @@ func (g *Google) sendParts(ctx context.Context, id, txn, text string, files []me
 	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	parts := []*gmproto.MessageInfo{}
-	if text != "" {
-		parts = append(parts, &gmproto.MessageInfo{Data: &gmproto.MessageInfo_MessageContent{MessageContent: &gmproto.MessageContent{Content: text}}})
-	}
-	for _, file := range files {
-		if ctx.Err() != nil || file.RemoteID == "" || len(file.Key) != 32 {
-			return Receipt{}, ErrNotSubmitted
-		}
-		uploaded := outboundMedia(file)
-		parts = append(parts, &gmproto.MessageInfo{Data: &gmproto.MessageInfo_MediaContent{MediaContent: uploaded}})
-	}
-	if ctx.Err() != nil {
+	parts, ok := outboundParts(text, files)
+	if !ok || ctx.Err() != nil {
 		return Receipt{}, ErrNotSubmitted
 	}
 
@@ -79,4 +69,21 @@ func (g *Google) sendParts(ctx context.Context, id, txn, text string, files []me
 		return Receipt{}, ErrNotSubmitted
 	}
 	return Receipt{State: "submitted", MessageID: txn}, nil
+}
+
+// outboundParts orders files before the caption, as Google Messages Web does.
+// A caption placed first makes the phone send it as plain text and drop the
+// files while still reporting success.
+func outboundParts(text string, files []media.File) ([]*gmproto.MessageInfo, bool) {
+	parts := make([]*gmproto.MessageInfo, 0, len(files)+1)
+	for _, file := range files {
+		if file.RemoteID == "" || len(file.Key) != 32 {
+			return nil, false
+		}
+		parts = append(parts, &gmproto.MessageInfo{Data: &gmproto.MessageInfo_MediaContent{MediaContent: outboundMedia(file)}})
+	}
+	if text != "" {
+		parts = append(parts, &gmproto.MessageInfo{Data: &gmproto.MessageInfo_MessageContent{MessageContent: &gmproto.MessageContent{Content: text}}})
+	}
+	return parts, len(parts) > 0
 }

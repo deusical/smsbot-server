@@ -70,3 +70,20 @@ func TestLongTextPreservedForArchive(t *testing.T) {
 		t.Fatal("archive normalization applied command length ceiling")
 	}
 }
+
+func TestOutboundPartsPutFilesBeforeCaption(t *testing.T) {
+	file := media.File{RemoteID: "upload", Key: make([]byte, 32), Name: "a.png", MIME: "image/png"}
+	parts, ok := outboundParts("caption", []media.File{file, file})
+	if !ok || len(parts) != 3 || parts[0].GetMediaContent() == nil || parts[1].GetMediaContent() == nil || parts[2].GetMessageContent().GetContent() != "caption" {
+		t.Fatalf("parts=%v ok=%v", parts, ok)
+	}
+	if parts, ok = outboundParts("text only", nil); !ok || len(parts) != 1 || parts[0].GetMessageContent().GetContent() != "text only" {
+		t.Fatalf("text parts=%v ok=%v", parts, ok)
+	}
+	if _, ok = outboundParts("caption", []media.File{{Name: "not uploaded"}}); ok {
+		t.Fatal("a file without an upload reference must not be sent")
+	}
+	if _, ok = outboundParts("", nil); ok {
+		t.Fatal("an empty message must not be sent")
+	}
+}
