@@ -7,6 +7,25 @@ import {actionKey, reactionEpoch, reactionAttempt, setReactionAttempt, useReacti
 
 const commonEmoji = ["👍", "❤️", "😂", "😮", "😢", "😡"];
 const moreEmoji = ["👎", "😍", "🎉", "🙏", "🤔", "🥰", "👏", "🔥", "💯", "😊", "✅", "👀", "👍🏻", "👍🏼", "👍🏽", "👍🏾", "👍🏿", "🫶", "🤝", "👩‍💻", "👨‍👩‍👧", "🏳️‍🌈", "🇺🇸", "☕"];
+/** Why Reply and reactions are missing, in the owner's terms. */
+function unavailableReason(reason: string, message: Message): string {
+  switch (reason) {
+    case "message_protocol_unsupported":
+      return message.protocol === "SMS" || message.protocol === "MMS"
+        ? "Text (SMS) messages can't be replied to or reacted to."
+        : "Reply and reactions appear once your phone confirms this message.";
+    case "collection_or_transport_unavailable":
+      return "Your phone isn't connected right now. Try again in a moment.";
+    case "sending_paused":
+      return "Sending is paused. Go live to reply or react.";
+    case "conversation_action_unavailable":
+      return "Replies and reactions aren't available in this conversation.";
+    case "unsupported_owner_reaction":
+      return "Your reaction here can only be changed on your phone.";
+  }
+  return "Reply and reactions aren't available for this message.";
+}
+
 export function MessageActions({message, conversation, label, writable, eligibilityKey, onReply, onChanged}: {
   message: Message; conversation: string; label: string; writable: boolean; eligibilityKey: string;
   onReply: (message: Message) => void; onChanged: () => void;
@@ -73,6 +92,9 @@ export function MessageActions({message, conversation, label, writable, eligibil
     };
   }, [requestKey]);
   function show() {
+    // "Nothing allowed" is usually temporary (an unconfirmed message, a
+    // reconnecting phone, pause), so it is asked again on every open.
+    if (caps && !caps.reply && !caps.react) setCachedCaps(null);
     restoreFocus.current=true;
     setCapsError(""); setActionError(""); setDetails(false); setPicker(false); setOpen(true);
   }
@@ -204,6 +226,7 @@ export function MessageActions({message, conversation, label, writable, eligibil
               {picker && <div className="emoji-picker-expanded"><div className="emoji-grid">{moreEmoji.map(emoji => <button type="button" key={emoji} disabled={busy} aria-label={`React ${emoji}`} onClick={() => react(emoji)}>{emoji}</button>)}</div><div className="emoji-custom"><label>Custom emoji<input value={custom} maxLength={32} onChange={e => setCustom(e.target.value)} placeholder="Paste an emoji"/></label><button type="button" disabled={busy || !custom.trim()} aria-label="Use emoji" onClick={() => react(custom.trim())}>Use</button></div></div>}
             </>}
             {writable && caps?.reply && <button type="button" className="message-action-item" onClick={() => {restoreFocus.current=false;onReply(message);setOpen(false);}}><Icon name="reply" size={17}/>Reply</button>}
+            {writable && caps && !caps.reply && !caps.react && caps.reason && <p role="status" className="hint">{unavailableReason(caps.reason, message)}</p>}
           </>}
           {!!message.text && <button type="button" className="message-action-item" onClick={() => {void navigator.clipboard.writeText(message.text).then(() => setOpen(false)).catch(() => setActionError("Could not copy. Select the message text to copy it."));}}><Icon name="copy" size={17}/>Copy text</button>}
           <button type="button" className="message-action-item" onClick={() => setDetails(true)}><Icon name="info" size={17}/>Details</button>
