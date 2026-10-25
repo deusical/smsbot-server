@@ -267,14 +267,23 @@ label {
   .page-conversations .workspace:has(.messenger.has-thread) {
     padding: 0;
   }
-  /* The messenger fills the visible screen and scrolls inside itself, so the
-     page must not scroll too: on phones that slid the header away and left
-     a blank strip under the composer. */
-  html:has(.page-conversations),
-  html:has(.page-conversations) body {
+  /* Phones scroll inside the app frame, never the document. A scrolling
+     document makes the browser bar collapse and return mid-scroll, which slid
+     the header up and the bottom navigation down. */
+  html:has(.shell),
+  html:has(.shell) body {
     height: 100%;
     overflow: hidden;
     overscroll-behavior: none;
+  }
+  .shell {
+    height: 100dvh;
+    min-height: 0;
+  }
+  .workspace {
+    height: 100dvh;
+    overflow-y: auto;
+    overscroll-behavior: contain;
   }
   /* Filter tabs stay on one row and scroll sideways rather than wrapping. */
   .segmented {

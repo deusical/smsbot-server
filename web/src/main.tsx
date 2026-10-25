@@ -93,6 +93,8 @@ function App() {
       workspace.reload();
     setPage(next);
     window.scrollTo(0, 0);
+    // Phones scroll the workspace rather than the document.
+    document.getElementById("workspace")?.scrollTo(0, 0);
   }
   async function act(fn: () => Promise<unknown>, refreshAfter = true) {
     setBusy(true);
