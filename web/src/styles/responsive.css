@@ -57,24 +57,17 @@
     position: relative;
     flex-direction: column;
     justify-content: center;
-    gap: 3px;
-    height: 54px;
-    padding: 0 2px;
-    font-size: 10.5px;
+    height: 48px;
+    padding: 0;
   }
-  /* "Conversations" does not fit six across; the full name stays in aria-label. */
-  .nav-label[data-short] {
-    font-size: 0;
+  /* Icons only: six labels crowd narrow screens and larger text sizes. Each
+     button keeps its page name in aria-label. */
+  .rail nav .nav-label {
+    display: none;
   }
-  .nav-label[data-short]::after {
-    content: attr(data-short);
-    font-size: 10.5px;
-  }
-  .rail nav button span {
-    max-width: 100%;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+  .rail nav button svg {
+    width: 22px;
+    height: 22px;
   }
   .nav-count {
     position: absolute;
@@ -121,7 +114,7 @@
   }
   .page-conversations .workspace {
     height: 100dvh;
-    padding-bottom: 76px;
+    padding-bottom: 70px;
   }
   .messenger {
     grid-template-columns: 1fr;
@@ -187,7 +180,7 @@
   }
   .savebar {
     left: 50%;
-    bottom: 76px;
+    bottom: 70px;
     max-width: calc(100vw - 20px);
   }
   .savebar-text {
@@ -315,7 +308,7 @@ label {
   .savebar {
     left: max(10px, env(safe-area-inset-left));
     right: max(10px, env(safe-area-inset-right));
-    bottom: calc(76px + env(safe-area-inset-bottom));
+    bottom: calc(70px + env(safe-area-inset-bottom));
     max-width: none;
     translate: none;
   }

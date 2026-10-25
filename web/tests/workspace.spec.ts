@@ -445,8 +445,13 @@ for (const viewport of [
           buttons.filter((button) => {
             const r = button.getBoundingClientRect();
             const label = button.querySelector("span")?.getBoundingClientRect();
+            // Phones show icons only; the page name stays in aria-label.
+            if (button.closest(".rail") && !button.getAttribute("aria-label"))
+              return true;
             return (
-              label && (label.left < r.left - 1 || label.right > r.right + 1)
+              label &&
+              label.width > 0 &&
+              (label.left < r.left - 1 || label.right > r.right + 1)
             );
           }).length,
       );
