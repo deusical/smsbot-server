@@ -267,6 +267,26 @@ label {
   .page-conversations .workspace:has(.messenger.has-thread) {
     padding: 0;
   }
+  /* The messenger fills the visible screen and scrolls inside itself, so the
+     page must not scroll too: on phones that slid the header away and left
+     a blank strip under the composer. */
+  html:has(.page-conversations),
+  html:has(.page-conversations) body {
+    height: 100%;
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
+  /* Filter tabs stay on one row and scroll sideways rather than wrapping. */
+  .segmented {
+    flex-wrap: nowrap;
+    max-width: 100%;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .segmented button {
+    flex: none;
+    white-space: nowrap;
+  }
   .messenger.has-thread {
     border: 0;
     border-radius: 0;
