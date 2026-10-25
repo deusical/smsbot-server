@@ -1185,7 +1185,8 @@ paths:
                 properties:
                   public_key: {type: string, description: 'VAPID public key, base64url; generated once and kept'}
                   devices: {type: array, items: {$ref: '#/components/schemas/NotificationDevice'}}
-        '503': {description: Notifications unavailable}
+        '500': {description: Keys or devices could not be read}
+        '503': {description: Notifications not wired in this process}
   /notifications/devices:
     post:
       summary: Register this browser's push subscription

@@ -3,7 +3,9 @@ package notify
 import (
 	"context"
 	"encoding/json"
+	"net/netip"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -68,13 +70,16 @@ func device(t *testing.T, s *store.Store, label string, prefs store.Notification
 	return p
 }
 
+// incoming stores a message the way phone capture does: private to the
+// owner's inbox (owner_only), with the change feed written by triggers.
 func incoming(t *testing.T, s *store.Store, id, conv, text string, at time.Time) {
 	t.Helper()
-	if err := s.SaveMessageAt(id, conv, "incoming", text, at); err != nil {
+	if err := s.SaveObservedFiles(conv, id, "", "incoming", text, "phone", "", at, nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.DB.Exec("INSERT INTO message_changes(conversation,message) VALUES(?,?)", conv, id); err != nil {
-		t.Fatal(err)
+	var ownerOnly bool
+	if err := s.DB.QueryRow("SELECT owner_only FROM message_meta WHERE message IN (SELECT message FROM message_alias WHERE alias=?) OR message=?", store.Hash(conv+"\x00"+id), store.Hash(conv+"\x00"+id)).Scan(&ownerOnly); err != nil || !ownerOnly {
+		t.Fatalf("captured message is not owner-only as in production: %v %v", ownerOnly, err)
 	}
 }
 
@@ -132,7 +137,7 @@ func TestMessagesFollowEachDevicesOwnSettings(t *testing.T) {
 
 	// A later change to the same message does not notify again.
 	*out = nil
-	if _, err := n.Store.DB.Exec("INSERT INTO message_changes(conversation,message) VALUES('chat-a','m1')"); err != nil {
+	if _, err := n.Store.DB.Exec("INSERT INTO message_changes(conversation,message) VALUES('chat-a',?)", store.Hash("chat-a\x00m1")); err != nil {
 		t.Fatal(err)
 	}
 	if err := n.Tick(context.Background()); err != nil || len(*out) != 0 {
@@ -221,9 +226,69 @@ func TestEndpointValidation(t *testing.T) {
 		"https://router.local/x":                    false,
 		"https://acer.tailddfcef.ts.net:8443/api":   false,
 		"https://user:pass@fcm.googleapis.com/x":    false,
+		"https://[::ffff:127.0.0.1]/x":              false,
+		"https://[::ffff:169.254.169.254]/x":        false,
+		"https://8.8.8.8/x":                         false,
+		"https://app.localhost/x":                   false,
 	} {
 		if ValidEndpoint(raw) != ok {
 			t.Errorf("%s: want %v", raw, ok)
 		}
+	}
+}
+
+// A public-looking name can still resolve to a local address; the push
+// client refuses such destinations when it connects.
+func TestPushClientRefusesNonPublicAddresses(t *testing.T) {
+	for addr, ok := range map[string]bool{
+		"142.250.80.10":    true,
+		"2607:f8b0::200e":  true,
+		"127.0.0.1":        false,
+		"::1":              false,
+		"10.1.2.3":         false,
+		"192.168.1.20":     false,
+		"169.254.169.254":  false,
+		"100.92.5.20":      false,
+		"::ffff:127.0.0.1": false,
+		"0.0.0.0":          false,
+		"fe80::1":          false,
+		"fd00::1":          false,
+	} {
+		if publicAddress(netip.MustParseAddr(addr)) != ok {
+			t.Errorf("%s: want %v", addr, ok)
+		}
+	}
+	_, err := pushClient.Get("https://127.0.0.1:1/")
+	if err == nil || !strings.Contains(err.Error(), "push_destination_not_public") {
+		t.Fatalf("connected to a loopback push destination: %v", err)
+	}
+}
+
+func TestUnreadableMessageDoesNotStopLaterNotifications(t *testing.T) {
+	n, _, out, now := setup(t)
+	device(t, n.Store, "all", store.DefaultNotificationPrefs())
+	n.Tick(context.Background())
+	incoming(t, n.Store, "broken", "chat-a", "Synthetic broken", *now)
+	if _, err := n.Store.DB.Exec("UPDATE messages SET payload='not-sealed' WHERE id=?", store.Hash("chat-a\x00broken")); err != nil {
+		t.Fatal(err)
+	}
+	n.Tick(context.Background())
+	incoming(t, n.Store, "fine", "chat-a", "Synthetic fine", *now)
+	n.Tick(context.Background())
+	if len(*out) != 1 || (*out)[0].payload.Body != "Synthetic fine" || (*out)[0].payload.Title != "New message" {
+		t.Fatalf("sent %v", *out)
+	}
+}
+
+func TestAlertsNameAnUnknownConversationPlainly(t *testing.T) {
+	n, _, out, _ := setup(t)
+	device(t, n.Store, "alerts", store.DefaultNotificationPrefs())
+	n.Tick(context.Background())
+	if _, err := n.Store.DB.Exec("INSERT INTO jobs VALUES('j1','unknown-chat','!ask','failed','2026-01-01T00:00:00Z','','x','')"); err != nil {
+		t.Fatal(err)
+	}
+	n.Tick(context.Background())
+	if len(*out) != 1 || (*out)[0].payload.Body != "!ask in a conversation" {
+		t.Fatalf("sent %v", *out)
 	}
 }

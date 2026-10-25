@@ -141,13 +141,14 @@ func (s *Store) PushSubscriptions() ([]PushSubscription, error) {
 		if err = rows.Scan(&id, &enc); err != nil {
 			return nil, err
 		}
+		// One unreadable device must not stop notifications to the others.
 		b, err := s.Vault.Open("push:"+id, enc)
 		if err != nil {
-			return nil, err
+			continue
 		}
 		var p PushSubscription
-		if err = json.Unmarshal(b, &p); err != nil {
-			return nil, err
+		if json.Unmarshal(b, &p) != nil {
+			continue
 		}
 		out = append(out, p)
 	}
@@ -177,8 +178,10 @@ type NotificationMessage struct {
 // incoming messages among them, oldest first and once each, with the last
 // sequence read so other changes still advance the cursor.
 func (s *Store) MessageChangesAfter(seq int64, limit int) ([]NotificationMessage, int64, error) {
+	// owner_only rows are included: it keeps captured messages out of bot
+	// views, and notifications go only to the owner's own devices.
 	rows, err := s.DB.Query(`SELECT c.seq,coalesce(m.id,''),coalesce(m.conversation,''),coalesce(m.direction,''),coalesce(m.at,''),coalesce(m.payload,''),
- EXISTS(SELECT 1 FROM message_meta WHERE message=m.id AND owner_only=1),EXISTS(SELECT 1 FROM message_attachments a WHERE a.message=m.id)
+ EXISTS(SELECT 1 FROM message_attachments a WHERE a.message=m.id)
 FROM message_changes c LEFT JOIN messages m ON m.id=c.message WHERE c.seq>? ORDER BY c.seq LIMIT ?`, seq, limit)
 	if err != nil {
 		return nil, seq, err
@@ -187,12 +190,11 @@ FROM message_changes c LEFT JOIN messages m ON m.id=c.message WHERE c.seq>? ORDE
 		n         NotificationMessage
 		direction string
 		enc       string
-		ownerOnly bool
 	}
 	var batch []row
 	for rows.Next() {
 		var r row
-		if err = rows.Scan(&r.n.Seq, &r.n.ID, &r.n.Conversation, &r.direction, &r.n.At, &r.enc, &r.ownerOnly, &r.n.Attachments); err != nil {
+		if err = rows.Scan(&r.n.Seq, &r.n.ID, &r.n.Conversation, &r.direction, &r.n.At, &r.enc, &r.n.Attachments); err != nil {
 			rows.Close()
 			return nil, seq, err
 		}
@@ -205,13 +207,15 @@ FROM message_changes c LEFT JOIN messages m ON m.id=c.message WHERE c.seq>? ORDE
 	seen := map[string]bool{}
 	for _, r := range batch {
 		seq = r.n.Seq
-		if r.n.ID == "" || r.direction != "incoming" || r.ownerOnly || seen[r.n.ID] {
+		if r.n.ID == "" || r.direction != "incoming" || seen[r.n.ID] {
 			continue
 		}
 		seen[r.n.ID] = true
+		// An unreadable message is skipped rather than retried forever, which
+		// would stop every later notification.
 		b, err := s.Vault.Open("message:"+r.n.ID, r.enc)
 		if err != nil {
-			return nil, seq, err
+			continue
 		}
 		r.n.Text = string(b)
 		out = append(out, r.n)

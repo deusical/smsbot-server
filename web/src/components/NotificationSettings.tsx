@@ -105,7 +105,7 @@ export function NotificationSettings({ conversations, notify }: { conversations:
           <p className="muted">Loading…</p>
         ) : current ? (
           <>
-            <DevicePrefs device={current} conversations={conversations} onSaved={replace} onError={setError} />
+            <DevicePrefs key={current.id} device={current} conversations={conversations} onSaved={replace} onError={setError} />
             <div className="action-row">
               <button type="button" disabled={busy} onClick={() => void run(async () => {
                 await api(`/notifications/devices/${encodeURIComponent(current.id)}/test`, "POST");
@@ -158,7 +158,7 @@ export function NotificationSettings({ conversations, notify }: { conversations:
                     Remove
                   </button>
                 </div>
-                {editing === d.id && <DevicePrefs device={d} conversations={conversations} onSaved={replace} onError={setError} />}
+                {editing === d.id && <DevicePrefs key={d.id} device={d} conversations={conversations} onSaved={replace} onError={setError} />}
               </li>
             ))}
           </ul>
@@ -187,21 +187,30 @@ function DevicePrefs({
   useEffect(() => {
     saved.current = device;
   }, [device]);
+  // Changes build on the latest edit, not the last render, and a failed save
+  // only reverts when no newer change has been made since.
+  const latest = useRef(device.prefs);
+  const version = useRef(0);
 
   async function save(next: NotificationPrefs, nextLabel = label) {
-    const previous = prefs;
+    const mine = ++version.current;
+    latest.current = next;
     setPrefs(next);
     try {
       const d = await api<NotificationDevice>(`/notifications/devices/${encodeURIComponent(device.id)}`, "PUT", { label: nextLabel.trim(), prefs: next });
-      onSaved(d);
+      if (mine === version.current) onSaved(d);
     } catch {
-      setPrefs(previous);
+      if (mine !== version.current) return;
+      latest.current = saved.current.prefs;
+      setPrefs(saved.current.prefs);
       onError("The setting was not saved. Try again.");
     }
   }
-  const set = <K extends keyof NotificationPrefs>(key: K, value: NotificationPrefs[K]) => void save({ ...prefs, [key]: value });
-  const toggle = (key: "conversations" | "muted", id: string) =>
-    set(key, prefs[key].includes(id) ? prefs[key].filter((x) => x !== id) : [...prefs[key], id]);
+  const set = <K extends keyof NotificationPrefs>(key: K, value: NotificationPrefs[K]) => void save({ ...latest.current, [key]: value });
+  const toggle = (key: "conversations" | "muted", id: string) => {
+    const list = latest.current[key];
+    set(key, list.includes(id) ? list.filter((x) => x !== id) : [...list, id]);
+  };
 
   const listKey = prefs.messages === "chosen" ? "conversations" : "muted";
   const shown = conversations.filter((c) => (c.label || "").toLocaleLowerCase().includes(query.toLocaleLowerCase()));
@@ -214,7 +223,7 @@ function DevicePrefs({
           value={label}
           maxLength={60}
           onChange={(e) => setLabel(e.target.value)}
-          onBlur={() => label.trim() !== saved.current.label && void save(prefs, label)}
+          onBlur={() => label.trim() !== saved.current.label && void save(latest.current, label)}
         />
       </div>
       <div className="field">

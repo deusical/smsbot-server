@@ -7,11 +7,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 	"unicode/utf8"
 
@@ -108,7 +111,7 @@ func (n *Service) webPush(ctx context.Context, sub store.PushSubscription, paylo
 		urgency = webpush.UrgencyHigh
 	}
 	res, err := webpush.SendNotificationWithContext(ctx, payload, &webpush.Subscription{Endpoint: sub.Endpoint, Keys: webpush.Keys{Auth: sub.Auth, P256dh: sub.P256dh}}, &webpush.Options{
-		HTTPClient:      &http.Client{Timeout: 15 * time.Second},
+		HTTPClient:      pushClient,
 		Subscriber:      n.Subject,
 		VAPIDPublicKey:  k.Public,
 		VAPIDPrivateKey: k.Private,
@@ -128,15 +131,48 @@ func (n *Service) webPush(ctx context.Context, sub store.PushSubscription, paylo
 	return false, nil
 }
 
-// ValidEndpoint accepts only HTTPS push service URLs, so a subscription can
-// never point the server at itself or the local network.
+// ValidEndpoint accepts only HTTPS push service URLs on public host names,
+// so a subscription cannot point the server at itself or the local network.
+// pushClient enforces the same at connection time, after DNS resolution.
 func ValidEndpoint(raw string) bool {
 	u, err := url.Parse(raw)
 	if err != nil || u.Scheme != "https" || u.User != nil || len(raw) > 2048 {
 		return false
 	}
 	host := strings.ToLower(u.Hostname())
-	return strings.Contains(host, ".") && !strings.HasSuffix(host, ".local") && !strings.HasSuffix(host, ".internal") && !strings.HasSuffix(host, ".ts.net") && strings.Trim(host, "0123456789.:[]") != ""
+	if net.ParseIP(host) != nil {
+		return false
+	}
+	return strings.Contains(host, ".") && !strings.HasSuffix(host, ".localhost") && !strings.HasSuffix(host, ".local") && !strings.HasSuffix(host, ".internal") && !strings.HasSuffix(host, ".ts.net")
+}
+
+var tailnet = netip.MustParsePrefix("100.64.0.0/10")
+
+// publicAddress reports whether a resolved address may receive pushes.
+func publicAddress(ip netip.Addr) bool {
+	ip = ip.Unmap()
+	return ip.IsValid() && ip.IsGlobalUnicast() && !ip.IsPrivate() && !ip.IsLoopback() && !ip.IsLinkLocalUnicast() && !tailnet.Contains(ip)
+}
+
+// pushClient connects only to public addresses and never through a proxy.
+var pushClient = &http.Client{
+	Timeout: 15 * time.Second,
+	Transport: &http.Transport{
+		Proxy: nil,
+		DialContext: (&net.Dialer{
+			Timeout: 10 * time.Second,
+			Control: func(network, address string, _ syscall.RawConn) error {
+				ap, err := netip.ParseAddrPort(address)
+				if err != nil || !publicAddress(ap.Addr()) {
+					return errors.New("push_destination_not_public")
+				}
+				return nil
+			},
+		}).DialContext,
+		TLSHandshakeTimeout: 10 * time.Second,
+		ForceAttemptHTTP2:   true,
+	},
+	CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 }
 
 func (n *Service) Run(ctx context.Context) {
@@ -198,6 +234,9 @@ func (n *Service) messages(ctx context.Context, subs []store.PushSubscription) e
 				enrolled = true
 			}
 			title := n.label(m.Conversation)
+			if title == "" {
+				title = "New message"
+			}
 			for _, sub := range subs {
 				if !wantsMessage(sub.Prefs, m.Conversation, enrolled) {
 					continue
@@ -254,7 +293,11 @@ func (n *Service) alerts(ctx context.Context, subs []store.PushSubscription, fir
 		if n.jobs[j.ID] == j.State || first {
 			continue
 		}
-		p := Payload{Kind: "alert", Tag: "job:" + j.ID, URL: "/?open=activity", Body: j.Command + " in " + n.label(j.Conversation)}
+		where := n.label(j.Conversation)
+		if where == "" {
+			where = "a conversation"
+		}
+		p := Payload{Kind: "alert", Tag: "job:" + j.ID, URL: "/?open=activity", Body: j.Command + " in " + where}
 		approval := j.State == "awaiting_approval"
 		switch j.State {
 		case "awaiting_approval":
@@ -337,5 +380,5 @@ func (n *Service) label(conv string) string {
 			return v.Label
 		}
 	}
-	return "New message"
+	return ""
 }
