@@ -146,13 +146,6 @@ func (e *Engine) ComposeInboxFiles(ctx context.Context, conv, text, requestID st
 	if paused || !e.Transport.Ready() || quiet(cfg.Settings, e.now()) {
 		return "", errors.New("bot_unavailable")
 	}
-	permitted, err := e.Store.Limits(e.now().UTC(), cfg.Settings.HourlyLimit, cfg.Settings.DailyLimit, 0, 0)
-	if err != nil {
-		return "", err
-	}
-	if !permitted {
-		return "", errors.New("request_limit_reached")
-	}
 	wireTarget := ""
 	if replyTarget != "" {
 		v, err := e.replyTarget(ctx, c, replyTarget)

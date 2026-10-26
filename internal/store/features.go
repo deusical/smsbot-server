@@ -92,16 +92,20 @@ func (s *Store) Usage(id, model string, prompt, completion, reasoning int, cost 
 	_, err := s.DB.Exec("INSERT INTO usage(job,model,prompt_tokens,completion_tokens,reasoning_tokens,cost) VALUES(?,?,?,?,?,?) ON CONFLICT(job) DO UPDATE SET model=excluded.model,prompt_tokens=excluded.prompt_tokens,completion_tokens=excluded.completion_tokens,reasoning_tokens=excluded.reasoning_tokens,cost=excluded.cost", id, model, prompt, completion, reasoning, cost)
 	return err
 }
+// botJobs leaves out what the owner sends by hand: the request limits are for
+// bot replies only.
+const botJobs = "command NOT IN ('manual','reaction')"
+
 func (s *Store) Limits(now time.Time, hourly, daily int, budget float64, reserve float64) (bool, error) {
 	var h, d int
 	var spent float64
 	var unknown int
-	err := s.DB.QueryRow("SELECT count(*) FROM jobs WHERE created>=?", now.Add(-time.Hour).UTC().Format(time.RFC3339Nano)).Scan(&h)
+	err := s.DB.QueryRow("SELECT count(*) FROM jobs WHERE "+botJobs+" AND created>=?", now.Add(-time.Hour).UTC().Format(time.RFC3339Nano)).Scan(&h)
 	if err != nil {
 		return false, err
 	}
 	day := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC).Format(time.RFC3339Nano)
-	err = s.DB.QueryRow("SELECT count(*) FROM jobs WHERE created>=?", day).Scan(&d)
+	err = s.DB.QueryRow("SELECT count(*) FROM jobs WHERE "+botJobs+" AND created>=?", day).Scan(&d)
 	if err != nil {
 		return false, err
 	}

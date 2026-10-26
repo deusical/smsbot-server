@@ -185,13 +185,6 @@ func (e *Engine) QueueReaction(ctx context.Context, conv, target, emoji, operati
 	if quiet(cfg.Settings, e.now()) {
 		return "", errors.New("quiet_hours")
 	}
-	permitted, err := e.Store.Limits(e.now().UTC(), cfg.Settings.HourlyLimit, cfg.Settings.DailyLimit, 0, 0)
-	if err != nil {
-		return "", err
-	}
-	if !permitted {
-		return "", errors.New("request_limit_reached")
-	}
 	intent := &store.MutationIntent{Target: target, WireTarget: v.UpstreamID, Protocol: "RCS", Emoji: emoji, Operation: operation, Version: version}
 	_, err = e.Store.Enqueue(id, conv, "reaction", store.Plan{Participant: c.ParticipantID, Manual: true, InboxOwnerOnly: true, Mutation: intent})
 	return id, err

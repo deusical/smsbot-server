@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestPersistenceAndEncryption(t *testing.T) {
@@ -59,5 +60,29 @@ func TestCredentialRevocationAndExpiry(t *testing.T) {
 	s.AddCredential("fixture-expired", "test", "session", 1)
 	if s.Credential("fixture-expired", "session") || s.Credential("fixture-session", "owner") {
 		t.Fatal("credential scope/expiry")
+	}
+}
+
+func TestRequestLimitsCountBotRepliesOnly(t *testing.T) {
+	v, _ := vault.New(make([]byte, 32))
+	s, err := Open(filepath.Join(t.TempDir(), "test.db"), v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.DB.Close()
+	now := time.Now().UTC()
+	for _, command := range []string{"manual", "manual", "manual", "reaction"} {
+		if _, err := s.Enqueue(ID(), "fixture-chat", command, Plan{Participant: "fixture-peer", Reply: "synthetic", Manual: true}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if ok, err := s.Limits(now, 1, 1, 0, 0); err != nil || !ok {
+		t.Fatalf("messages sent by hand used up the bot's limits: %v %v", ok, err)
+	}
+	if _, err := s.Enqueue(ID(), "fixture-chat", "!ask", Plan{Participant: "fixture-peer", Reply: "synthetic"}); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := s.Limits(now, 1, 5, 0, 0); err != nil || ok {
+		t.Fatalf("a bot reply did not count: %v %v", ok, err)
 	}
 }
