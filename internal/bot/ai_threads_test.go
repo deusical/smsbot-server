@@ -496,6 +496,15 @@ func TestAskReplyingToAnOrdinaryMessageIncludesIt(t *testing.T) {
 		if !strings.Contains(p.Input, "sent by the other person in this chat:\n\"\"\"\nSynthetic owner note") {
 			t.Fatalf("memory=%t input=%q", memory, p.Input)
 		}
+		// A bare !ask on a quoted message responds to it.
+		p = threadAccept(t, e, threadPrompt("ask-bare-quote", "!ask", "human-wire"))
+		if !strings.HasSuffix(p.Input, "Synthetic plans for Saturday\n\"\"\"\n\nNo question was given. Respond to that message.") || p.Model == "" || p.Reply != "" {
+			t.Fatalf("memory=%t bare input=%q reply=%q", memory, p.Input, p.Reply)
+		}
+		p = threadAccept(t, e, threadPrompt("ask-bare-unknown", "!ask", "unknown-wire"))
+		if p.Model != "" || !strings.HasPrefix(p.Reply, "Send !ask followed by a question") {
+			t.Fatalf("memory=%t bare unknown input=%q reply=%q", memory, p.Input, p.Reply)
+		}
 		// Unknown targets and other conversations' messages add nothing.
 		for i, wire := range []string{"unknown-wire", "elsewhere-wire"} {
 			p = threadAccept(t, e, threadPrompt("ask-plain-"+string(rune('a'+i)), "!ask what does this mean", wire))

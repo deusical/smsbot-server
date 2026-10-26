@@ -357,8 +357,11 @@ func (e *Engine) Accept(ctx context.Context, m transport.Incoming) (bool, error)
 			p.Model = model
 			p.Instructions = instructions
 			p.Generation, _ = json.Marshal(g)
-			if parent == nil && input != "" {
-				p.Input = e.quotedInput(m, input)
+			if parent == nil {
+				if quoted, ok := e.quotedInput(m, input); ok {
+					// A bare "!ask" on a quoted message responds to that message.
+					p.Input, input = quoted, quoted
+				}
 			}
 			if threaded {
 				if input == "" {
@@ -394,14 +397,15 @@ const quoteLimit = 2000
 // quotedInput adds the message an AI command natively replies to, so a reply
 // like "!ask what does this mean" can refer to it. Only that one message is
 // added, from the same conversation; without it the question is sent alone.
-func (e *Engine) quotedInput(m transport.Incoming, input string) string {
+// With no question, the AI is asked to respond to the quoted message.
+func (e *Engine) quotedInput(m transport.Incoming, input string) (string, bool) {
 	if m.Interaction == nil || m.Interaction.ReplyTo == "" || !strings.Contains(strings.ToUpper(m.Interaction.Protocol), "RCS") {
-		return input
+		return input, false
 	}
 	_, direction, text, ok, err := e.Store.QuotedMessage(m.ConversationID, m.Interaction.ReplyTo)
 	text = strings.TrimSpace(text)
 	if err != nil || !ok || text == "" {
-		return input
+		return input, false
 	}
 	if r := []rune(text); len(r) > quoteLimit {
 		text = string(r[:quoteLimit]) + "…"
@@ -410,7 +414,11 @@ func (e *Engine) quotedInput(m transport.Incoming, input string) string {
 	if (direction == "outgoing") == m.Outgoing {
 		author = "the person asking"
 	}
-	return "This question replies to an earlier message in the chat, sent by " + author + ":\n\"\"\"\n" + text + "\n\"\"\"\n\nQuestion: " + input
+	quote := "This question replies to an earlier message in the chat, sent by " + author + ":\n\"\"\"\n" + text + "\n\"\"\"\n\n"
+	if input == "" {
+		return quote + "No question was given. Respond to that message.", true
+	}
+	return quote + "Question: " + input, true
 }
 func memoryScope(conv, command, model string) string {
 	return store.Hash(conv) + ":" + store.Hash(command+"\x00"+model)
