@@ -99,6 +99,12 @@ Replying to an older answer branches from that point, excluding later discussion
 Ordinary chat, copied quotations and replies to manual/fixed replies do not invoke AI.
 The legacy `!deepseek` alias follows the same rules as `!ask`.
 
+To ask about a particular message, use the native Reply action on it and write
+`!ask` and your question, such as `!ask what does this mean`. The AI sees that one
+quoted message's text (up to 2,000 characters) with your question, and nothing
+else from the chat. A reply of just `!ask` asks the AI to respond to that message.
+This works with or without **Remember the conversation**.
+
 Follow-ups require reliable native reply metadata (currently RCS). Without it,
 send a new `!ask`. Text-only, freshness, enrollment, pause, quiet-hours, approval
 and spending rules still apply. Owner follow-ups require Commands from your phone.

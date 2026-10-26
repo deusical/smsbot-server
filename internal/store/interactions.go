@@ -245,19 +245,14 @@ func (s *Store) EnrichMessages(conv string, messages []Message) error {
 		if v.ReplyTo != "" {
 			q := &Quote{Text: "Original message unavailable"}
 			m.Quote = q
-			var id, direction, payload string
-			err = s.DB.QueryRow(`SELECT m.id,m.direction,m.payload FROM messages m JOIN message_alias a ON a.message=m.id WHERE m.conversation=? AND a.alias=?`, conv, Hash(conv+"\x00"+v.ReplyTo)).Scan(&id, &direction, &payload)
-			if errors.Is(err, sql.ErrNoRows) {
+			id, direction, body, ok, err := s.QuotedMessage(conv, v.ReplyTo)
+			if err != nil {
+				return err
+			}
+			if !ok {
 				continue
 			}
-			if err != nil {
-				return err
-			}
-			b, err := s.Vault.Open("message:"+id, payload)
-			if err != nil {
-				return err
-			}
-			text := []rune(string(b))
+			text := []rune(body)
 			if len(text) > 180 {
 				text = append(text[:180], '…')
 			}
@@ -268,6 +263,24 @@ func (s *Store) EnrichMessages(conv string, messages []Message) error {
 		}
 	}
 	return nil
+}
+
+// QuotedMessage finds the message a native reply quotes, by its upstream ID,
+// within the same conversation only.
+func (s *Store) QuotedMessage(conv, wire string) (id, direction, text string, ok bool, err error) {
+	var payload string
+	err = s.DB.QueryRow(`SELECT m.id,m.direction,m.payload FROM messages m JOIN message_alias a ON a.message=m.id WHERE m.conversation=? AND a.alias=?`, conv, Hash(conv+"\x00"+wire)).Scan(&id, &direction, &payload)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", "", "", false, nil
+	}
+	if err != nil {
+		return "", "", "", false, err
+	}
+	b, err := s.Vault.Open("message:"+id, payload)
+	if err != nil {
+		return "", "", "", false, err
+	}
+	return id, direction, string(b), true, nil
 }
 func InteractionVersion(v *transport.MessageInteraction) string {
 	if v == nil {
