@@ -7,6 +7,7 @@ import (
 	"github.com/deusical/smsbot-server/internal/store"
 	"github.com/deusical/smsbot-server/internal/transport"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -469,5 +470,38 @@ func TestOwnerThreadFollowupMatchingAIAnswerUsesExactProvenance(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+func TestAskReplyingToAnOrdinaryMessageIncludesIt(t *testing.T) {
+	for _, memory := range []bool{true, false} {
+		e, _ := setup(t)
+		arm(t, e)
+		configureAI(t, e, memory, false)
+		at := time.Now()
+		if err := e.Store.SaveObservedFiles("demo-chat", "human-wire", "", "incoming", "Synthetic plans for Saturday", "phone", "", at, nil); err != nil {
+			t.Fatal(err)
+		}
+		if err := e.Store.SaveObservedFiles("other-chat", "elsewhere-wire", "", "incoming", "Synthetic other chat", "phone", "", at, nil); err != nil {
+			t.Fatal(err)
+		}
+		p := threadAccept(t, e, threadPrompt("ask-quoted", "!ask what does this mean", "human-wire"))
+		want := "This question replies to an earlier message in the chat, sent by the person asking:\n\"\"\"\nSynthetic plans for Saturday\n\"\"\"\n\nQuestion: what does this mean"
+		if p.Input != want || p.Context != nil {
+			t.Fatalf("memory=%t input=%q context=%v", memory, p.Input, p.Context)
+		}
+		if err := e.Store.SaveObservedFiles("demo-chat", "owner-wire", "", "outgoing", "Synthetic owner note", "phone", "", at, nil); err != nil {
+			t.Fatal(err)
+		}
+		p = threadAccept(t, e, threadPrompt("ask-owner-quote", "!ask summarize", "owner-wire"))
+		if !strings.Contains(p.Input, "sent by the other person in this chat:\n\"\"\"\nSynthetic owner note") {
+			t.Fatalf("memory=%t input=%q", memory, p.Input)
+		}
+		// Unknown targets and other conversations' messages add nothing.
+		for i, wire := range []string{"unknown-wire", "elsewhere-wire"} {
+			p = threadAccept(t, e, threadPrompt("ask-plain-"+string(rune('a'+i)), "!ask what does this mean", wire))
+			if p.Input != "what does this mean" {
+				t.Fatalf("memory=%t %s input=%q", memory, wire, p.Input)
+			}
+		}
 	}
 }

@@ -357,6 +357,9 @@ func (e *Engine) Accept(ctx context.Context, m transport.Incoming) (bool, error)
 			p.Model = model
 			p.Instructions = instructions
 			p.Generation, _ = json.Marshal(g)
+			if parent == nil && input != "" {
+				p.Input = e.quotedInput(m, input)
+			}
 			if threaded {
 				if input == "" {
 					p.Model = ""
@@ -384,6 +387,30 @@ func (e *Engine) Accept(ctx context.Context, m transport.Incoming) (bool, error)
 		return true, e.Store.SaveMessage(id, m.ConversationID, "outgoing", text)
 	}
 	return true, e.Store.SaveMessage(id, m.ConversationID, "incoming", text)
+}
+
+const quoteLimit = 2000
+
+// quotedInput adds the message an AI command natively replies to, so a reply
+// like "!ask what does this mean" can refer to it. Only that one message is
+// added, from the same conversation; without it the question is sent alone.
+func (e *Engine) quotedInput(m transport.Incoming, input string) string {
+	if m.Interaction == nil || m.Interaction.ReplyTo == "" || !strings.Contains(strings.ToUpper(m.Interaction.Protocol), "RCS") {
+		return input
+	}
+	_, direction, text, ok, err := e.Store.QuotedMessage(m.ConversationID, m.Interaction.ReplyTo)
+	text = strings.TrimSpace(text)
+	if err != nil || !ok || text == "" {
+		return input
+	}
+	if r := []rune(text); len(r) > quoteLimit {
+		text = string(r[:quoteLimit]) + "…"
+	}
+	author := "the other person in this chat"
+	if (direction == "outgoing") == m.Outgoing {
+		author = "the person asking"
+	}
+	return "This question replies to an earlier message in the chat, sent by " + author + ":\n\"\"\"\n" + text + "\n\"\"\"\n\nQuestion: " + input
 }
 func memoryScope(conv, command, model string) string {
 	return store.Hash(conv) + ":" + store.Hash(command+"\x00"+model)
