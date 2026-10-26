@@ -149,6 +149,18 @@ export function pastedName(file: File): File {
   return new File([file], `image-${stamp}-${++pasteCounter}.${extension}`, { type: file.type, lastModified: file.lastModified });
 }
 
+// A definite refusal: nothing was sent, and why.
+function refusal(code: string): string {
+  const why: Record<string, string> = {
+    bot_unavailable: "sending is paused, it is quiet hours, or your phone is not connected",
+    inbox_access_disabled: "sending is not allowed in this conversation",
+    attachment_size_limit: "the attachments are too large",
+    too_many_attachments: "there are too many attachments",
+    request_limit_reached: "the hourly or daily limit was reached",
+  };
+  return `Not sent: ${why[code] ?? code.replaceAll("_", " ")}. You can retry once that changes.`;
+}
+
 // Posts one pending message. A retry reuses the same key and API route, so a
 // lost response can never create a second message.
 async function postPending(
@@ -186,8 +198,8 @@ async function postPending(
       failure: safeRetry ? "unconfirmed" : "uncertain",
       error: !safeRetry
         ? "Not confirmed. Check your phone before sending this again."
-        : e instanceof ApiError
-          ? `Message not confirmed: ${e.message.replaceAll("_", " ")}. Retrying is safe and will not send twice.`
+        : e instanceof ApiError && e.status >= 400 && e.status < 500
+          ? refusal(e.message)
           : "The server did not confirm this message. Retrying is safe and will not send twice.",
     });
   }

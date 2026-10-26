@@ -416,7 +416,7 @@ function LimitsSection({ workspace }: SectionProps) {
     <>
       <Group
         title="Limits"
-        description="Counted across every conversation, including messages you send by hand."
+        description="Bot replies across every conversation. Messages and reactions you send yourself never count."
       >
         <div className="form-grid three">
           <NumberField

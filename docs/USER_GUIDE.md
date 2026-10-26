@@ -154,7 +154,7 @@ messages. Importing and viewing history never run old commands.
 |---|---|
 | AI models | Default model (star favorites in the picker), per-model tuning, catalog refresh |
 | Providers | OpenRouter key and an OpenAI-compatible URL and key (write-only) |
-| Limits & quiet hours | Hourly and daily limits, spend threshold, quiet hours, reply length, commands from your phone |
+| Limits & quiet hours | Hourly and daily limits on bot replies (your own messages never count), spend threshold, quiet hours, reply length, commands from your phone |
 | Messages & privacy | Collection, scope, older history, automatic replies, read receipts, attachment limits, retention, memory window |
 | Notifications | Turn notifications on for this device and set what each device is notified about |
 | Devices | Phone connection details, **Sign out everywhere** |
