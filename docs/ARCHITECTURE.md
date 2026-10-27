@@ -45,7 +45,8 @@ flowchart LR
 
 ## How a reply is sent
 
-1. A fresh text message arrives from an enrolled person in an individual conversation.
+1. A fresh text message arrives from an enrolled person in an individual conversation,
+   or from an enrolled member of a group whose people are as the owner approved.
 2. If it's a command, the bot stores an encrypted, unchangeable plan and a job.
 3. Just before sending, the checks run again: enrollment, pause, freshness and quiet hours.
 4. The outgoing message is recorded before it's handed to Google. The job then becomes
@@ -56,13 +57,16 @@ sends twice.
 
 ## Safety rules
 
-- **Exact participants.** The bot and sending use only individual conversations, matched
-  by participant ID. A group can be read and archived, under a fixed identity of its own
+- **Exact participants.** In an individual conversation the bot acts only for the enrolled
+  person, matched by participant ID. A group can be read and archived, under a fixed identity of its own
   (`group:` and its conversation ID) so membership changes don't interrupt it; its
   `roster` names exactly who is in it. The owner can send to a group, but only as the
   roster they were shown: the request, the queued plan, the pre-send check and the
-  transport's own lookup all compare it, and a change cancels the send. Nothing runs
-  commands in a group yet.
+  transport's own lookup all compare it, and a change cancels the send. The bot runs
+  in a group only for members the owner enrolled (`group_enrollment`: conversation,
+  member, approved roster) and only while the live roster is the approved one; a change
+  silences it until the owner approves again, and each member has their own AI memory
+  and threads. The owner's own messages never run commands in a group.
 - **Fresh input only.** History and outgoing echoes never run commands. A message
   runs one only if it is a command or a reply to an AI answer; a file it carries
   goes to the AI. A file alone, not replying to an AI answer, never runs one.

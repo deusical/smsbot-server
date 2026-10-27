@@ -18,6 +18,8 @@ const MaxBackupBytes = 256 << 20
 type backupEnrollment struct {
 	Conversation string `json:"conversation"`
 	Participant  string `json:"participant"`
+	// Roster is set for a member enrolled in a group: the roster approved for them.
+	Roster string `json:"roster,omitempty"`
 }
 type backupJob struct {
 	Job
@@ -63,10 +65,12 @@ type backupSnapshot struct {
 	Schema      int                `json:"schema"`
 	Settings    map[string]string  `json:"settings"`
 	Enrollment  []backupEnrollment `json:"enrollment"`
-	Jobs        []backupJob        `json:"jobs"`
-	Messages    []backupMessage    `json:"messages"`
-	Usage       []backupUsage      `json:"usage,omitempty"`
-	Aliases     []backupAlias      `json:"aliases,omitempty"`
+	// GroupEnrollment lists who may use the bot in each group.
+	GroupEnrollment []backupEnrollment `json:"group_enrollment,omitempty"`
+	Jobs            []backupJob        `json:"jobs"`
+	Messages        []backupMessage    `json:"messages"`
+	Usage           []backupUsage      `json:"usage,omitempty"`
+	Aliases         []backupAlias      `json:"aliases,omitempty"`
 }
 type backupAlias struct {
 	Alias   string `json:"alias"`
@@ -130,6 +134,23 @@ func (s *Store) ExportBackup() ([]byte, error) {
 			return nil, e
 		}
 		b.Enrollment = append(b.Enrollment, v)
+	}
+	e = rows.Err()
+	rows.Close()
+	if e != nil {
+		return nil, e
+	}
+	rows, e = tx.Query("SELECT conversation,participant,roster FROM group_enrollment")
+	if e != nil {
+		return nil, e
+	}
+	for rows.Next() {
+		var v backupEnrollment
+		if e = rows.Scan(&v.Conversation, &v.Participant, &v.Roster); e != nil {
+			rows.Close()
+			return nil, e
+		}
+		b.GroupEnrollment = append(b.GroupEnrollment, v)
 	}
 	e = rows.Err()
 	rows.Close()
@@ -340,7 +361,7 @@ func (s *Store) RestoreBackup(data []byte) error {
 	if b.Format != 1 || b.Schema < 1 || b.Schema > schema {
 		return errors.New("unsupported backup version")
 	}
-	if e = tx.QueryRow("SELECT (SELECT count(*) FROM enrollment)+(SELECT count(*) FROM jobs)+(SELECT count(*) FROM messages)").Scan(&count); e != nil {
+	if e = tx.QueryRow("SELECT (SELECT count(*) FROM enrollment)+(SELECT count(*) FROM group_enrollment)+(SELECT count(*) FROM jobs)+(SELECT count(*) FROM messages)").Scan(&count); e != nil {
 		return e
 	}
 	if count != 0 {
@@ -387,6 +408,11 @@ func (s *Store) RestoreBackup(data []byte) error {
 	}
 	for _, v := range b.Enrollment {
 		if _, e = tx.Exec("INSERT INTO enrollment VALUES(?,?)", v.Conversation, v.Participant); e != nil {
+			return e
+		}
+	}
+	for _, v := range b.GroupEnrollment {
+		if _, e = tx.Exec("INSERT INTO group_enrollment VALUES(?,?,?)", v.Conversation, v.Participant, v.Roster); e != nil {
 			return e
 		}
 	}

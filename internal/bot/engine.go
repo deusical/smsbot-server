@@ -100,12 +100,7 @@ func (e *Engine) ConnectionInterrupted() error {
 func (e *Engine) Unenroll(id string) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	for job, cancel := range e.pending {
-		j, _, err := e.Store.JobPlan(job)
-		if err == nil && j.ConversationID == id {
-			cancel()
-		}
-	}
+	e.cancelRunning(id)
 	if err := e.Store.Unenroll(id); err != nil {
 		return err
 	}
@@ -115,6 +110,66 @@ func (e *Engine) Enroll(id, peer string) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.Store.Enroll(id, peer)
+}
+
+// cancelRunning stops work generating for conv. The caller holds the lock.
+func (e *Engine) cancelRunning(conv string) {
+	for job, cancel := range e.pending {
+		if j, _, err := e.Store.JobPlan(job); err == nil && j.ConversationID == conv {
+			cancel()
+		}
+	}
+}
+
+// EnrollMember lets one member of a group use the bot there, under the roster
+// the owner was shown.
+func (e *Engine) EnrollMember(conv, member, roster string) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.Store.EnrollMember(conv, member, roster)
+}
+
+// UnenrollMember stops one member using the bot in a group.
+func (e *Engine) UnenrollMember(conv, member string) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.cancelRunning(conv)
+	return e.Store.UnenrollMember(conv, member)
+}
+
+// ApproveGroup accepts a group's new people for the members still in it, after
+// the owner has looked at who is there now.
+func (e *Engine) ApproveGroup(conv, roster string, present []string) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.cancelRunning(conv)
+	return e.Store.ApproveGroup(conv, roster, present)
+}
+
+// enrolledFor reports whether the person a plan is for may still use the bot
+// where they asked: enrolled in the conversation, or in the group under the
+// roster the plan was made for.
+func (e *Engine) enrolledFor(conv string, p store.Plan) bool {
+	if p.GroupBotJob() {
+		roster, ok := e.Store.GroupMemberEnrollment(conv, p.Participant)
+		return ok && roster == p.Roster
+	}
+	return e.Store.Enrolled(conv, p.Participant)
+}
+
+// validGroupMember reports whether member is in the group conv, which can be
+// sent to and has exactly the people in roster.
+func (e *Engine) validGroupMember(ctx context.Context, conv, member, roster string) (bool, error) {
+	c, err := e.lookupConversation(ctx, conv)
+	if err != nil || !c.Group || !c.Writable || roster == "" || c.Roster != roster {
+		return false, err
+	}
+	for _, m := range c.Members {
+		if m.ID == member {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 func (e *Engine) Cancel(id string) error {
 	e.mu.Lock()
@@ -143,7 +198,7 @@ func (e *Engine) Approve(id string) error {
 	if err != nil {
 		return err
 	}
-	if paused || !e.Store.Enrolled(j.ConversationID, p.Participant) {
+	if paused || !e.enrolledFor(j.ConversationID, p) {
 		return errors.New("approval_unavailable")
 	}
 	p.Approved = true
@@ -190,7 +245,7 @@ func (e *Engine) Accept(ctx context.Context, m transport.Incoming) (bool, error)
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	cfg, peer, ok, err := e.admit(ctx, m, parent)
+	cfg, peer, roster, ok, err := e.admit(ctx, m, parent)
 	if err != nil || !ok {
 		return false, err
 	}
@@ -215,7 +270,7 @@ func (e *Engine) Accept(ctx context.Context, m transport.Incoming) (bool, error)
 	if err != nil || !limitOK {
 		return false, err
 	}
-	p := store.Plan{Participant: peer, MaxChars: cfg.Settings.MaxChars, Owner: m.Outgoing}
+	p := store.Plan{Participant: peer, Roster: roster, MaxChars: cfg.Settings.MaxChars, Owner: m.Outgoing}
 	reply, builtin, ok, err := e.builtinReply(m.ConversationID, name, input, cfg)
 	if err != nil || !ok {
 		return false, err
@@ -247,39 +302,46 @@ func (e *Engine) commandCandidate(m transport.Incoming, text string) (*store.AIP
 }
 
 // admit applies every rule about who may run a command, and when. It returns
-// the configuration and the enrolled peer the command is planned for.
-func (e *Engine) admit(ctx context.Context, m transport.Incoming, parent *store.AIParent) (Configuration, string, bool, error) {
-	var cfg Configuration
+// the configuration, the enrolled person the command is planned for and, in a
+// group, the roster approved for them.
+func (e *Engine) admit(ctx context.Context, m transport.Incoming, parent *store.AIParent) (cfg Configuration, peer, roster string, ok bool, err error) {
 	age := e.now().Sub(m.At)
 	if m.ID == "" || m.Historical || age > 2*time.Minute || age < -5*time.Second || len(m.Text) > 12000 {
-		return cfg, "", false, nil
+		return cfg, "", "", false, nil
 	}
 	paused, err := e.Store.Paused()
 	if err != nil || paused || !e.Transport.Ready() {
-		return cfg, "", false, err
+		return cfg, "", "", false, err
 	}
 	if cfg, err = e.Configuration(); err != nil {
-		return cfg, "", false, err
+		return cfg, "", "", false, err
 	}
-	peer := m.ParticipantID
+	peer = m.ParticipantID
 	if m.Outgoing {
-		var ok bool
 		if peer, ok, err = e.ownerPeer(m, cfg, parent); err != nil || !ok {
-			return cfg, "", false, err
+			return cfg, "", "", false, err
 		}
+	} else if approved, enrolled := e.Store.GroupMemberEnrollment(m.ConversationID, peer); enrolled {
+		// A member of a group the owner enrolled, under the roster they approved.
+		roster = approved
 	}
-	if !e.Store.Enrolled(m.ConversationID, peer) {
-		return cfg, "", false, nil
+	if roster == "" && !e.Store.Enrolled(m.ConversationID, peer) {
+		return cfg, "", "", false, nil
 	}
 	inbox, err := e.Collection.Settings()
 	if err != nil || !inbox.AutomaticReplies {
-		return cfg, "", false, err
+		return cfg, "", "", false, err
 	}
-	valid, err := e.validConversation(ctx, m.ConversationID, peer, "", false)
+	var valid bool
+	if roster != "" {
+		valid, err = e.validGroupMember(ctx, m.ConversationID, peer, roster)
+	} else {
+		valid, err = e.validConversation(ctx, m.ConversationID, peer, "", false)
+	}
 	if err != nil || !valid || quiet(cfg.Settings, e.now()) {
-		return cfg, "", false, err
+		return cfg, "", "", false, err
 	}
-	return cfg, peer, true, nil
+	return cfg, peer, roster, true, nil
 }
 
 // ownerPeer handles a command the owner sent. The owner's own messages carry
@@ -376,7 +438,7 @@ func (e *Engine) planCommand(ctx context.Context, m transport.Incoming, p *store
 			return "", false, err
 		}
 		if !threaded {
-			if p.Context, err = e.Store.Memory(memoryScope(m.ConversationID, "!"+name, model), e.now()); err != nil {
+			if p.Context, err = e.Store.Memory(memoryScope(m.ConversationID, "!"+name, model, p.MemberOf()), e.now()); err != nil {
 				return "", false, err
 			}
 		}
@@ -571,10 +633,14 @@ func (e *Engine) replyChain(m transport.Incoming, hasOwn bool) (chain []chainMes
 		}
 		seen[id] = true
 		wire = ""
+		sender := ""
 		if v, err := e.Store.Interaction(m.ConversationID, id); err != nil {
 			return nil, false, nil, err
-		} else if v != nil && strings.Contains(strings.ToUpper(v.Protocol), "RCS") {
-			wire = v.ReplyTo
+		} else if v != nil {
+			sender = v.Sender
+			if strings.Contains(strings.ToUpper(v.Protocol), "RCS") {
+				wire = v.ReplyTo
+			}
 		}
 		attached, err := e.quotedFile(m.ConversationID, id)
 		if err != nil {
@@ -592,10 +658,18 @@ func (e *Engine) replyChain(m transport.Incoming, hasOwn bool) (chain []chainMes
 			return nil, false, nil, err
 		}
 		author := "the other person in this chat"
+		inGroup := m.Interaction.Sender != ""
+		if inGroup {
+			author = "another member of the group chat"
+		}
 		switch {
+		case inGroup && origin != "bot" && direction == "outgoing":
+			author = "the owner of the phone"
+		case inGroup && origin != "bot" && sender != "" && sender == m.ParticipantID:
+			author = "the person asking"
 		case origin == "bot":
 			author = "the AI assistant in this chat"
-		case (direction == "outgoing") == m.Outgoing:
+		case !inGroup && (direction == "outgoing") == m.Outgoing:
 			author = "the person asking"
 		}
 		noun := ""
@@ -615,8 +689,15 @@ func (e *Engine) replyChain(m transport.Incoming, hasOwn bool) (chain []chainMes
 	return chain, more, file, nil
 }
 
-func memoryScope(conv, command, model string) string {
-	return store.Hash(conv) + ":" + store.Hash(command+"\x00"+model)
+// memoryScope names where an AI command's conversation memory is kept. In a
+// group each member has their own, so one person's questions never become
+// context for another's.
+func memoryScope(conv, command, model, member string) string {
+	scope := store.Hash(conv) + ":" + store.Hash(command+"\x00"+model)
+	if member != "" {
+		scope += ":" + store.Hash(member)
+	}
+	return scope
 }
 func (e *Engine) check(ctx context.Context, j store.Job, p store.Plan) (Configuration, string, error) {
 	cfg, err := e.Configuration()
@@ -658,7 +739,7 @@ func (e *Engine) check(ctx context.Context, j store.Job, p store.Plan) (Configur
 		if !inbox.Allows(c) || c.ParticipantID != p.Participant {
 			return cfg, "inbox_access_disabled", nil
 		}
-	} else if !e.Store.Enrolled(j.ConversationID, p.Participant) {
+	} else if !e.enrolledFor(j.ConversationID, p) {
 		return cfg, "unenrolled", nil
 	}
 	if p.Owner && !cfg.Settings.OwnerCommands {
@@ -675,7 +756,12 @@ func (e *Engine) check(ctx context.Context, j store.Job, p store.Plan) (Configur
 			return cfg, "", err
 		}
 	}
-	valid, err := e.validConversation(ctx, j.ConversationID, p.Participant, p.Roster, p.InboxOwnerOnly)
+	var valid bool
+	if p.GroupBotJob() {
+		valid, err = e.validGroupMember(ctx, j.ConversationID, p.Participant, p.Roster)
+	} else {
+		valid, err = e.validConversation(ctx, j.ConversationID, p.Participant, p.Roster, p.InboxOwnerOnly)
+	}
 	if err != nil {
 		return cfg, "", err
 	}
@@ -1069,7 +1155,7 @@ func (e *Engine) submit(ctx context.Context, j store.Job, p store.Plan, cfg Conf
 		}
 		if ok && cmd.Memory && epoch == p.MemoryEpoch {
 			history = append(history, store.Turn{Role: "user", Content: p.Input}, store.Turn{Role: "assistant", Content: p.Reply})
-			if err = e.Store.Remember(memoryScope(j.ConversationID, j.Command, p.Model), history, e.now().Add(time.Duration(p.MemoryHours)*time.Hour)); err != nil {
+			if err = e.Store.Remember(memoryScope(j.ConversationID, j.Command, p.Model, p.MemberOf()), history, e.now().Add(time.Duration(p.MemoryHours)*time.Hour)); err != nil {
 				return err
 			}
 		}

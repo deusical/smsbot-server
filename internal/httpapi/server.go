@@ -3,6 +3,7 @@ package httpapi
 import (
 	"embed"
 	"encoding/json"
+	"errors"
 	"io"
 	"io/fs"
 	"math"
@@ -52,6 +53,8 @@ func New(e *bot.Engine, c *collection.Service, origin string, fixture bool) *Ser
 	s.mux.HandleFunc("POST /api/v1/pause", s.protected(s.pause))
 	s.mux.HandleFunc("POST /api/v1/enrollment", s.protected(s.enroll))
 	s.mux.HandleFunc("DELETE /api/v1/enrollment/{id}", s.protected(s.unenroll))
+	s.mux.HandleFunc("DELETE /api/v1/enrollment/{id}/members/{member}", s.protected(s.unenrollMember))
+	s.mux.HandleFunc("POST /api/v1/enrollment/{id}/approve", s.protected(s.approveGroup))
 	s.mux.HandleFunc("GET /api/v1/activity", s.protected(s.activity))
 	s.mux.HandleFunc("POST /api/v1/fixture/incoming", s.protected(s.incoming))
 	s.mux.HandleFunc("POST /api/v1/fixture/typing", s.protected(s.fixtureTyping))
@@ -275,6 +278,8 @@ func (s *Server) enroll(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		ID   string `json:"conversation_id"`
 		Peer string `json:"participant_id"`
+		// Roster is, for a group, who the owner saw in it. Peer is then a member.
+		Roster string `json:"roster"`
 	}
 	if !s.decode(w, r, &in) {
 		return
@@ -285,6 +290,17 @@ func (s *Server) enroll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, c := range list {
+		if c.ID == in.ID && c.Group && c.Writable && in.Roster != "" && c.Roster == in.Roster && hasMember(c, in.Peer) {
+			switch e = s.Engine.EnrollMember(c.ID, in.Peer, c.Roster); {
+			case e == nil:
+				s.json(w, 200, map[string]bool{"enrolled": true})
+			case errors.Is(e, store.ErrGroupNeedsApproval):
+				s.bad(w, 409, "group_needs_approval")
+			default:
+				s.bad(w, 500, "storage_error")
+			}
+			return
+		}
 		if c.ID == in.ID && c.ParticipantID == in.Peer && c.Writable && !c.Group {
 			if e = s.Engine.Enroll(c.ID, c.ParticipantID); e != nil {
 				s.bad(w, 500, "storage_error")
@@ -386,4 +402,50 @@ func (s *Server) fixtureGroupMembers(w http.ResponseWriter, r *http.Request) {
 	}
 	fixture.SetGroupMembers(v.Members...)
 	s.json(w, 200, map[string]bool{"ok": true})
+}
+
+func hasMember(c transport.Conversation, id string) bool {
+	for _, m := range c.Members {
+		if m.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Server) unenrollMember(w http.ResponseWriter, r *http.Request) {
+	if e := s.Engine.UnenrollMember(r.PathValue("id"), r.PathValue("member")); e != nil {
+		s.bad(w, 500, "storage_error")
+		return
+	}
+	s.json(w, 200, map[string]bool{"enrolled": false})
+}
+
+// approveGroup accepts who is in a group now for the members still in it. The
+// roster must be the one the owner was shown, and still the group's.
+func (s *Server) approveGroup(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Roster string `json:"roster"`
+	}
+	if !s.decode(w, r, &in) {
+		return
+	}
+	c, e := transport.Lookup(r.Context(), s.Transport, r.PathValue("id"))
+	if e != nil {
+		s.bad(w, 503, "transport_unavailable")
+		return
+	}
+	if !c.Group || !c.Writable || in.Roster == "" || c.Roster != in.Roster {
+		s.bad(w, 409, "group_changed")
+		return
+	}
+	present := make([]string, len(c.Members))
+	for i, m := range c.Members {
+		present[i] = m.ID
+	}
+	if e = s.Engine.ApproveGroup(c.ID, c.Roster, present); e != nil {
+		s.bad(w, 500, "storage_error")
+		return
+	}
+	s.json(w, 200, map[string]bool{"approved": true})
 }

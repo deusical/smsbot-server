@@ -450,3 +450,21 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* Who can use the bot in a group. */
+.group-bot {
+  position: relative;
+}
+.group-bot-panel {
+  position: absolute;
+  right: 0;
+  z-index: 5;
+  display: grid;
+  gap: 8px;
+  min-width: 260px;
+  margin-top: 6px;
+  padding: 12px;
+  border-radius: 12px;
+  background: var(--raised);
+  box-shadow: 0 6px 24px rgb(0 0 0 / 0.25);
+}

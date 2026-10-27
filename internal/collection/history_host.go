@@ -299,7 +299,7 @@ func (svc *Service) ArchiveConversations() ([]transport.Conversation, error) {
 	out := []transport.Conversation{}
 	for _, a := range list {
 		c := a.Conversation
-		c.Enrolled = svc.Store.Enrolled(c.ID, c.ParticipantID)
+		svc.Store.ShowEnrollment(&c)
 		c.Archived = true
 		// Ordering hints are volatile phone state, not part of the saved identity.
 		c.LastMessageAt, c.Unread, c.Pinned = "", false, false

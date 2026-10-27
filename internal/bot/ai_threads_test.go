@@ -362,7 +362,7 @@ func TestOtherAIMemoryAndStatelessAskRemainSeparate(t *testing.T) {
 	if err := e.SetConfiguration(cfg); err != nil {
 		t.Fatal(err)
 	}
-	scope := memoryScope("demo-chat", "!translate", "fixture/model")
+	scope := memoryScope("demo-chat", "!translate", "fixture/model", "")
 	if err := e.Store.Remember(scope, []store.Turn{{Role: "user", Content: "existing translator context"}}, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}

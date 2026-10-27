@@ -160,7 +160,7 @@ func (g *Google) React(ctx context.Context, conv, expectedPeer, target, emoji, o
 }
 
 func (f *Fixture) SendReply(ctx context.Context, conv, txn, text, target string, files []media.File) (Receipt, error) {
-	if target == "" || conv != "demo-chat" {
+	if target == "" || (conv != "demo-chat" && conv != "demo-group") {
 		return Receipt{}, ErrNotSubmitted
 	}
 	return f.Send(ctx, conv, txn, text)

@@ -93,11 +93,48 @@ paths:
                   type: string
                 participant_id:
                   type: string
+                  description: The exact participant of an individual conversation, or for a group the member being enrolled.
+                roster:
+                  type: string
+                  description: Required to enroll a member of a group. The conversation's `roster` as the owner saw it. The member then may use the bot in that group, but only while the group has exactly those people.
       responses:
         '200':
-          description: Exact individual participant enrolled
+          description: Exact individual participant, or group member, enrolled
         '400':
-          description: Ineligible conversation or identity mismatch
+          description: Ineligible conversation, identity mismatch, or a roster that is not the group's
+        '409':
+          description: group_needs_approval; the group's people changed since others were enrolled, so approve the new roster first
+  /enrollment/{id}/members/{member}:
+    parameters:
+    - {name: id, in: path, required: true, schema: {type: string}}
+    - {name: member, in: path, required: true, schema: {type: string}}
+    delete:
+      description: Stop one member of a group using the bot there, and cancel work waiting for the group.
+      responses:
+        '200':
+          description: Member removed
+  /enrollment/{id}/approve:
+    parameters:
+    - {name: id, in: path, required: true, schema: {type: string}}
+    post:
+      description: After a group's people changed, approve the group as it is now for the enrolled members still in it. Members who left are removed and work waiting for the group is cancelled. The bot is silent in a group whose roster is not the approved one.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [roster]
+              properties:
+                roster:
+                  type: string
+                  description: The group's current `roster`, as the owner saw it.
+      responses:
+        '200':
+          description: Approved
+        '409':
+          description: group_changed; the group has different people than the roster given
   /enrollment/{id}:
     parameters:
     - name: id
@@ -1379,6 +1416,14 @@ components:
           type: boolean
         enrolled:
           type: boolean
+          description: For a group, true if any member is enrolled.
+        enrolled_members:
+          type: array
+          items: {type: string}
+          description: For a group, the members who may use the bot there.
+        bot_roster:
+          type: string
+          description: For a group, the roster approved for the enrolled members. The bot is silent unless it equals `roster`.
         last_message_at:
           type: string
           format: date-time

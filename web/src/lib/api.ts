@@ -27,6 +27,9 @@ export type Conversation = {
   members?: { id: string; name?: string }[];
   /** Names exactly who is in a group; sending to it checks this. */
   roster?: string;
+  /** For a group: who may use the bot there, and the roster approved for them. */
+  enrolled_members?: string[];
+  bot_roster?: string;
   writable: boolean;
   enrolled: boolean;
   last_message_at?: string;

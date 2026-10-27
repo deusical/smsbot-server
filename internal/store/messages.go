@@ -98,11 +98,9 @@ func (s *Store) PreserveHistory(all bool, conversations []string) error {
 	return nil
 }
 
-// HasEnrollment reports whether any participant is enrolled in conv.
-func (s *Store) HasEnrollment(conv string) bool {
-	var n int
-	return s.DB.QueryRow("SELECT count(*) FROM enrollment WHERE conversation=?", conv).Scan(&n) == nil && n == 1
-}
+// HasEnrollment reports whether the bot is on in conv: a person is enrolled, or
+// someone in a group.
+func (s *Store) HasEnrollment(conv string) bool { return s.BotOn(conv) }
 
 // RevokeSession deletes a browser session credential. Owner credentials are
 // never affected.

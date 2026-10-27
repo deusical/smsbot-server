@@ -6,6 +6,8 @@ async function login(page: Page, path = "/") {
   await page.goto(path);
   await page.getByLabel("Owner credential").fill(readFileSync(descriptor.owner, "utf8"));
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  // Signed in before any API call is made on the session's behalf.
+  await expect(page.getByRole("navigation", { name: "Main navigation" })).toBeVisible();
 }
 const nav = (page: Page) => page.getByRole("navigation", { name: "Main navigation" });
 const heading = (page: Page, name: string) =>
