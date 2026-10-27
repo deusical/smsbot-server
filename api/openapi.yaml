@@ -1354,12 +1354,24 @@ components:
           type: string
         participant_id:
           type: string
+          description: The other person in an individual conversation. A group has one fixed identity of its own, "group:" and its conversation ID, so people joining or leaving doesn't change it.
         label:
           type: string
         protocol:
           type: string
         group:
           type: boolean
+        members:
+          type: array
+          description: The people in a group, other than the owner. Absent for individual conversations.
+          items:
+            type: object
+            properties:
+              id: {type: string}
+              name: {type: string}
+        roster:
+          type: string
+          description: A name for exactly who is in a group right now. Groups are read and archived whoever is in them; anything that acts for a group checks the roster.
         writable:
           type: boolean
         enrolled:
@@ -1655,6 +1667,9 @@ components:
           type: string
         status:
           type: string
+        sender:
+          type: string
+          description: Participant ID of whoever sent an incoming message in a group; match it to the conversation's members. Absent for individual conversations.
     MessageActions:
       type: object
       required: [reply, react, edit, edit_reason, version]
@@ -1733,6 +1748,10 @@ components:
                 type: string
         load_older:
           type: boolean
+        groups:
+          type: boolean
+          default: false
+          description: With scope all, also save group conversations. A group chosen by name under scope selected is saved whatever this says.
         mark_read_when_viewed:
           type: boolean
           default: true

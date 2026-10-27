@@ -256,14 +256,14 @@ func (g *Google) Run(ctx context.Context, incoming func(Incoming), pause func(),
 					g.mu.Lock()
 					c := g.conversations[m.ConversationID]
 					g.mu.Unlock()
-					m.Interaction = interactionSnapshot(e.Message, c.GetDefaultOutgoingID(), time.Now().UTC())
+					m.Interaction = conversationSnapshot(c, e.Message, time.Now().UTC())
 					incoming(m)
 				} else if !g.overflow.Load() {
 					if item, ok := historicalText(e.Message, e.GetConversationID()); ok {
 						g.mu.Lock()
 						c := g.conversations[e.GetConversationID()]
 						g.mu.Unlock()
-						item.Interaction = interactionSnapshot(e.Message, c.GetDefaultOutgoingID(), time.Now().UTC())
+						item.Interaction = conversationSnapshot(c, e.Message, time.Now().UTC())
 						incoming(Incoming{ID: item.ID, ConversationID: e.GetConversationID(), ParticipantID: e.GetParticipantID(), Text: item.Text, Attachments: item.Attachments, At: item.At, Historical: true, Outgoing: item.Direction == "outgoing", TransactionID: item.TransactionID, Status: item.Status, Interaction: item.Interaction})
 					}
 				}

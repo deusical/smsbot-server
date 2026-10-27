@@ -49,10 +49,16 @@ function dayLabel(iso: string) {
 }
 // Consecutive messages from the same sender read as one run: tighter spacing,
 // with the small inner corner continuing down the run.
+/** Who sent an incoming message, for conversations with several people. */
+const senderName = (c: Conversation, m: Message) =>
+  c.group && m.direction === "incoming"
+    ? (c.members?.find((p) => p.id === m.sender)?.name || "Someone")
+    : undefined;
 const joins = (a: Message | undefined, b: Message) =>
   !!a &&
   a.direction === b.direction &&
   (a.origin ?? "") === (b.origin ?? "") &&
+  (a.sender ?? "") === (b.sender ?? "") &&
   dayLabel(a.at) === dayLabel(b.at) &&
   Math.abs(Date.parse(b.at) - Date.parse(a.at)) < 10 * 60000;
 
@@ -242,7 +248,9 @@ export function ConversationHistory({ conversation, state, busy, act, inbox, enr
               <span className="typing-text" role="status">typing…</span>
             ) : (
               <>
-                {conversation.protocol}
+                {conversation.group
+                  ? `Group, ${conversation.members?.length ?? 0} people`
+                  : conversation.protocol}
                 {conversation.enrolled ? ", bot replies on" : ""}
               </>
             )}
@@ -358,6 +366,7 @@ export function ConversationHistory({ conversation, state, busy, act, inbox, enr
                   base={base}
                   fileLimitMB={fileLimits.max_file_mb}
                   joinedPrev={joins(messages[index - 1], m)}
+                  senderName={senderName(conversation, m)}
                   highlighted={highlighted === m.id}
                   onJump={(id) => void jumpToMessage(id)}
                   actions={

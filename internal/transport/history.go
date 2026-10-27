@@ -66,10 +66,10 @@ func (g *Google) DiscoverConversations(ctx context.Context, cursor string) (Conv
 		if err != nil {
 			return ConversationPage{}, err
 		}
-		// Discovery lists only individual conversations that can be sent to.
+		// Discovery lists conversations whose exact people are known, groups included.
 		conversations := []Conversation{}
 		for _, c := range res.GetConversations() {
-			if c.GetConversationID() != "" && eligible(c) {
+			if c.GetConversationID() != "" && readable(c) {
 				conversations = append(conversations, listConversation(c))
 			}
 		}
@@ -111,7 +111,7 @@ func (g *Google) FetchHistory(ctx context.Context, conv, expectedPeer, cursor st
 	defer cancel()
 	g.countPhone(ctx, phoneLookup)
 	c, err := g.client.GetConversation(ctx, conv)
-	if err != nil || !eligible(c) || peer(c) != expectedPeer {
+	if err != nil || !readable(c) || peer(c) != expectedPeer {
 		return HistoryPage{}, errors.New("ineligible_conversation")
 	}
 	var pointer *gmproto.Cursor
@@ -136,13 +136,13 @@ func (g *Google) FetchHistory(ctx context.Context, conv, expectedPeer, cursor st
 	}
 	g.countPhone(ctx, phoneLookup)
 	c, err = g.client.GetConversation(ctx, conv)
-	if err != nil || !eligible(c) || peer(c) != expectedPeer {
+	if err != nil || !readable(c) || peer(c) != expectedPeer {
 		return HistoryPage{}, errors.New("conversation_identity_changed")
 	}
 	out := HistoryPage{Messages: []HistoricalMessage{}}
 	for _, m := range result.GetMessages() {
 		if item, ok := historicalText(m, conv); ok {
-			item.Interaction = interactionSnapshot(m, c.GetDefaultOutgoingID(), observed)
+			item.Interaction = conversationSnapshot(c, m, observed)
 			out.Messages = append(out.Messages, item)
 		}
 	}

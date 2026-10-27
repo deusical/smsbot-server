@@ -65,7 +65,7 @@ func (svc *Service) QueueObservation(m transport.Incoming) {
 	if consent.settings.Scope == "selected" {
 		found := false
 		for _, b := range consent.settings.Conversations {
-			if b.Conversation == m.ConversationID && (m.Outgoing || b.Participant == m.ParticipantID) {
+			if b.Conversation == m.ConversationID && speaksFor(b.Participant, m) {
 				found = true
 				break
 			}

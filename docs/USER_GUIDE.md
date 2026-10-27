@@ -22,7 +22,7 @@ The current status, a 24-hour activity chart, anything waiting for your approval
 
 ![Conversations](images/conversations.png)
 
-Your individual conversations, newest first, with pinned chats on top, unread dots,
+Your conversations, newest first, with pinned chats on top, unread dots,
 previews and typing indicators. The **Bot replies** switch on each row lets that person
 use commands.
 
@@ -36,6 +36,11 @@ use commands.
 - **Reading.** Search within a conversation, scroll up for older messages, and use the
   round button to jump back to the latest. Opening an unread conversation marks it read
   on your phone; turn that off in **Settings > Messages & privacy**.
+- **Group chats.** Turn on **Include group chats** in **Settings > Messages & privacy**
+  (or pick a group by name under **Only selected**) and groups are saved like any other
+  conversation, with the sender's name above each message. A group is identified by the
+  conversation itself, so people joining or leaving doesn't interrupt saving it. Sending
+  to a group and bot replies in groups aren't available yet.
 - **Shortcuts.** **Ctrl/Cmd+K** searches conversations, **Alt+Up/Down** switches
   conversation, and **Ctrl/Cmd+S** saves settings.
 

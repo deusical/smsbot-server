@@ -136,7 +136,7 @@ export function ArchivePage({
     setBusy(value);
   };
   const scope = inbox?.enabled
-    ? `${inbox.scope === "all" ? "All individual conversations" : `${inbox.conversations.length} selected individual conversations`}; all available history by default; ${inbox.archive_retention_days ? `keep ${inbox.archive_retention_days} days` : "keep indefinitely"}.`
+    ? `${inbox.scope === "all" ? (inbox.groups ? "All conversations, groups included" : "All individual conversations") : `${inbox.conversations.length} selected conversations`}; all available history by default; ${inbox.archive_retention_days ? `keep ${inbox.archive_retention_days} days` : "keep indefinitely"}.`
     : "Collection stopped; saved history stays readable.";
   const statsPending = statsSupported && !stats && !statsError;
   const statsValue = (value: string) => (stats ? value : statsError || !statsSupported ? "Unavailable" : "Loading");

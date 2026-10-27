@@ -18,6 +18,7 @@ export function MessageBubble({
   base,
   fileLimitMB,
   joinedPrev,
+  senderName,
   highlighted,
   onJump,
   actions,
@@ -30,6 +31,8 @@ export function MessageBubble({
   fileLimitMB: number;
   /** Continues a run of messages from the same sender. */
   joinedPrev: boolean;
+  /** Who sent an incoming message, shown in group conversations. */
+  senderName?: string;
   highlighted: boolean;
   onJump: (id: string) => void;
   actions?: ReactNode;
@@ -47,6 +50,7 @@ export function MessageBubble({
         (m.direction === "outgoing" ? " from-" + (m.origin ?? "bot") : "")
       }
     >
+      {senderName && !joinedPrev && <span className="bubble-sender">{senderName}</span>}
       {m.quote && (
         <button
           type="button"

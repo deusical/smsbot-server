@@ -232,6 +232,9 @@ func (s *Store) EnrichMessages(conv string, messages []Message) error {
 			return err
 		}
 		m.Protocol = v.Protocol
+		if m.Direction == "incoming" {
+			m.Sender = v.Sender
+		}
 		m.Reactions = []ReactionView{}
 		for _, r := range v.Reactions {
 			item := ReactionView{Emoji: r.Emoji, Count: len(r.Participants), Unsupported: r.Unsupported}

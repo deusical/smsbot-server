@@ -7,34 +7,95 @@ package transport
 import (
 	"context"
 	"errors"
+	"sort"
 	"time"
 
 	"go.mau.fi/mautrix-gmessages/pkg/libgm/gmproto"
 )
 
-func peer(c *gmproto.Conversation) string {
-	ids := map[string]bool{}
+// members lists the visible people in a conversation other than the owner,
+// by ID. It is nil if any of them has no ID, which makes identity unknowable.
+func members(c *gmproto.Conversation) []Member {
+	seen := map[string]bool{}
+	var out []Member
 	for _, p := range c.GetParticipants() {
 		if p.GetIsMe() || !p.GetIsVisible() {
 			continue
 		}
 		id := p.GetID().GetParticipantID()
 		if id == "" {
-			return ""
+			return nil
 		}
-		ids[id] = true
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		name := p.GetFullName()
+		if name == "" {
+			name = p.GetFirstName()
+		}
+		out = append(out, Member{ID: id, Name: name})
 	}
-	if len(ids) != 1 {
-		return ""
-	}
-	for id := range ids {
-		return id
-	}
-	return ""
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
 }
 
+// peer is a conversation's exact identity: the other person's participant ID, or
+// for a group "group:" and the conversation's own ID. It is "" when it can't be
+// known, such as an individual conversation with several people in it.
+func peer(c *gmproto.Conversation) string {
+	m := members(c)
+	if c.GetIsGroupChat() {
+		if len(m) == 0 || c.GetConversationID() == "" {
+			return ""
+		}
+		return "group:" + c.GetConversationID()
+	}
+	if len(m) != 1 {
+		return ""
+	}
+	return m[0].ID
+}
+
+// roster names exactly who is in a group, or is "" for anything else.
+func roster(c *gmproto.Conversation) string {
+	m := groupMembers(c)
+	if len(m) == 0 {
+		return ""
+	}
+	ids := make([]string, len(m))
+	for i := range m {
+		ids[i] = m[i].ID
+	}
+	return GroupRoster(ids)
+}
+
+// readable is a conversation whose messages may be read and saved: identity is
+// exactly known and it has an outgoing SIM, in a group or not.
+func readable(c *gmproto.Conversation) bool {
+	return c != nil && !c.GetReadOnly() && peer(c) != "" && c.GetDefaultOutgoingID() != ""
+}
+
+// eligible is a conversation the bot and the dashboard may send to. Groups are
+// readable but not yet sendable.
 func eligible(c *gmproto.Conversation) bool {
-	return c != nil && !c.GetIsGroupChat() && !c.GetReadOnly() && peer(c) != "" && c.GetDefaultOutgoingID() != ""
+	return readable(c) && !c.GetIsGroupChat()
+}
+
+// listedIdentity is the identity shown for a conversation. A group that can't be
+// read has none, so it is never selectable.
+func listedIdentity(c *gmproto.Conversation) string {
+	if c.GetIsGroupChat() && !readable(c) {
+		return ""
+	}
+	return peer(c)
+}
+
+func groupMembers(c *gmproto.Conversation) []Member {
+	if !c.GetIsGroupChat() {
+		return nil
+	}
+	return members(c)
 }
 
 func (g *Google) cacheDetail(c *gmproto.Conversation) {
@@ -49,19 +110,24 @@ func (g *Google) cacheDetail(c *gmproto.Conversation) {
 	g.conversations[c.GetConversationID()] = c
 }
 
+func conversationLabel(c *gmproto.Conversation) string {
+	if label := c.GetName(); label != "" {
+		return label
+	}
+	if c.GetIsGroupChat() {
+		return "Group conversation"
+	}
+	return "Individual conversation"
+}
+
 // listConversation projects a phone conversation record for listing.
 func listConversation(c *gmproto.Conversation) Conversation {
-	label := c.GetName()
-	if label == "" {
-		if c.GetIsGroupChat() {
-			label = "Group conversation"
-		} else {
-			label = "Individual conversation"
-		}
-	}
+	label := conversationLabel(c)
 	return withListState(Conversation{
 		ID:            c.GetConversationID(),
-		ParticipantID: peer(c),
+		ParticipantID: listedIdentity(c),
+		Members:       groupMembers(c),
+		Roster:        roster(c),
 		Label:         label,
 		Protocol:      c.GetType().String(),
 		Group:         c.GetIsGroupChat(),
@@ -111,11 +177,8 @@ func (g *Google) CachedConversation(id string) (Conversation, bool) {
 }
 
 func detailConversation(id string, c *gmproto.Conversation) Conversation {
-	label := c.GetName()
-	if label == "" {
-		label = "Individual conversation"
-	}
-	return withListState(Conversation{ID: id, ParticipantID: peer(c), Label: label, Protocol: c.GetType().String(), Group: c.GetIsGroupChat(), Writable: eligible(c)}, c)
+	label := conversationLabel(c)
+	return withListState(Conversation{ID: id, ParticipantID: listedIdentity(c), Members: groupMembers(c), Roster: roster(c), Label: label, Protocol: c.GetType().String(), Group: c.GetIsGroupChat(), Writable: eligible(c)}, c)
 }
 
 func (g *Google) Conversations(ctx context.Context) ([]Conversation, error) {

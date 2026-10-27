@@ -13,6 +13,7 @@ import (
 	"github.com/deusical/smsbot-server/internal/media"
 	"github.com/deusical/smsbot-server/internal/store"
 	"github.com/deusical/smsbot-server/internal/transport"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -99,7 +100,8 @@ func (svc *Service) lookup(ctx context.Context, id string) (transport.Conversati
 	return transport.Lookup(ctx, svc.Transport, id)
 }
 
-// Binding selects one individual conversation by its exact participant.
+// Binding selects one conversation by its exact participant, or for a group by
+// its fixed group identity.
 type Binding struct {
 	Conversation string `json:"conversation"`
 	Participant  string `json:"participant"`
@@ -112,8 +114,11 @@ type Settings struct {
 	Enabled              bool          `json:"enabled"`
 	Scope                string        `json:"scope"`
 	Conversations        []Binding     `json:"conversations"`
-	LoadOlder            bool          `json:"load_older"`
-	AutomaticReplies     bool          `json:"automatic_replies"`
+	// Groups includes group conversations when Scope is "all". A group chosen
+	// by name in a selection is collected whatever this says.
+	Groups           bool `json:"groups,omitempty"`
+	LoadOlder        bool `json:"load_older"`
+	AutomaticReplies bool `json:"automatic_replies"`
 	// MarkRead is a pointer so settings saved before this option existed keep the
 	// default (on) instead of decoding to false.
 	MarkRead *bool `json:"mark_read_when_viewed,omitempty"`
@@ -142,14 +147,15 @@ func (svc *Service) Settings() (Settings, error) {
 	return s, err
 }
 
-// Allows is the exact-identity collection check: enabled, an individual
-// writable conversation, and selected (or all) by its exact participant.
+// Allows is the exact-identity collection check: enabled, a conversation whose
+// identity is known, and selected (or all) by its exact participant. Groups are
+// part of "all" only when Groups is set.
 func (s Settings) Allows(c transport.Conversation) bool {
-	if !s.Enabled || c.Group || !c.Writable || c.ParticipantID == "" {
+	if !s.Enabled || !c.Collectable() {
 		return false
 	}
 	if s.Scope == "all" {
-		return true
+		return !c.Group || s.Groups
 	}
 	for _, b := range s.Conversations {
 		if b.Conversation == c.ID && b.Participant == c.ParticipantID {
@@ -157,4 +163,10 @@ func (s Settings) Allows(c transport.Conversation) bool {
 		}
 	}
 	return false
+}
+
+// speaksFor reports whether a message is from the person a binding names. In a
+// group any member's message belongs to the group; the owner's own always do.
+func speaksFor(participant string, m transport.Incoming) bool {
+	return m.Outgoing || strings.HasPrefix(participant, "group:") || participant == m.ParticipantID
 }

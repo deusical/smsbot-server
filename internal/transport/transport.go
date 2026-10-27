@@ -2,21 +2,50 @@ package transport
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"github.com/deusical/smsbot-server/internal/media"
+	"reflect"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 )
 
+// Member is a person in a group conversation other than the owner.
+type Member struct {
+	ID   string `json:"id"`
+	Name string `json:"name,omitempty"`
+}
+
+// GroupRoster names a group by exactly who is in it. Anything that acts for a
+// group, such as sending to it, checks it, so that a message never reaches
+// people the owner didn't see in the group.
+func GroupRoster(ids []string) string {
+	sorted := append([]string(nil), ids...)
+	sort.Strings(sorted)
+	sum := sha256.Sum256([]byte(strings.Join(sorted, "\x00")))
+	return "group:" + hex.EncodeToString(sum[:16])
+}
+
 type Conversation struct {
-	Archived      bool   `json:"archived,omitempty"`
-	ID            string `json:"id"`
+	Archived bool   `json:"archived,omitempty"`
+	ID       string `json:"id"`
+	// ParticipantID is the other person in an individual conversation. A group
+	// has one fixed identity of its own, "group:" and its conversation ID, so
+	// that people joining or leaving doesn't disturb reading and archiving it.
 	ParticipantID string `json:"participant_id"`
-	Label         string `json:"label"`
-	Protocol      string `json:"protocol"`
-	Group         bool   `json:"group"`
-	Writable      bool   `json:"writable"`
-	Enrolled      bool   `json:"enrolled"`
+	// Members and Roster are a group's people now, and a name for exactly that
+	// set (GroupRoster). Acting for a group requires the Roster to be the one
+	// the owner saw.
+	Members  []Member `json:"members,omitempty"`
+	Roster   string   `json:"roster,omitempty"`
+	Label    string   `json:"label"`
+	Protocol string   `json:"protocol"`
+	Group    bool     `json:"group"`
+	Writable bool     `json:"writable"`
+	Enrolled bool     `json:"enrolled"`
 	// LastMessageAt (RFC3339), Unread and Pinned mirror the phone list for ordering.
 	// They are volatile display hints and never part of identity checks.
 	LastMessageAt string `json:"last_message_at,omitempty"`
@@ -80,7 +109,7 @@ type Fixture struct {
 func NewFixture() *Fixture     { return &Fixture{Online: true, Sent: map[string]string{}} }
 func (f *Fixture) Ready() bool { f.mu.Lock(); defer f.mu.Unlock(); return f.Online }
 func (f *Fixture) Conversations(context.Context) ([]Conversation, error) {
-	return []Conversation{{ID: "demo-chat", ParticipantID: "demo-peer", Label: "Demo conversation", Protocol: "RCS", Writable: true}, {ID: "demo-sms", ParticipantID: "demo-sms-peer", Label: "SMS example", Protocol: "SMS", Writable: true, Pinned: true}, {ID: "demo-group", Label: "Group example", Protocol: "RCS", Group: true, Writable: false}}, nil
+	return []Conversation{{ID: "demo-chat", ParticipantID: "demo-peer", Label: "Demo conversation", Protocol: "RCS", Writable: true}, {ID: "demo-sms", ParticipantID: "demo-sms-peer", Label: "SMS example", Protocol: "SMS", Writable: true, Pinned: true}, {ID: "demo-group", ParticipantID: "group:demo-group", Label: "Group example", Protocol: "RCS", Group: true, Members: []Member{{ID: "demo-member-a", Name: "Alex"}, {ID: "demo-member-b", Name: "Sam"}}, Roster: GroupRoster([]string{"demo-member-a", "demo-member-b"})}}, nil
 }
 func (f *Fixture) Send(ctx context.Context, conv, txn, text string) (Receipt, error) {
 	f.mu.Lock()
@@ -119,4 +148,15 @@ func Lookup(ctx context.Context, t Transport, id string) (Conversation, error) {
 		}
 	}
 	return Conversation{}, errors.New("conversation_unavailable")
+}
+
+// Same reports whether two records of a conversation are identical, including
+// a group's members.
+func (c Conversation) Same(o Conversation) bool { return reflect.DeepEqual(c, o) }
+
+// Collectable reports whether the conversation's messages may be read and saved
+// once the owner allows it: its exact identity is known and it is an individual
+// conversation that can be sent to, or a group.
+func (c Conversation) Collectable() bool {
+	return c.ParticipantID != "" && (c.Writable || c.Group)
 }

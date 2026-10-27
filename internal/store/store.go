@@ -477,6 +477,9 @@ type Message struct {
 	Text          string         `json:"text"`
 	Origin        string         `json:"origin,omitempty"`
 	Status        string         `json:"status,omitempty"`
+	// Sender is the participant who sent an incoming message, which tells the
+	// people in a group apart. It is empty when not known.
+	Sender string `json:"sender,omitempty"`
 }
 
 func (s *Store) Messages(conv string) ([]Message, error) {

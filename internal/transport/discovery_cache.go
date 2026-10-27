@@ -154,7 +154,7 @@ func (c *conversationPageCache) get(ctx context.Context, key string, fetch func(
 }
 
 func samePage(a, b ConversationPage) bool {
-	return !a.Partial && !b.Partial && a.NextCursor == b.NextCursor && slices.Equal(a.Conversations, b.Conversations)
+	return !a.Partial && !b.Partial && a.NextCursor == b.NextCursor && slices.EqualFunc(a.Conversations, b.Conversations, func(x, y Conversation) bool { return x.Same(y) })
 }
 
 // confirmAfterLocked marks the cached pages following cursor current as of at,

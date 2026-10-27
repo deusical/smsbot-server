@@ -21,7 +21,7 @@ and can answer commands you define (fixed text or AI) in the conversations you c
   quiet hours, and rate and spending limits. `!ask` keeps a threaded AI conversation
   you continue by replying. AI uses OpenRouter or any OpenAI-compatible endpoint.
 - **Careful by design.** Only people you enroll can trigger replies, groups are never
-  used, every start is paused, and a send with an uncertain outcome is never retried.
+  used by the bot, every start is paused, and a send with an uncertain outcome is never retried.
 
 ![Conversations](docs/images/conversations.png)
 
