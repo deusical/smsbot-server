@@ -27,9 +27,10 @@ const quotePreview = (m: Message) => ({
 
 /**
  * The composer: draft text, selected files and reply target, and turning a
- * draft into a pending send. Each draft becomes exactly one pending intent
- * with its own key, even under a rapid double Enter or click; retries reuse
- * that key and route, so a lost acknowledgement can never send twice.
+ * draft into pending sends. Each file and the text become separate messages,
+ * each one pending intent with its own key, even under a rapid double Enter
+ * or click; retries reuse that key and route, so a lost acknowledgement can
+ * never send twice.
  */
 export function useComposer({
   conversation,
@@ -66,7 +67,7 @@ export function useComposer({
       next.some((f) => f.size === 0 || (fileLimits.max_file_mb > 0 && f.size > fileLimits.max_file_mb * 1024 * 1024)) ||
       (fileLimits.max_total_mb > 0 && next.reduce((sum, f) => sum + f.size, 0) > fileLimits.max_total_mb * 1024 * 1024)
     ) {
-      setSendError("Choose nonempty files within your attachment limits in Settings ? Messages & privacy.");
+      setSendError("Choose nonempty files within your attachment limits in Settings > Messages & privacy.");
       return;
     }
     setFiles(next);
@@ -86,23 +87,30 @@ export function useComposer({
     const outgoing = text.trim();
     if (!canSend || draftTaken.current || (!outgoing && files.length === 0)) return;
     draftTaken.current = true;
-    // Clear the box at once; the pending bubble carries the message from here.
-    const item: Pending = {
+    // The phone sends one file or one text per message: a message combining
+    // them is accepted but never delivered. Each file goes as its own message,
+    // then the text, in that order. Only the first one quotes the reply target.
+    const parts = [...files.map((f) => ({ text: "", files: [f] })), ...(outgoing ? [{ text: outgoing, files: [] }] : [])];
+    const start = Date.now();
+    const items: Pending[] = parts.map((part, i) => ({
       key: crypto.randomUUID(),
-      text: outgoing,
-      replyTo: replyTarget?.id,
-      quote: replyTarget ? quotePreview(replyTarget) : undefined,
-      files,
-      at: new Date().toISOString(),
+      text: part.text,
+      replyTo: i === 0 ? replyTarget?.id : undefined,
+      quote: i === 0 && replyTarget ? quotePreview(replyTarget) : undefined,
+      files: part.files,
+      at: new Date(start + i).toISOString(),
       route: null,
       phase: "posting",
-    };
+    }));
+    // Clear the box at once; the pending bubbles carry the message from here.
     setText("");
     setReplyTarget(null);
     setFiles([]);
     setSendError("");
-    addPending(conversation.id, item);
-    void enqueue(() => postPending(conversation, item.key, readInbox));
+    for (const item of items) {
+      addPending(conversation.id, item);
+      void enqueue(() => postPending(conversation, item.key, readInbox));
+    }
     textarea.current?.focus();
   }
   function retryPending(p: Pending) {

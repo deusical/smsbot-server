@@ -165,3 +165,23 @@ test("a pending send is still followed while another page is open", async ({page
   await expect(page.locator(".bubble.outgoing").filter({hasText: "Synthetic followed text"})).toHaveCount(1);
   await expect(page.locator(".bubble.pending")).toHaveCount(0);
 });
+
+test("files and text are sent as separate messages, files first", async ({page}) => {
+  const world = await prepare(page);
+  const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
+  await page.getByLabel("Choose files", {exact: true}).setInputFiles([
+    {name: "synthetic-one.png", mimeType: "image/png", buffer: png},
+    {name: "synthetic-two.png", mimeType: "image/png", buffer: png},
+  ]);
+  await page.getByLabel("Message", {exact: true}).fill("Synthetic caption");
+  await page.getByRole("button", {name: "Send message", exact: true}).click();
+  await expect(page.locator(".bubble.pending")).toHaveCount(3);
+  await expect.poll(() => world.composeCalls.length).toBe(3);
+  const calls = world.composeCalls as unknown as {text: string; request_id: string; attachments: {name: string}[]}[];
+  expect(calls.map(c => [c.text, c.attachments.map(a => a.name)])).toEqual([
+    ["", ["synthetic-one.png"]],
+    ["", ["synthetic-two.png"]],
+    ["Synthetic caption", []],
+  ]);
+  expect(new Set(calls.map(c => c.request_id)).size).toBe(3);
+});

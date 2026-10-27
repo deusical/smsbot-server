@@ -866,6 +866,7 @@ paths:
       description: Queue confirmed owner manual reply with idempotency key; pause and
         final access checks apply. Optional attachments are base64 bytes. Owner-configured
         attachment_limits control count, per-file MiB and combined MiB; each zero disables that limit. Empty text is allowed when files are supplied.
+        The phone may accept but never deliver a message that combines several files, or a file and text, so send each file and the text as separate requests, as the dashboard does.
         The request key binds the text, file names, MIME types, exact bytes and optional reply target.
         Quoted replies require a locally collected RCS target in this conversation and current RCS capability; they never silently downgrade to SMS.
       security:

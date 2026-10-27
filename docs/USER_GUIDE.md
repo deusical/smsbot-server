@@ -120,6 +120,7 @@ notify. On iPhone, add SmsBot to the Home Screen first.
 
 ## Files
 
-Attach images, video, audio or documents with an optional caption. Images, audio and
-video preview inline; other files download. Limits are under **Messages & privacy >
+Attach images, video, audio or documents with an optional caption. Like the Google
+Messages app, each file goes as its own message, followed by the caption. Images, audio
+and video preview inline; other files download. Limits are under **Messages & privacy >
 Attachment limits**. A message with an attachment never runs a command.
