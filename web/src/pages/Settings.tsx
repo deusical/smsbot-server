@@ -542,7 +542,7 @@ function InboxSection({
       {draft && (
         <Group
           title="Full inbox"
-          description="Keep messages and files from your phone, not just commands, so you can read and reply here. Groups can be saved too, but the bot and sending don't work in them yet."
+          description="Keep messages and files from your phone, not just commands, so you can read and reply here. Groups can be saved too, and you can send to them and let chosen members use the bot there."
         >
           <Switch
             label="Show all conversation messages"

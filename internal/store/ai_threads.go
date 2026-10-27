@@ -239,11 +239,31 @@ func (s *Store) RecordAIAnswer(conv, txn, wire string, now time.Time, hours, day
 	}
 	defer tx.Rollback()
 	var id, thread, payload, state, command, peer string
-	err = tx.QueryRow("SELECT e.id,e.thread_id,e.payload,j.state,j.command,n.participant FROM ai_exchanges e JOIN ai_threads t ON t.id=e.thread_id JOIN jobs j ON j.id=e.id JOIN enrollment n ON n.conversation=j.conversation WHERE e.outbound_key=? AND j.conversation=? AND j.txn=?", Hash(conv+"\x00"+txn), conv, txn).Scan(&id, &thread, &payload, &state, &command, &peer)
+	err = tx.QueryRow("SELECT e.id,e.thread_id,e.payload,j.state,j.command FROM ai_exchanges e JOIN ai_threads t ON t.id=e.thread_id JOIN jobs j ON j.id=e.id WHERE e.outbound_key=? AND j.conversation=? AND j.txn=?", Hash(conv+"\x00"+txn), conv, txn).Scan(&id, &thread, &payload, &state, &command)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}
 	if err != nil {
+		return err
+	}
+	// An individual conversation's thread belongs to the person enrolled in it.
+	// A group's belongs to whoever asked, who must still be enrolled there.
+	err = tx.QueryRow("SELECT participant FROM enrollment WHERE conversation=?", conv).Scan(&peer)
+	if errors.Is(err, sql.ErrNoRows) {
+		var data aiThread
+		var raw string
+		if err = tx.QueryRow("SELECT payload FROM ai_threads WHERE id=?", thread).Scan(&raw); err != nil {
+			return nil
+		}
+		if err = s.openAI("ai-thread:"+thread, raw, &data); err != nil {
+			return err
+		}
+		var enrolled int
+		if err = tx.QueryRow("SELECT count(*) FROM group_enrollment WHERE conversation=? AND participant=?", conv, data.Participant).Scan(&enrolled); err != nil || enrolled == 0 {
+			return err
+		}
+		peer = data.Participant
+	} else if err != nil {
 		return err
 	}
 	if state != "submitting" && state != "unknown_submission" && state != "submitted" && state != "delivered" && state != "read" {

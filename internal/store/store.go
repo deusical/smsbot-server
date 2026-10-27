@@ -111,7 +111,17 @@ func Open(path string, v *vault.Vault) (*Store, error) {
 	}
 	return s, nil
 }
+
+// migrate brings the schema up to date, then makes sure the tables added
+// without a version bump exist.
 func (s *Store) migrate() error {
+	if err := s.migrateSchema(); err != nil {
+		return err
+	}
+	return s.ensureGroupEnrollment()
+}
+
+func (s *Store) migrateSchema() error {
 	if _, e := s.DB.Exec(`PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON; PRAGMA synchronous=FULL;`); e != nil {
 		return e
 	}
@@ -303,6 +313,9 @@ func (s *Store) Unenroll(conv string) error {
 	}
 	defer tx.Rollback()
 	if _, e = tx.Exec("DELETE FROM enrollment WHERE conversation=?", conv); e != nil {
+		return e
+	}
+	if _, e = tx.Exec("DELETE FROM group_enrollment WHERE conversation=?", conv); e != nil {
 		return e
 	}
 	if _, e = tx.Exec("UPDATE jobs SET state='cancelled',code='unenrolled',plan='' WHERE conversation=? AND state IN ('queued','generating','awaiting_approval')", conv); e != nil {

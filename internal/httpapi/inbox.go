@@ -102,7 +102,7 @@ func (s *Server) inboxConversations(w http.ResponseWriter, r *http.Request) {
 	}
 	previews, _ := s.Store.LatestPreviews(r.Context(), previewIDs)
 	for i := range p.Conversations {
-		p.Conversations[i].Enrolled = s.Store.Enrolled(p.Conversations[i].ID, p.Conversations[i].ParticipantID)
+		s.Store.ShowEnrollment(&p.Conversations[i])
 		p.Conversations[i].LastMessageAt = newestTime(p.Conversations[i].LastMessageAt, latest[p.Conversations[i].ID])
 		if v, ok := previews[p.Conversations[i].ID]; ok {
 			p.Conversations[i].Preview, p.Conversations[i].PreviewFromMe = v.Text, v.FromMe

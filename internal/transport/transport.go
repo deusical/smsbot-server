@@ -46,6 +46,11 @@ type Conversation struct {
 	Group    bool     `json:"group"`
 	Writable bool     `json:"writable"`
 	Enrolled bool     `json:"enrolled"`
+	// For a group, Enrolled is true if anyone is enrolled. EnrolledMembers are
+	// who may use the bot there, and BotRoster the roster approved for them;
+	// the bot is silent if the group's Roster is not that one.
+	EnrolledMembers []string `json:"enrolled_members,omitempty"`
+	BotRoster       string   `json:"bot_roster,omitempty"`
 	// LastMessageAt (RFC3339), Unread and Pinned mirror the phone list for ordering.
 	// They are volatile display hints and never part of identity checks.
 	LastMessageAt string `json:"last_message_at,omitempty"`

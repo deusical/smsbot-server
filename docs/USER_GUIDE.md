@@ -44,7 +44,14 @@ use commands.
   the group change while you have it open, a notice shows who it has now and sending
   waits until you choose **Send to these people**. A message is never sent to people you
   hadn't seen in the group: if they change before it goes, it is cancelled. Replies to a
-  specific message, reactions and bot replies in groups aren't available yet.
+  specific message and reactions in groups aren't available yet.
+- **The bot in a group.** Open the group and use the **Bot** button in its header to
+  switch on the people who may run commands there. Only they can; other members,
+  and you, are ignored. Answers go to the whole group, and each person has their own AI
+  conversation and memory. The choice is approved for the group as it is: if anyone joins
+  or leaves, the bot goes quiet in that group (the button says **Bot paused: people
+  changed**) until you look at who is there and choose **Approve these people**. People
+  who left are then removed. Turning the bot off for a person removes only them.
 - **Shortcuts.** **Ctrl/Cmd+K** searches conversations, **Alt+Up/Down** switches
   conversation, and **Ctrl/Cmd+S** saves settings.
 

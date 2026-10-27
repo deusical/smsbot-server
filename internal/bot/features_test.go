@@ -101,7 +101,7 @@ func TestQueueSnapshotsGenerationAndContext(t *testing.T) {
 	if err := e.SetConfiguration(c); err != nil {
 		t.Fatal(err)
 	}
-	scope := memoryScope("demo-chat", "!ask", "fixture/model")
+	scope := memoryScope("demo-chat", "!ask", "fixture/model", "")
 	if err := e.Store.Remember(scope, []store.Turn{{Role: "user", Content: "Synthetic prior input"}}, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +164,7 @@ func TestMemoryResetDuringGenerationCannotRestoreContext(t *testing.T) {
 	zero := 0.0
 	p := &controlledProvider{started: make(chan store.Plan, 1), release: make(chan struct{}), result: Result{Text: "Synthetic answer", Cost: &zero}}
 	e.Provider = p
-	scope := memoryScope("demo-chat", "!ask", "fixture/model")
+	scope := memoryScope("demo-chat", "!ask", "fixture/model", "")
 	e.Store.Remember(scope, []store.Turn{{Role: "user", Content: "Synthetic old context"}}, time.Now().Add(time.Hour))
 	acceptAsk(t, e)
 	done := make(chan error, 1)
@@ -273,7 +273,7 @@ func TestConsentRemovalInvalidatesQueuedContext(t *testing.T) {
 	e, _ := setup(t)
 	arm(t, e)
 	c := configureAI(t, e, true, false)
-	scope := memoryScope("demo-chat", "!ask", "fixture/model")
+	scope := memoryScope("demo-chat", "!ask", "fixture/model", "")
 	e.Store.Remember(scope, []store.Turn{{Role: "user", Content: "Synthetic context"}}, time.Now().Add(time.Hour))
 	id := acceptAsk(t, e)
 	c.Commands[0].Memory = false

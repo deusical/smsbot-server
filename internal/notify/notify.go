@@ -230,7 +230,7 @@ func (n *Service) messages(ctx context.Context, subs []store.PushSubscription) e
 			}
 			n.notified[m.ID] = at
 			enrolled := false
-			if _, ok := n.Store.EnrolledParticipant(m.Conversation); ok {
+			if n.Store.BotOn(m.Conversation) {
 				enrolled = true
 			}
 			title := n.label(m.Conversation)

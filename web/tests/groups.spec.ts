@@ -29,8 +29,10 @@ test("a group is saved with who sent each message and shown that way", async ({ 
   await setGroups(page, true);
   try {
     for (const [id, sender, text] of [
-      ["synthetic-group-1", "demo-member-a", "Synthetic hello from Alex"],
-      ["synthetic-group-2", "demo-member-b", "Synthetic hello from Sam"],
+      // Different senders in turn, so each starts a run and shows their name
+      // whatever other tests left in the group.
+      ["synthetic-group-1", "demo-member-b", "Synthetic hello from Sam"],
+      ["synthetic-group-2", "demo-member-a", "Synthetic hello from Alex"],
     ]) {
       const received = await page.request.post("/api/v1/fixture/incoming", {
         headers,

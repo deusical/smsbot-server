@@ -113,7 +113,7 @@ func TestBackupRejectsFutureSchemaTamperingAndRollsBack(t *testing.T) {
 		t.Fatal("future schema accepted")
 	}
 	b.Schema = 1
-	b.Enrollment = []backupEnrollment{{"fixture-chat", "fixture-peer"}}
+	b.Enrollment = []backupEnrollment{{Conversation: "fixture-chat", Participant: "fixture-peer"}}
 	b.Messages = []backupMessage{{ID: "bad", Conversation: "fixture-chat", Direction: "incoming", At: "2026-01-01T00:00:00Z", Payload: "bad"}}
 	plain, _ = json.Marshal(b)
 	sealed, _ = source.Vault.Seal("backup", plain)

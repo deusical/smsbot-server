@@ -6,6 +6,7 @@ import {
   type InboxSettings,
   type State,
 } from "../lib/api";
+import { GroupBot } from "../components/GroupBot";
 import { ConversationHistory } from "./ConversationHistory";
 import { formatListTime, sortConversations, useSeen } from "../lib/conversationOrder";
 import { useTyping } from "../lib/typing";
@@ -245,7 +246,7 @@ export function ConversationsPage({
             state={state}
             busy={busy}
             act={act}
-            enrollControl={enrollSwitch(current, false)}
+            enrollControl={current.group ? <GroupBot conversation={current} busy={busy} act={act} /> : enrollSwitch(current, false)}
             typing={typing.has(current.id)}
             onBack={() => onSelect("")}
             onResume={onResume}
@@ -259,7 +260,7 @@ export function ConversationsPage({
             <p>
               {current
                 ? "Turn bot replies back on to see this conversation."
-                : "Turn on bot replies for a person to let them use your commands. Bot replies don't work in groups yet."}
+                : "Turn on bot replies for a person to let them use your commands. In a group, choose who can use the bot from inside the group."}
             </p>
           </div>
         )}
