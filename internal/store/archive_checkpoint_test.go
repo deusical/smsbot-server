@@ -5,6 +5,7 @@ import (
 	"errors"
 	"github.com/deusical/smsbot-server/internal/transport"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -53,7 +54,7 @@ func TestArchiveJSONKeepsFlatLegacyKeys(t *testing.T) {
 	}
 	again, _ := json.Marshal(a)
 	var round Archive
-	if err = json.Unmarshal(again, &round); err != nil || round != a {
+	if err = json.Unmarshal(again, &round); err != nil || !reflect.DeepEqual(round, a) {
 		t.Fatal("legacy payload did not round-trip", err)
 	}
 }

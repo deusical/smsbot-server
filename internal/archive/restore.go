@@ -183,7 +183,7 @@ func (s *Service) Restore(ctx context.Context, r io.Reader, progress func(Counts
 func (s *Service) restoreRow(ctx context.Context, dst *store.Store, r archiveRow, c *Counts) error {
 	switch r.Kind {
 	case "archive":
-		if r.Archive == nil || r.Archive.Conversation.ID == "" || r.Archive.Conversation.Group || r.Archive.Conversation.ParticipantID == "" || r.Retention < 0 || r.Retention > 3650 {
+		if r.Archive == nil || r.Archive.Conversation.ID == "" || !r.Archive.Conversation.Collectable() || r.Retention < 0 || r.Retention > 3650 {
 			return errors.New("invalid_archive")
 		}
 		a := *r.Archive

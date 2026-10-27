@@ -15,7 +15,7 @@ type FileHost struct{ svc *Service }
 func (h FileHost) Authorize(ctx context.Context, c transport.Conversation) (int64, error) {
 	ctx = transport.WithPhonePurpose(ctx, "original")
 	verified, err := h.svc.lookup(ctx, c.ID)
-	if err != nil || verified.ParticipantID != c.ParticipantID || verified.Group {
+	if err != nil || verified.ParticipantID != c.ParticipantID {
 		return 0, errors.New("archive_access_changed")
 	}
 	h.svc.mu.Lock()
@@ -36,7 +36,7 @@ func (h FileHost) Open(ctx context.Context, file media.File) (io.ReadCloser, err
 func (h FileHost) CommitFile(ctx context.Context, c transport.Conversation, revision int64, message string, expected, updated media.File) error {
 	ctx = transport.WithPhonePurpose(ctx, "original")
 	verified, err := h.svc.lookup(ctx, c.ID)
-	if err != nil || verified.ParticipantID != c.ParticipantID || verified.Group {
+	if err != nil || verified.ParticipantID != c.ParticipantID {
 		return errors.New("archive_access_changed")
 	}
 	h.svc.mu.Lock()
@@ -56,7 +56,7 @@ func (h FileHost) CommitFile(ctx context.Context, c transport.Conversation, revi
 // authenticated owner endpoint calls this; archived identity and expiry apply.
 func (svc *Service) LocalArchiveAttachment(conv, message, attachment string) (media.File, error) {
 	a, err := svc.Store.Archive(conv)
-	if err != nil || a.Conversation.Group || a.Conversation.ParticipantID == "" {
+	if err != nil || a.Conversation.ParticipantID == "" {
 		return media.File{}, errors.New("archive_unavailable")
 	}
 	settings, err := svc.Settings()

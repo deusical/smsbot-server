@@ -310,11 +310,14 @@ test("conversation filters preserve enrollment and theme switches do not write b
   await page
     .getByRole("button", { name: "Conversations", exact: true })
     .click();
-  await expect(page.locator("li.conversation")).toHaveCount(2, {
+  // The mocked rows arrive after the fixture's own; wait for them, not a count.
+  await expect(page.locator("li.conversation").filter({ hasText: "Synthetic Group" })).toBeVisible({
     timeout: 10000,
   });
+  // Other tests may leave a fixture conversation enrolled, so check these rows only.
   await page.getByRole("button", { name: /^Bot on/ }).click();
-  await expect(page.locator("li.conversation")).toHaveCount(1);
+  await expect(page.locator("li.conversation").filter({ hasText: "Synthetic Alpha" })).toHaveCount(1);
+  await expect(page.locator("li.conversation").filter({ hasText: "Synthetic Group" })).toHaveCount(0);
   await page.getByLabel("Search conversations").fill("missing");
   await expect(page.getByText("No conversations found")).toBeVisible();
   await page.getByLabel("Search conversations").fill("");

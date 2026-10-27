@@ -56,8 +56,11 @@ sends twice.
 
 ## Safety rules
 
-- **Exact participants.** Only individual conversations, matched by participant ID.
-  Groups are excluded.
+- **Exact participants.** The bot and sending use only individual conversations, matched
+  by participant ID. A group can be read and archived, under a fixed identity of its own
+  (`group:` and its conversation ID) so membership changes don't interrupt it; its
+  `roster` names exactly who is in it, for the checks that will act for a group.
+  Nothing sends to a group or runs commands in one yet.
 - **Fresh input only.** History and outgoing echoes never run commands. A message
   runs one only if it is a command or a reply to an AI answer; a file it carries
   goes to the AI. A file alone, not replying to an AI answer, never runs one.

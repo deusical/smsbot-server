@@ -86,7 +86,7 @@ func (s *Server) inboxConversations(w http.ResponseWriter, r *http.Request) {
 	}
 	eligible := []transport.Conversation{}
 	for _, c := range p.Conversations {
-		if !c.Group && (c.Writable || c.Archived) {
+		if c.Collectable() || c.Archived {
 			eligible = append(eligible, c)
 		}
 	}

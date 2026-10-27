@@ -354,7 +354,7 @@ func isExplicitArchive(a store.Archive) bool {
 }
 
 func eligibleArchive(a store.Archive) bool {
-	return !a.Conversation.Group && a.Conversation.Writable && a.Conversation.ParticipantID != ""
+	return a.Conversation.Collectable()
 }
 
 // fetch reads one page with a bounded deadline, after recording the change

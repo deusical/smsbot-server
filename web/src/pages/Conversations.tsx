@@ -162,7 +162,7 @@ export function ConversationsPage({
                   open(c)
                     ? undefined
                     : c.group
-                      ? "Group conversations are never used by the bot"
+                      ? "Archive this group in Settings to open it"
                       : "Turn on bot replies to open this conversation"
                 }
                 onClick={() => onSelect(c.id)}
@@ -175,9 +175,7 @@ export function ConversationsPage({
                     {c.pinned && <span className="sr-only"> (pinned)</span>}
                   </strong>
                   <small>
-                    {c.group ? (
-                      "Group, not supported"
-                    ) : typing.has(c.id) ? (
+                    {typing.has(c.id) ? (
                       <span className="typing-text">typing…</span>
                     ) : c.preview ? (
                       <span className="preview-text">
@@ -186,7 +184,7 @@ export function ConversationsPage({
                       </span>
                     ) : (
                       <>
-                        {c.protocol}
+                        {c.group ? `Group, ${c.members?.length ?? 0} people` : c.protocol}
                         {c.enrolled && <span className="on-tag">Bot on</span>}
                       </>
                     )}
@@ -261,7 +259,7 @@ export function ConversationsPage({
             <p>
               {current
                 ? "Turn bot replies back on to see this conversation."
-                : "Turn on bot replies for a person to let them use your commands. Groups are never included."}
+                : "Turn on bot replies for a person to let them use your commands. Bot replies don't work in groups yet."}
             </p>
           </div>
         )}

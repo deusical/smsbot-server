@@ -13,10 +13,13 @@ import (
 // MessageInteraction is an authoritative snapshot when non-nil. Wire identities
 // and participant IDs are sensitive and must only be persisted encrypted.
 type MessageInteraction struct {
-	UpstreamID string     `json:"upstream_id"`
-	Protocol   string     `json:"protocol"`
-	OwnerID    string     `json:"owner_id"`
-	ReplyTo    string     `json:"reply_to,omitempty"`
+	UpstreamID string `json:"upstream_id"`
+	Protocol   string `json:"protocol"`
+	OwnerID    string `json:"owner_id"`
+	ReplyTo    string `json:"reply_to,omitempty"`
+	// Sender is the participant who sent the message, which tells people apart
+	// in a group.
+	Sender     string     `json:"sender,omitempty"`
 	Reactions  []Reaction `json:"reactions"`
 	ObservedAt time.Time  `json:"observed_at"`
 }
@@ -42,7 +45,7 @@ func (g *Google) InteractionOwner(conv, expectedPeer string) (string, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	c := g.conversations[conv]
-	if !eligible(c) || c.GetConversationID() != conv || peer(c) != expectedPeer {
+	if !readable(c) || c.GetConversationID() != conv || peer(c) != expectedPeer {
 		return "", ErrUnavailable
 	}
 	return c.GetDefaultOutgoingID(), nil
@@ -68,6 +71,16 @@ func (g *Google) rememberConversationEvent(c *gmproto.Conversation) bool {
 func CanonicalEmoji(s string) string { return variationselector.FullyQualify(s) }
 
 func rcsProtocol(s string) bool { return strings.Contains(strings.ToUpper(s), "RCS") }
+
+// conversationSnapshot is the interaction record for a message in c. Who sent
+// it is kept for groups, where it is the only way to tell people apart.
+func conversationSnapshot(c *gmproto.Conversation, m *gmproto.Message, observed time.Time) *MessageInteraction {
+	v := interactionSnapshot(m, c.GetDefaultOutgoingID(), observed)
+	if c.GetIsGroupChat() {
+		v.Sender = m.GetParticipantID()
+	}
+	return v
+}
 
 func interactionSnapshot(m *gmproto.Message, owner string, observed time.Time) *MessageInteraction {
 	protocol := "unknown"

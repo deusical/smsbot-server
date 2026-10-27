@@ -44,7 +44,7 @@ func (svc *Service) SetSettings(ctx context.Context, s Settings) error {
 		seen[b.Conversation] = true
 		if s.Enabled && s.Scope == "selected" {
 			c, err := svc.lookup(ctx, b.Conversation)
-			if err != nil || c.Group || !c.Writable || c.ParticipantID != b.Participant {
+			if err != nil || !c.Collectable() || c.ParticipantID != b.Participant {
 				return errors.New("conversation_identity_changed")
 			}
 		}
@@ -118,7 +118,7 @@ func (svc *Service) observe(ctx context.Context, m transport.Incoming, epoch uin
 	if s.Scope == "selected" {
 		found := false
 		for _, b := range s.Conversations {
-			if b.Conversation == m.ConversationID && (m.Outgoing || m.ParticipantID == b.Participant) {
+			if b.Conversation == m.ConversationID && speaksFor(b.Participant, m) {
 				found = true
 				break
 			}
@@ -145,7 +145,7 @@ func (svc *Service) observe(ctx context.Context, m transport.Incoming, epoch uin
 	if err != nil {
 		return err
 	}
-	if !s.Allows(c) || (!m.Outgoing && m.ParticipantID != c.ParticipantID) {
+	if !s.Allows(c) || !speaksFor(c.ParticipantID, m) {
 		return nil
 	}
 	if m.Interaction != nil {

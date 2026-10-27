@@ -438,7 +438,7 @@ func (s *Store) RestoreBackup(data []byte) error {
 	for _, a := range b.Archives {
 		plain, err := s.Vault.Open("archive:"+Hash(a.Conversation), a.Payload)
 		var record Archive
-		if err != nil || json.Unmarshal(plain, &record) != nil || record.Conversation.ID != a.Conversation || record.Conversation.Group || record.Conversation.ParticipantID == "" || a.Retention < 0 || a.Retention > 3650 {
+		if err != nil || json.Unmarshal(plain, &record) != nil || record.Conversation.ID != a.Conversation || !record.Conversation.Collectable() || a.Retention < 0 || a.Retention > 3650 {
 			return errors.New("invalid backup archive")
 		}
 		record.State = "cancelled"

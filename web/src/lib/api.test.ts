@@ -18,10 +18,31 @@ describe("inbox eligibility", () => {
     expect(inboxAllows(settings, { ...conversation, id: "different-chat" })).toBe(false);
   });
 
-  it.each(["selected", "all"] as const)("excludes groups and unwritable conversations in %s scope", scope => {
-    const config = { ...settings, scope };
-    expect(inboxAllows(config, { ...conversation, group: true })).toBe(false);
-    expect(inboxAllows(config, { ...conversation, writable: false })).toBe(false);
+  it("excludes unwritable individual conversations in either scope", () => {
+    for (const scope of ["selected", "all"] as const)
+      expect(inboxAllows({ ...settings, scope }, { ...conversation, writable: false })).toBe(false);
+  });
+
+  describe("groups", () => {
+    const group: Conversation = { ...conversation, id: "synthetic-group", participant_id: "group:synthetic-group", group: true, writable: false };
+    const chosen = { ...settings, conversations: [{ conversation: group.id, participant: group.participant_id }] };
+
+    it("are allowed when picked by name, whatever the all-scope switch says", () => {
+      expect(inboxAllows(chosen, group)).toBe(true);
+      expect(inboxAllows(settings, group)).toBe(false);
+      expect(inboxAllows(chosen, { ...group, participant_id: "group:other" })).toBe(false);
+    });
+
+    it("are part of all scope only when the switch is on", () => {
+      const all = { ...settings, scope: "all" as const, conversations: [] };
+      expect(inboxAllows(all, group)).toBe(false);
+      expect(inboxAllows({ ...all, groups: true }, group)).toBe(true);
+      expect(inboxAllows({ ...all, groups: true }, conversation)).toBe(true);
+    });
+
+    it("need an identity", () => {
+      expect(inboxAllows({ ...settings, scope: "all", conversations: [], groups: true }, { ...group, participant_id: "" })).toBe(false);
+    });
   });
 
   it("requires enabled settings, even with a matching selection", () => {

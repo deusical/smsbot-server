@@ -23,6 +23,8 @@ export type Conversation = {
   label: string;
   protocol: string;
   group: boolean;
+  /** The people in a group, other than you. */
+  members?: { id: string; name?: string }[];
   writable: boolean;
   enrolled: boolean;
   last_message_at?: string;
@@ -70,6 +72,8 @@ export type Message = {
   text: string;
   origin?: string;
   status?: string;
+  /** Who sent an incoming message in a group. */
+  sender?: string;
 };
 export type AttachmentLimits = {
   max_files: number;
@@ -88,22 +92,27 @@ export type InboxSettings = {
   scope: "all" | "selected";
   conversations: { conversation: string; participant: string }[];
   load_older: boolean;
+  /** Include group conversations when scope is "all". */
+  groups?: boolean;
   automatic_replies: boolean;
   mark_read_when_viewed?: boolean;
   revision: number;
 };
+/** A conversation whose exact identity is known: one to send to, or a group. */
+export const collectable = (c: Conversation) =>
+  !!c.participant_id && (c.writable || c.group);
 export function inboxAllows(
   s: InboxSettings | null | undefined,
   c: Conversation,
 ): boolean {
   return (
     !!s?.enabled &&
-    !c.group &&
-    c.writable &&
-    (s.scope === "all" ||
-      s.conversations.some(
-        (b) => b.conversation === c.id && b.participant === c.participant_id,
-      ))
+    collectable(c) &&
+    (s.scope === "all"
+      ? !c.group || !!s.groups
+      : s.conversations.some(
+          (b) => b.conversation === c.id && b.participant === c.participant_id,
+        ))
   );
 }
 export type Generation = {

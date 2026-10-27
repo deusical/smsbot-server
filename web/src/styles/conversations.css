@@ -423,3 +423,12 @@
   display: none;
 }
 
+
+/* Who sent a message, in a group. */
+.bubble-sender {
+  display: block;
+  margin-bottom: 2px;
+  color: var(--faint);
+  font-size: 11px;
+  font-weight: 600;
+}

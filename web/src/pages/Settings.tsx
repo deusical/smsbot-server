@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { NotificationSettings } from "../components/NotificationSettings";
 import {
   api,
+  collectable,
   defaultAttachmentLimits,
   ApiError,
   type CompatibleProviderStatus,
@@ -535,13 +536,13 @@ function InboxSection({
   conversations,
 }: SectionProps & { conversations: Conversation[] }) {
   const draft = workspace.inboxDraft;
-  const eligible = conversations.filter((c) => !c.group && c.writable);
+  const eligible = conversations.filter(collectable);
   return (
     <>
       {draft && (
         <Group
           title="Full inbox"
-          description="Keep messages and files from your phone, not just commands, so you can read and reply here. Groups are never included."
+          description="Keep messages and files from your phone, not just commands, so you can read and reply here. Groups can be saved too, but the bot and sending don't work in them yet."
         >
           <Switch
             label="Show all conversation messages"
@@ -557,11 +558,19 @@ function InboxSection({
                 value={draft.scope}
                 onChange={(scope) => workspace.editInbox({ scope })}
                 options={[
-                  { value: "all", label: "All individual" },
+                  { value: "all", label: "All conversations" },
                   { value: "selected", label: "Only selected" },
                 ]}
               />
             </div>
+            {draft.scope === "all" && (
+              <Switch
+                label="Include group chats"
+                hint="Saves group conversations too, with who sent each message. Off by default; a group you pick under Only selected is always saved."
+                checked={!!draft.groups}
+                onChange={(groups) => workspace.editInbox({ groups })}
+              />
+            )}
             {draft.scope === "selected" && (
               <div
                 className="chips"

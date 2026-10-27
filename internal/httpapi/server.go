@@ -340,6 +340,10 @@ func (s *Server) incoming(w http.ResponseWriter, r *http.Request) {
 	if m.At.IsZero() {
 		m.At = time.Now().UTC()
 	}
+	// As the phone does, say who in a group sent the message.
+	if c, err := transport.Lookup(r.Context(), s.Transport, m.ConversationID); err == nil && c.Group && !m.Outgoing {
+		m.Interaction = &transport.MessageInteraction{UpstreamID: m.ID, Protocol: "RCS", Sender: m.ParticipantID, Reactions: []transport.Reaction{}}
+	}
 	accepted, e := s.Engine.Receive(r.Context(), m)
 	if e != nil {
 		s.bad(w, 500, "processing_error")
