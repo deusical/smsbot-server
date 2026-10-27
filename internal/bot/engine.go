@@ -507,7 +507,6 @@ var imageTypes = []string{"image/jpeg", "image/png", "image/gif", "image/webp"}
 type quotedPhoto struct {
 	store.ImageRef
 	media.Info
-	SizeUnverified bool
 }
 
 // quotedPhoto returns the first image attached to a saved message, if any.
@@ -518,7 +517,7 @@ func (e *Engine) quotedPhoto(conv, message string) (*quotedPhoto, error) {
 	}
 	for _, f := range files {
 		if strings.HasPrefix(f.MIME, "image/") {
-			return &quotedPhoto{ImageRef: store.ImageRef{Message: message, Attachment: f.ID}, Info: f.Info, SizeUnverified: f.SizeUnverified}, nil
+			return &quotedPhoto{ImageRef: store.ImageRef{Message: message, Attachment: f.ID}, Info: f.Info}, nil
 		}
 	}
 	return nil, nil
@@ -532,7 +531,7 @@ func photoUnreadable(photo quotedPhoto, m Model) string {
 		return "This model can't read images; pick one that can for this command."
 	case !contains(imageTypes, photo.MIME):
 		return "I can only read JPEG, PNG, GIF and WebP photos."
-	case !photo.SizeUnverified && photo.Size > imageLimit:
+	case photo.Size > imageLimit:
 		return "That photo is too large for the AI; the limit is 5 MB."
 	}
 	return ""
@@ -786,8 +785,11 @@ func (e *Engine) generateReply(ctx context.Context, j store.Job, p *store.Plan, 
 	e.mu.Unlock()
 	var result Result
 	image, imageErr := e.loadImage(genctx, j.ConversationID, p.Image)
-	generr := imageErr
-	if imageErr == nil {
+	var generr error
+	if imageErr != nil {
+		zero := 0.0
+		result.Cost = &zero
+	} else {
 		result, generr = provider.Generate(genctx, key, *p, history, m, image)
 	}
 	cancel()

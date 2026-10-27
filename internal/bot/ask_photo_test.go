@@ -22,7 +22,7 @@ var syntheticPNG = append([]byte("\x89PNG\r\n\x1a\n"), []byte("synthetic photo b
 
 func savePhoto(t *testing.T, e *Engine, wire, mime, text string, data []byte) {
 	t.Helper()
-	files := []media.File{{Info: media.Info{ID: "part-0", Name: "synthetic-photo", MIME: mime, Size: int64(len(data))}, Data: data}}
+	files := []media.File{{Info: media.Info{ID: "part-0", Name: "synthetic-photo", MIME: mime, Size: int64(len(data))}, Data: data, SizeUnverified: true}}
 	if err := e.Store.SaveObservedFiles("demo-chat", wire, "", "incoming", text, "phone", "", time.Now(), files); err != nil {
 		t.Fatal(err)
 	}
@@ -151,6 +151,10 @@ func TestAskOnAPhotoThatIsNotAnImageFails(t *testing.T) {
 	}
 	if state != "failed" || code != "image_unavailable" || len(provider.history) != 0 {
 		t.Fatalf("state=%s code=%s", state, code)
+	}
+	_, unknown, err := e.Store.SpendSince(time.Now().UTC().Format("2006-01-02") + "T00:00:00Z")
+	if err != nil || unknown != 0 {
+		t.Fatalf("unknown=%d err=%v", unknown, err)
 	}
 }
 
