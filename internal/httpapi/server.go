@@ -63,7 +63,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Exact Host protects loopback endpoints against DNS rebinding.
 	origin, _ := url.Parse(s.Origin)
 	if r.Host != origin.Host {
-		http.Error(w, "invalid host", 403)
+		http.Error(w, "invalid host", http.StatusForbidden)
 		return
 	}
 	w.Header().Set("X-Content-Type-Options", "nosniff")
