@@ -72,7 +72,9 @@ sends twice.
 - **Sending:** `bot.Engine.Dispatch` runs each job's steps under one lock and releases it
   only while waiting on the AI provider or uploading files.
 - **AI threads:** each `!ask` answer is linked to its upstream message ID, so a native
-  reply to it continues that thread. Only the replied-to branch is sent as context.
+  reply to it continues that thread. Only the replied-to branch is sent as context. A
+  photo quoted with an AI command is planned by reference and read only while
+  generating, through the same access checks as the dashboard.
 - **Archive sync:** each workflow (import, recent check, viewed section) keeps its own
   checkpoint, and `internal/history/plan.go` decides what runs next.
 - **Database access:** queries live in `internal/store` as named operations.

@@ -84,7 +84,7 @@ func (p *OpenAICompatible) request(ctx context.Context, path, key string, body a
 	return b, nil
 }
 
-func (p *OpenAICompatible) Generate(ctx context.Context, key string, plan store.Plan, history []store.Turn, model Model) (Result, error) {
+func (p *OpenAICompatible) Generate(ctx context.Context, key string, plan store.Plan, history []store.Turn, model Model, image *Image) (Result, error) {
 	var generation Generation
 	if json.Unmarshal(plan.Generation, &generation) != nil {
 		return Result{}, errors.New("generation_invalid")
@@ -92,16 +92,7 @@ func (p *OpenAICompatible) Generate(ctx context.Context, key string, plan store.
 	if err := validateModel(generation, model); err != nil {
 		return Result{}, err
 	}
-	instruction := map[string]string{"short": "Prefer a short answer.", "standard": "Give a complete answer with enough detail to be useful.", "detailed": "Give a thorough answer with useful examples."}[generation.AnswerLength]
-	system := plan.Instructions + "\nUse concise plain text suitable for messaging. Avoid Markdown tables and LaTeX. " + instruction + " Preserve exact numbers, dates and factual constraints."
-	messages := []store.Turn{{Role: "system", Content: system}}
-	for _, turn := range history {
-		if turn.Role == "user" || turn.Role == "assistant" {
-			messages = append(messages, turn)
-		}
-	}
-	messages = append(messages, store.Turn{Role: "user", Content: plan.Input})
-	body := map[string]any{"model": remoteModelID(plan, model), "messages": messages, "max_tokens": generation.Tokens}
+	body := map[string]any{"model": remoteModelID(plan, model), "messages": chatMessages(plan, generation, history, image), "max_tokens": generation.Tokens}
 	if generation.Temperature != nil {
 		body["temperature"] = *generation.Temperature
 	}
@@ -229,7 +220,7 @@ func (p *OpenAICompatible) Models(ctx context.Context) ([]Model, error) {
 			name = v.ID
 		}
 		parameters := append([]string{}, v.Parameters...)
-		m := Model{ID: compatibleProviderID + ":" + v.ID, Name: name, Provider: compatibleProviderID, RemoteID: v.ID, ContextLength: v.Context, Parameters: parameters, ReasoningEfforts: []string{}}
+		m := Model{ID: compatibleProviderID + ":" + v.ID, Name: name, Provider: compatibleProviderID, RemoteID: v.ID, ContextLength: v.Context, Parameters: parameters, ReasoningEfforts: []string{}, InputModalities: v.Architecture.Input}
 		if contains(parameters, "reasoning_effort") || contains(parameters, "reasoning") {
 			m.HasReasoning = true
 			m.ReasoningEfforts = nil

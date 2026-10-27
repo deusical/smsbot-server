@@ -12,12 +12,16 @@ import (
 	"time"
 )
 
-type transcriptProvider struct{ history [][]store.Turn }
+type transcriptProvider struct {
+	history [][]store.Turn
+	images  []*Image
+}
 
 func (p *transcriptProvider) Models(context.Context) ([]Model, error) {
 	return SimulatedProvider{}.Models(context.Background())
 }
-func (p *transcriptProvider) Generate(_ context.Context, _ string, plan store.Plan, h []store.Turn, _ Model) (Result, error) {
+func (p *transcriptProvider) Generate(_ context.Context, _ string, plan store.Plan, h []store.Turn, _ Model, image *Image) (Result, error) {
+	p.images = append(p.images, image)
 	p.history = append(p.history, append([]store.Turn{}, h...))
 	zero := 0.0
 	return Result{Text: "AI: " + plan.Input, Cost: &zero}, nil

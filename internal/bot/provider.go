@@ -3,6 +3,7 @@ package bot
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,7 +29,44 @@ type Model struct {
 	InputPrice         float64  `json:"input_price"`
 	OutputPrice        float64  `json:"output_price"`
 	PricingKnown       bool     `json:"pricing_known"`
+	// InputModalities is what the catalog reports the model reads, such as
+	// "text" and "image". Empty means the catalog didn't say.
+	InputModalities []string `json:"input_modalities,omitempty"`
 }
+
+// Image is a photo sent with one prompt. It is read just before generation
+// and never stored.
+type Image struct {
+	MIME string
+	Data []byte
+}
+
+// readsImages reports whether a model may accept image input. A model whose
+// catalog entry lists no input modalities is not known to be text-only.
+func readsImages(m Model) bool {
+	return len(m.InputModalities) == 0 || contains(m.InputModalities, "image")
+}
+
+// chatMessages builds the Chat Completions messages shared by both providers.
+// The image, if any, is attached to the new prompt only.
+func chatMessages(plan store.Plan, g Generation, history []store.Turn, image *Image) []any {
+	instruction := map[string]string{"short": "Prefer a short answer.", "standard": "Give a complete answer with enough detail to be useful.", "detailed": "Give a thorough answer with useful examples."}[g.AnswerLength]
+	messages := []any{store.Turn{Role: "system", Content: plan.Instructions + "\nUse concise plain text suitable for messaging. Avoid Markdown tables and LaTeX. " + instruction + " Preserve exact numbers, dates and factual constraints."}}
+	for _, turn := range history {
+		if turn.Role == "user" || turn.Role == "assistant" {
+			messages = append(messages, turn)
+		}
+	}
+	if image == nil {
+		return append(messages, store.Turn{Role: "user", Content: plan.Input})
+	}
+	url := "data:" + image.MIME + ";base64," + base64.StdEncoding.EncodeToString(image.Data)
+	return append(messages, map[string]any{"role": "user", "content": []any{
+		map[string]any{"type": "text", "text": plan.Input},
+		map[string]any{"type": "image_url", "image_url": map[string]any{"url": url}},
+	}})
+}
+
 type Result struct {
 	Text             string   `json:"text"`
 	Model            string   `json:"model"`
@@ -39,7 +77,7 @@ type Result struct {
 	Finish           string   `json:"finish_reason"`
 }
 type Provider interface {
-	Generate(context.Context, string, store.Plan, []store.Turn, Model) (Result, error)
+	Generate(context.Context, string, store.Plan, []store.Turn, Model, *Image) (Result, error)
 	Models(context.Context) ([]Model, error)
 }
 
@@ -49,7 +87,7 @@ type SimulatedProvider struct{}
 func (SimulatedProvider) Models(context.Context) ([]Model, error) {
 	return []Model{{ID: "fixture/model", Name: "Synthetic model", Parameters: []string{"temperature", "reasoning"}, HasReasoning: true, ReasoningEfforts: nil, PricingKnown: true}}, nil
 }
-func (SimulatedProvider) Generate(ctx context.Context, key string, p store.Plan, h []store.Turn, m Model) (Result, error) {
+func (SimulatedProvider) Generate(ctx context.Context, key string, p store.Plan, h []store.Turn, m Model, image *Image) (Result, error) {
 	if err := ctx.Err(); err != nil {
 		return Result{}, err
 	}
@@ -134,7 +172,7 @@ func (p *OpenRouter) request(ctx context.Context, path, key string, body any) ([
 	}
 	return b, nil
 }
-func (p *OpenRouter) Generate(ctx context.Context, key string, plan store.Plan, history []store.Turn, m Model) (Result, error) {
+func (p *OpenRouter) Generate(ctx context.Context, key string, plan store.Plan, history []store.Turn, m Model, image *Image) (Result, error) {
 	var g Generation
 	if json.Unmarshal(plan.Generation, &g) != nil {
 		return Result{}, errors.New("generation_invalid")
@@ -142,15 +180,7 @@ func (p *OpenRouter) Generate(ctx context.Context, key string, plan store.Plan, 
 	if err := validateModel(g, m); err != nil {
 		return Result{}, err
 	}
-	instruction := map[string]string{"short": "Prefer a short answer.", "standard": "Give a complete answer with enough detail to be useful.", "detailed": "Give a thorough answer with useful examples."}[g.AnswerLength]
-	messages := []store.Turn{{Role: "system", Content: plan.Instructions + "\nUse concise plain text suitable for messaging. Avoid Markdown tables and LaTeX. " + instruction + " Preserve exact numbers, dates and factual constraints."}}
-	for _, turn := range history {
-		if turn.Role == "user" || turn.Role == "assistant" {
-			messages = append(messages, turn)
-		}
-	}
-	messages = append(messages, store.Turn{Role: "user", Content: plan.Input})
-	body := map[string]any{"model": remoteModelID(plan, m), "messages": messages, "max_tokens": g.Tokens, "provider": map[string]any{"require_parameters": true}}
+	body := map[string]any{"model": remoteModelID(plan, m), "messages": chatMessages(plan, g, history, image), "max_tokens": g.Tokens, "provider": map[string]any{"require_parameters": true}}
 	if g.Reasoning != "default" {
 		r := map[string]any{"exclude": true}
 		if g.Reasoning == "off" {
@@ -250,7 +280,7 @@ func (p *OpenRouter) Models(ctx context.Context) ([]Model, error) {
 		if !contains(v.Architecture.Input, "text") || !contains(v.Architecture.Output, "text") {
 			continue
 		}
-		m := Model{ID: v.ID, Name: v.Name, Provider: "openrouter", RemoteID: v.ID, ContextLength: v.ContextLength, Parameters: v.Parameters, ReasoningEfforts: []string{}}
+		m := Model{ID: v.ID, Name: v.Name, Provider: "openrouter", RemoteID: v.ID, ContextLength: v.ContextLength, Parameters: v.Parameters, ReasoningEfforts: []string{}, InputModalities: v.Architecture.Input}
 		if m.Parameters == nil {
 			m.Parameters = []string{}
 		}

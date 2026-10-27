@@ -35,7 +35,10 @@ type Job struct {
 	RequestedReasoning string   `json:"requested_reasoning,omitempty"`
 }
 type Plan struct {
-	Thread          *AIThreadPlan   `json:"thread,omitempty"`
+	Thread *AIThreadPlan `json:"thread,omitempty"`
+	// Image is a photo the AI command quoted. Only the reference is planned;
+	// the bytes are read just before generation and never stored in the plan.
+	Image           *ImageRef       `json:"image,omitempty"`
 	ReplyTarget     string          `json:"reply_target,omitempty"`
 	ReplyWireTarget string          `json:"reply_wire_target,omitempty"`
 	Mutation        *MutationIntent `json:"mutation,omitempty"`
@@ -57,6 +60,12 @@ type Plan struct {
 	InboxOwnerOnly  bool            `json:"inbox_owner_only,omitempty"`
 	// Owner marks a command the owner sent from their own phone.
 	Owner bool `json:"owner,omitempty"`
+}
+
+// ImageRef names one archived attachment by local message and attachment ID.
+type ImageRef struct {
+	Message    string `json:"message"`
+	Attachment string `json:"attachment"`
 }
 
 func ID() string {

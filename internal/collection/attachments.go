@@ -5,6 +5,7 @@ import (
 	"errors"
 	"github.com/deusical/smsbot-server/internal/media"
 	"github.com/deusical/smsbot-server/internal/transport"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -118,6 +119,40 @@ func (svc *Service) InboxAttachmentContent(ctx context.Context, conv, message, a
 	}
 	file.Info.Size = int64(len(data))
 	return file.Info, data, nil
+}
+
+// QuotedFile reads an attachment an AI command quoted, at most limit bytes. It
+// takes the dashboard's paths: a saved original first, otherwise a download
+// from the phone with the same consent and identity checks.
+func (svc *Service) QuotedFile(ctx context.Context, conv, message, attachment string, limit int64) ([]byte, error) {
+	ctx = transport.WithPhonePurpose(ctx, "original")
+	file, err := svc.LocalArchiveAttachment(conv, message, attachment)
+	if err == nil && file.Size > limit {
+		return nil, errors.New("attachment_size_limit")
+	}
+	var data []byte
+	switch {
+	case err == nil && file.BlobID != "" && svc.Archive != nil:
+		local, openErr := svc.Archive.OpenLocal(file)
+		if openErr != nil {
+			return nil, errors.New("attachment_unavailable")
+		}
+		defer local.Close()
+		data, err = io.ReadAll(io.LimitReader(local, limit+1))
+		if err != nil {
+			return nil, errors.New("attachment_unavailable")
+		}
+	case err == nil && len(file.Data) > 0:
+		data = file.Data
+	default:
+		if _, data, err = svc.InboxAttachmentContent(ctx, conv, message, attachment, false); err != nil {
+			return nil, err
+		}
+	}
+	if int64(len(data)) > limit {
+		return nil, errors.New("attachment_size_limit")
+	}
+	return data, nil
 }
 
 // Legacy Google imports stored inline image previews as originals. Local web

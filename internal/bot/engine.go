@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/deusical/smsbot-server/internal/collection"
+	"github.com/deusical/smsbot-server/internal/media"
 	"github.com/deusical/smsbot-server/internal/store"
 	"github.com/deusical/smsbot-server/internal/transport"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -398,9 +400,18 @@ func (e *Engine) planAI(m transport.Incoming, p *store.Plan, cfg Configuration, 
 	p.Instructions = instructions
 	p.Generation, _ = json.Marshal(g)
 	if parent == nil {
-		if quoted, ok := e.quotedInput(m, input); ok {
+		if quoted, photo, ok := e.quotedInput(m, input); ok {
 			// A bare "!ask" on a quoted message responds to that message.
 			p.Input, input = quoted, quoted
+			if photo != nil {
+				if reply := photoUnreadable(*photo, selectedModel); reply != "" {
+					p.Model = ""
+					p.Memory = false
+					p.Reply = reply
+					return true, nil
+				}
+				p.Image = &photo.ImageRef
+			}
 		}
 	}
 	if !threaded {
@@ -443,15 +454,20 @@ const quoteLimit = 2000
 // quotedInput adds the message an AI command natively replies to, so a reply
 // like "!ask what does this mean" can refer to it. Only that one message is
 // added, from the same conversation; without it the question is sent alone.
-// With no question, the AI is asked to respond to the quoted message.
-func (e *Engine) quotedInput(m transport.Incoming, input string) (string, bool) {
+// With no question, the AI is asked to respond to the quoted message. A quoted
+// photo is returned as a reference; its bytes are read only to generate.
+func (e *Engine) quotedInput(m transport.Incoming, input string) (string, *quotedPhoto, bool) {
 	if m.Interaction == nil || m.Interaction.ReplyTo == "" || !strings.Contains(strings.ToUpper(m.Interaction.Protocol), "RCS") {
-		return input, false
+		return input, nil, false
 	}
-	_, direction, text, ok, err := e.Store.QuotedMessage(m.ConversationID, m.Interaction.ReplyTo)
+	id, direction, text, ok, err := e.Store.QuotedMessage(m.ConversationID, m.Interaction.ReplyTo)
+	if err != nil || !ok {
+		return input, nil, false
+	}
+	photo, err := e.quotedPhoto(m.ConversationID, id)
 	text = strings.TrimSpace(text)
-	if err != nil || !ok || text == "" {
-		return input, false
+	if err != nil || text == "" && photo == nil {
+		return input, nil, false
 	}
 	if r := []rune(text); len(r) > quoteLimit {
 		text = string(r[:quoteLimit]) + "…"
@@ -460,11 +476,82 @@ func (e *Engine) quotedInput(m transport.Incoming, input string) (string, bool) 
 	if (direction == "outgoing") == m.Outgoing {
 		author = "the person asking"
 	}
-	quote := "This question replies to an earlier message in the chat, sent by " + author + ":\n\"\"\"\n" + text + "\n\"\"\"\n\n"
-	if input == "" {
-		return quote + "No question was given. Respond to that message.", true
+	var quote string
+	switch {
+	case photo == nil:
+		quote = "This question replies to an earlier message in the chat, sent by " + author + ":\n\"\"\"\n" + text + "\n\"\"\"\n\n"
+	case text == "":
+		quote = "This question replies to a photo in the chat, sent by " + author + ". The photo is attached.\n\n"
+	default:
+		quote = "This question replies to a photo in the chat, sent by " + author + ". The photo is attached, with this text:\n\"\"\"\n" + text + "\n\"\"\"\n\n"
 	}
-	return quote + "Question: " + input, true
+	if input == "" {
+		if photo != nil {
+			return quote + "No question was given. Describe or respond to the photo.", photo, true
+		}
+		return quote + "No question was given. Respond to that message.", nil, true
+	}
+	return quote + "Question: " + input, photo, true
+}
+
+// imageLimit caps a quoted photo sent to the AI provider. imageTokens is the
+// allowance reserved for it in the context and spending estimates.
+const (
+	imageLimit  = 5 << 20
+	imageTokens = 2000
+)
+
+// imageTypes are the photo formats every Chat Completions provider accepts.
+var imageTypes = []string{"image/jpeg", "image/png", "image/gif", "image/webp"}
+
+type quotedPhoto struct {
+	store.ImageRef
+	media.Info
+}
+
+// quotedPhoto returns the first image attached to a saved message, if any.
+func (e *Engine) quotedPhoto(conv, message string) (*quotedPhoto, error) {
+	files, err := e.Store.MessageFiles(conv, message)
+	if err != nil {
+		return nil, err
+	}
+	for _, f := range files {
+		if strings.HasPrefix(f.MIME, "image/") {
+			return &quotedPhoto{ImageRef: store.ImageRef{Message: message, Attachment: f.ID}, Info: f.Info}, nil
+		}
+	}
+	return nil, nil
+}
+
+// photoUnreadable explains why a quoted photo can't go to the model, or
+// returns "" when it can.
+func photoUnreadable(photo quotedPhoto, m Model) string {
+	switch {
+	case !readsImages(m):
+		return "This model can't read images; pick one that can for this command."
+	case !contains(imageTypes, photo.MIME):
+		return "I can only read JPEG, PNG, GIF and WebP photos."
+	case photo.Size > imageLimit:
+		return "That photo is too large for the AI; the limit is 5 MB."
+	}
+	return ""
+}
+
+// loadImage reads a planned photo for one generation. Caller doesn't hold
+// the control lock: the photo may be downloaded from the phone.
+func (e *Engine) loadImage(ctx context.Context, conv string, ref *store.ImageRef) (*Image, error) {
+	if ref == nil {
+		return nil, nil
+	}
+	data, err := e.Collection.QuotedFile(ctx, conv, ref.Message, ref.Attachment, imageLimit)
+	if err != nil {
+		return nil, err
+	}
+	mime := http.DetectContentType(data)
+	if !contains(imageTypes, mime) {
+		return nil, errors.New("image_unsupported")
+	}
+	return &Image{MIME: mime, Data: data}, nil
 }
 func memoryScope(conv, command, model string) string {
 	return store.Hash(conv) + ":" + store.Hash(command+"\x00"+model)
@@ -658,7 +745,14 @@ func (e *Engine) generateReply(ctx context.Context, j store.Job, p *store.Plan, 
 		err = e.Store.Complete(j.ID, "failed", "generation_unsupported")
 		return true, err
 	}
+	if p.Image != nil && !readsImages(m) {
+		err = e.Store.Complete(j.ID, "failed", "model_images_unsupported")
+		return true, err
+	}
 	reserve := m.OutputPrice*float64(g.Tokens) + m.InputPrice*float64(len(p.Input)+len(p.Instructions)+512)
+	if p.Image != nil {
+		reserve += m.InputPrice * imageTokens
+	}
 	for _, turn := range history {
 		reserve += m.InputPrice * float64(len(turn.Content)+64)
 	}
@@ -689,7 +783,15 @@ func (e *Engine) generateReply(ctx context.Context, j store.Job, p *store.Plan, 
 	genctx, cancel := context.WithTimeout(ctx, 95*time.Second)
 	e.pending[j.ID] = cancel
 	e.mu.Unlock()
-	result, generr := provider.Generate(genctx, key, *p, history, m)
+	var result Result
+	image, imageErr := e.loadImage(genctx, j.ConversationID, p.Image)
+	var generr error
+	if imageErr != nil {
+		zero := 0.0
+		result.Cost = &zero
+	} else {
+		result, generr = provider.Generate(genctx, key, *p, history, m, image)
+	}
 	cancel()
 	e.mu.Lock()
 	delete(e.pending, j.ID)
@@ -706,6 +808,10 @@ func (e *Engine) generateReply(ctx context.Context, j store.Job, p *store.Plan, 
 	}
 	if loaderr != nil || current.State != "generating" {
 		return true, nil
+	}
+	if imageErr != nil {
+		err = e.Store.Complete(j.ID, "failed", "image_unavailable")
+		return true, err
 	}
 	if generr != nil {
 		err = e.Store.Complete(j.ID, "failed", safeProviderCode(generr))
