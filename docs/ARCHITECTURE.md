@@ -59,8 +59,8 @@ sends twice.
 - **Exact participants.** Only individual conversations, matched by participant ID.
   Groups are excluded.
 - **Fresh input only.** History and outgoing echoes never run commands. A message
-  runs one only if it is a command or a reply to an AI answer; a photo it carries
-  goes to the AI, and a message whose files include no photo never runs one.
+  runs one only if it is a command or a reply to an AI answer; a file it carries
+  goes to the AI. A file alone, not replying to an AI answer, never runs one.
 - **Record before sending, never retry the uncertain.** An unknown outcome is shown to
   you and is never retried automatically.
 - **Pause wins.** Every start is paused, and pausing cancels queued work.
@@ -75,9 +75,12 @@ sends twice.
 - **AI threads:** each `!ask` answer is linked to its upstream message ID, so a native
   reply to it continues that thread. Only the replied-to branch is sent as context. A
   message quoted with an AI command brings the chain of replies above it into the
-  prompt, each hop resolved within the same conversation. A photo it quotes is planned
-  by reference and read only while generating, through the same access checks as the
-  dashboard.
+  prompt, each hop resolved within the same conversation. A file it quotes or carries is
+  planned by reference and read only while generating, through the same access checks as
+  the dashboard. `internal/bot/attachments.go` decides how each kind is read: photos are
+  shrunk, text and office documents (`documents.go`, standard-library zip and XML with
+  a cap on what is unpacked) become prompt text for any model, and PDFs, audio and video
+  go to OpenRouter as they are, gated on the model's catalog modalities.
 - **Archive sync:** each workflow (import, recent check, viewed section) keeps its own
   checkpoint, and `internal/history/plan.go` decides what runs next.
 - **Database access:** queries live in `internal/store` as named operations.

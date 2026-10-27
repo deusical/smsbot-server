@@ -83,7 +83,7 @@ func TestOwnerLimitsPersistAndCanBeUnlimited(t *testing.T) {
 	}
 }
 
-func TestFileOnlyCaptureAndCaptionNeverExecute(t *testing.T) {
+func TestFileOnlyCaptureNeverExecutesButACaptionedCommandDoes(t *testing.T) {
 	e, _ := setup(t)
 	enableInbox(t, e)
 	arm(t, e)
@@ -94,8 +94,8 @@ func TestFileOnlyCaptureAndCaptionNeverExecute(t *testing.T) {
 		m.Text = caption
 		m.Attachments = files
 		accepted, err := e.Receive(context.Background(), m)
-		if err != nil || accepted {
-			t.Fatal("media caption executed", err)
+		if err != nil || accepted != (caption != "") {
+			t.Fatalf("caption %q accepted=%t err=%v", caption, accepted, err)
 		}
 	}
 	p, err := e.Collection.InboxPage(context.Background(), "demo-chat", "", "", 50)

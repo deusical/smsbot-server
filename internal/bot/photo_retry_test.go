@@ -28,9 +28,9 @@ func (f *flakyPhone) DownloadFile(ctx context.Context, file media.File) ([]byte,
 }
 
 func TestAPhotoIsReadAgainAfterATemporaryError(t *testing.T) {
-	old := imageRetryDelay
-	imageRetryDelay = time.Millisecond
-	t.Cleanup(func() { imageRetryDelay = old })
+	old := fileRetryDelay
+	fileRetryDelay = time.Millisecond
+	t.Cleanup(func() { fileRetryDelay = old })
 	for _, tc := range []struct {
 		name     string
 		failures int

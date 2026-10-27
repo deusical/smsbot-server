@@ -13,8 +13,8 @@ func (e *Engine) planAIThread(m transport.Incoming, p *store.Plan, parent *store
 	budget := 8192
 	if model.ContextLength > 0 {
 		available := model.ContextLength - len(p.Input) - len(p.Instructions) - g.Tokens - 1024
-		if p.Image != nil {
-			available -= imageTokens
+		if p.File != nil {
+			available -= fileTokens(p.File)
 		}
 		if available < 0 {
 			p.Model = ""

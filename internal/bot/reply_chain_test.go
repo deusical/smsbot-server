@@ -105,11 +105,11 @@ func TestReplyChainPhotoIsOnlyTheOneRepliedToDirectly(t *testing.T) {
 	saveChained(t, e, "chain-text", "chain-photo", "incoming", "phone", "Synthetic comment on the photo")
 	enableChainAsk(t, e)
 	p := threadAccept(t, e, threadPrompt("ask-direct", "!ask what", "chain-photo"))
-	if p.Image == nil {
+	if p.File == nil {
 		t.Fatal("a directly quoted photo was not attached")
 	}
 	p = threadAccept(t, e, threadPrompt("ask-indirect", "!ask what", "chain-text"))
-	if p.Image != nil || !strings.Contains(p.Input, "1. Sent by the person asking, a photo (not shown):\n\"\"\"\nSynthetic caption") {
-		t.Fatalf("image=%v input:\n%s", p.Image, p.Input)
+	if p.File != nil || !strings.Contains(p.Input, "1. Sent by the person asking, a photo (not shown):\n\"\"\"\nSynthetic caption") {
+		t.Fatalf("image=%v input:\n%s", p.File, p.Input)
 	}
 }

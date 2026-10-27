@@ -68,18 +68,29 @@ own messages can run commands too.
   8 messages and about 6,000 characters, newest kept first (2,000 characters each). It
   sees nothing else from the chat, and only messages the server has saved. Reply with
   just `!ask` to have the AI respond to the message.
-- **Ask about a photo** the same way: reply to it with `!ask what's in this?`, or just
-  `!ask`. You can also send the photo with the command (`!ask what's in this?` plus the
-  photo), or reply to an AI answer with just a photo to continue that conversation. The
-  AI gets the photo with your question; the follow-ups get the text of the
-  conversation, not the photo again. Files that aren't photos still don't run commands.
-  This needs a model that reads images, a JPEG, PNG, GIF or WebP photo, and a
-  conversation you archive or let the dashboard open. A photo over **Shrink photos over**
-  (Settings, Limits; 5 MB by default) is scaled down to fit first, except WebP, which is
-  sent only if it's under that size. If the model can't read images, or the photo is over
-  25 MB, another type, or can't be fetched from your phone (it is tried a few times), the
-  bot replies with the reason and a short code in brackets. Refresh the model list once
-  so text-only models are recognized.
+- **Ask about a photo or file** the same way: reply to it with `!ask what's in this?`, or
+  just `!ask`. You can also send the file with the command (`!ask what's in this?` plus
+  the file), or reply to an AI answer with just a file to continue that conversation. The
+  AI gets the file with your question; the follow-ups get the text of the conversation,
+  not the file again. One file is read per message. It needs a conversation you archive
+  or let the dashboard open. What it can read:
+  - **Photos** (JPEG, PNG, GIF, WebP) with a model that reads images. A photo over
+    **Shrink photos over** (Settings, Limits; 5 MB by default) is scaled down to fit
+    first, except WebP, which is sent only if it's under that size. Over 25 MB is refused.
+  - **PDFs** (up to 20 MB), with any OpenRouter model. OpenRouter extracts the text, and
+    reads scans too, which can add a small charge. A custom OpenAI-compatible endpoint
+    can't take PDFs.
+  - **Text and code**: `.txt`, `.md`, `.csv`, `.json`, `.xml`, `.html`, `.log`, source
+    files, `.ics`, `.vcf`, `.srt` and similar (up to 2 MB), with any model.
+  - **Word, Excel and PowerPoint** (`.docx`, `.xlsx`, `.pptx`) and OpenDocument
+    (`.odt`, `.ods`, `.odp`) files, with any model. Only their text is read, not
+    pictures, formatting or comments.
+  - **Audio** (MP3, WAV, AAC, M4A, OGG, FLAC, AIFF) and **video** (MP4, MPEG, MOV, WebM),
+    up to 20 MB, with an OpenRouter model whose catalog lists audio or video input.
+  Only the first 60,000 characters of a file's text are sent. If the file or model isn't
+  supported, the file is too large, or it can't be fetched from your phone (it is tried
+  a few times), the bot replies with the reason and a short code in brackets. Refresh the
+  model list once so each model's abilities are recognized.
 - `!new` clears the AI's memory for that chat. Conversations also expire after the
   memory window (24 hours by default).
 

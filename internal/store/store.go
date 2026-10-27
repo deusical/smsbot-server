@@ -36,9 +36,10 @@ type Job struct {
 }
 type Plan struct {
 	Thread *AIThreadPlan `json:"thread,omitempty"`
-	// Image is a photo the AI command quoted. Only the reference is planned;
-	// the bytes are read just before generation and never stored in the plan.
-	Image           *ImageRef       `json:"image,omitempty"`
+	// File is the attachment the AI command carries or quoted. Only the
+	// reference is planned; the bytes are read just before generation and never
+	// stored in the plan. The JSON name predates files other than photos.
+	File            *FileRef        `json:"image,omitempty"`
 	ReplyTarget     string          `json:"reply_target,omitempty"`
 	ReplyWireTarget string          `json:"reply_wire_target,omitempty"`
 	Mutation        *MutationIntent `json:"mutation,omitempty"`
@@ -62,13 +63,18 @@ type Plan struct {
 	Owner bool `json:"owner,omitempty"`
 }
 
-// ImageRef names one archived attachment by local message and attachment ID.
-// A command's own photo isn't saved yet when it is planned, so it is named by
-// the message's upstream ID (Wire) instead and found when generating.
-type ImageRef struct {
+// FileRef names one archived attachment by local message and attachment ID.
+// A command's own file isn't saved yet when it is planned, so it is named by
+// the message's upstream ID (Wire) instead and found when generating. Name,
+// MIME and Size are what the message said of it, used to decide how to read it
+// and to reserve room for it before it is loaded.
+type FileRef struct {
 	Message    string `json:"message,omitempty"`
 	Attachment string `json:"attachment,omitempty"`
 	Wire       string `json:"wire,omitempty"`
+	Name       string `json:"name,omitempty"`
+	MIME       string `json:"mime,omitempty"`
+	Size       int64  `json:"size,omitempty"`
 }
 
 func ID() string {
