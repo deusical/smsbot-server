@@ -54,5 +54,5 @@ answers there. Say in your PR what you checked on a real phone and what you didn
 ## Continuous integration
 
 CI builds everything and runs the race-enabled Go tests, `go vet`, `gofmt`, a
-vulnerability audit and the full browser suite. Changes that touch only Markdown or
-`docs/` skip CI.
+vulnerability audit and the full browser suite, and a separate job scans every change
+for secrets. All of them must pass before a pull request can merge.

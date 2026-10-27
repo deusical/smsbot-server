@@ -8,6 +8,10 @@ internal/httpapi/assets/*
 *.db*
 *.key
 *.dpapi
+*.enc
+*.pem
+*.sma
+owner*.txt
 *.log
 coverage*
 playwright-report/
