@@ -171,211 +171,257 @@ func (e *Engine) validConversation(ctx context.Context, conv, peer string) (bool
 	}
 	return false, nil
 }
+
+// Accept turns a fresh command into a queued job. Each step can decline the
+// message; only an accepted command is enqueued and saved.
 func (e *Engine) Accept(ctx context.Context, m transport.Incoming) (bool, error) {
-	// Plain chat only enters command handling for an exact local AI-answer reference.
 	text := strings.TrimSpace(m.Text)
-	if text == "" {
-		return false, nil
-	}
-	var parent *store.AIParent
-	if m.Interaction != nil && m.Interaction.ReplyTo != "" && strings.Contains(strings.ToUpper(m.Interaction.Protocol), "RCS") {
-		var err error
-		parent, err = e.Store.FindAIParent(m.ConversationID, m.Interaction.ReplyTo)
-		if err != nil {
-			return false, err
-		}
-	}
-	if !strings.HasPrefix(text, "!") && parent == nil {
-		return false, nil
+	parent, candidate, err := e.commandCandidate(m, text)
+	if err != nil || !candidate {
+		return false, err
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	age := e.now().Sub(m.At)
-	if len(m.Attachments) > 0 || m.ID == "" || m.Historical || age > 2*time.Minute || age < -5*time.Second || len(m.Text) > 12000 {
-		return false, nil
-	}
-	paused, err := e.Store.Paused()
-	if err != nil {
+	cfg, peer, ok, err := e.admit(ctx, m, parent)
+	if err != nil || !ok {
 		return false, err
 	}
-	if paused || !e.Transport.Ready() {
-		return false, nil
-	}
-	cfg, err := e.Configuration()
-	if err != nil {
-		return false, err
-	}
-	// The owner's own messages carry the owner's participant, so the
-	// enrolled peer stands in for every identity check that follows.
-	peer := m.ParticipantID
-	if m.Outgoing {
-		if !cfg.Settings.OwnerCommands {
-			return false, nil
-		}
-		var ok bool
-		if peer, ok = e.Store.EnrolledParticipant(m.ConversationID); !ok {
-			return false, nil
-		}
-		var ours bool
-		var err error
-		if parent != nil {
-			// A native reply is an explicit follow-up. A genuine owner message can
-			// repeat an earlier answer, so only exact provenance identifies an echo.
-			ours, err = e.Store.SentByBotIdentity(m.ConversationID, m.TransactionID, m.ID)
-		} else {
-			ours, err = e.Store.SentByBot(m.ConversationID, m.TransactionID, m.Text)
-		}
-		if err != nil || ours {
-			return false, err
-		}
-	}
-	if !e.Store.Enrolled(m.ConversationID, peer) {
-		return false, nil
-	}
-	inbox, err := e.Collection.Settings()
-	if err != nil {
-		return false, err
-	}
-	if !inbox.AutomaticReplies {
-		return false, nil
-	}
-	valid, err := e.validConversation(ctx, m.ConversationID, peer)
-	if err != nil || !valid {
-		return false, err
-	}
-	if quiet(cfg.Settings, e.now()) {
-		return false, nil
-	}
-
 	id := store.Hash(m.ConversationID + "\x00" + m.ID)
 	exists, err := e.Store.JobExists(id)
-	if err != nil {
+	if err != nil || exists {
 		return false, err
 	}
-	if exists {
+	name, input, ok := parseCommand(text)
+	if !ok {
 		return false, nil
 	}
-	parts := strings.Fields(text)
-	if len(parts) == 0 {
-		return false, nil
-	}
-	name, input := "ask", text
-	if strings.HasPrefix(parts[0], "!") {
-		name = strings.TrimPrefix(parts[0], "!")
-		input = strings.TrimSpace(strings.TrimPrefix(text, parts[0]))
-		if name != "ask" && name != "deepseek" {
-			parent = nil
-		}
+	if name != "ask" && name != "deepseek" {
+		// Only an ask can continue an AI thread.
+		parent = nil
 	}
 	limitOK, err := e.Store.Limits(e.now().UTC(), cfg.Settings.HourlyLimit, cfg.Settings.DailyLimit, 0, 0)
 	if err != nil || !limitOK {
 		return false, err
 	}
 	p := store.Plan{Participant: peer, MaxChars: cfg.Settings.MaxChars, Owner: m.Outgoing}
+	reply, builtin, ok, err := e.builtinReply(m.ConversationID, name, input, cfg)
+	if err != nil || !ok {
+		return false, err
+	}
+	if builtin {
+		p.Reply = reply
+	} else if name, ok, err = e.planCommand(m, &p, cfg, name, input, parent); err != nil || !ok {
+		return false, err
+	}
+	return e.record(m, id, name, text, p)
+}
+
+// commandCandidate reports whether a message could be a command: text starting
+// with "!", or a native RCS reply to one of the bot's AI answers.
+func (e *Engine) commandCandidate(m transport.Incoming, text string) (*store.AIParent, bool, error) {
+	if text == "" {
+		return nil, false, nil
+	}
+	var parent *store.AIParent
+	if m.Interaction != nil && m.Interaction.ReplyTo != "" && strings.Contains(strings.ToUpper(m.Interaction.Protocol), "RCS") {
+		var err error
+		parent, err = e.Store.FindAIParent(m.ConversationID, m.Interaction.ReplyTo)
+		if err != nil {
+			return nil, false, err
+		}
+	}
+	return parent, strings.HasPrefix(text, "!") || parent != nil, nil
+}
+
+// admit applies every rule about who may run a command, and when. It returns
+// the configuration and the enrolled peer the command is planned for.
+func (e *Engine) admit(ctx context.Context, m transport.Incoming, parent *store.AIParent) (Configuration, string, bool, error) {
+	var cfg Configuration
+	age := e.now().Sub(m.At)
+	if len(m.Attachments) > 0 || m.ID == "" || m.Historical || age > 2*time.Minute || age < -5*time.Second || len(m.Text) > 12000 {
+		return cfg, "", false, nil
+	}
+	paused, err := e.Store.Paused()
+	if err != nil || paused || !e.Transport.Ready() {
+		return cfg, "", false, err
+	}
+	if cfg, err = e.Configuration(); err != nil {
+		return cfg, "", false, err
+	}
+	peer := m.ParticipantID
+	if m.Outgoing {
+		var ok bool
+		if peer, ok, err = e.ownerPeer(m, cfg, parent); err != nil || !ok {
+			return cfg, "", false, err
+		}
+	}
+	if !e.Store.Enrolled(m.ConversationID, peer) {
+		return cfg, "", false, nil
+	}
+	inbox, err := e.Collection.Settings()
+	if err != nil || !inbox.AutomaticReplies {
+		return cfg, "", false, err
+	}
+	valid, err := e.validConversation(ctx, m.ConversationID, peer)
+	if err != nil || !valid || quiet(cfg.Settings, e.now()) {
+		return cfg, "", false, err
+	}
+	return cfg, peer, true, nil
+}
+
+// ownerPeer handles a command the owner sent. The owner's own messages carry
+// the owner's participant, so the enrolled peer stands in for every identity
+// check that follows. The bot's own replies never run commands.
+func (e *Engine) ownerPeer(m transport.Incoming, cfg Configuration, parent *store.AIParent) (string, bool, error) {
+	if !cfg.Settings.OwnerCommands {
+		return "", false, nil
+	}
+	peer, ok := e.Store.EnrolledParticipant(m.ConversationID)
+	if !ok {
+		return "", false, nil
+	}
+	var ours bool
+	var err error
+	if parent != nil {
+		// A native reply is an explicit follow-up. A genuine owner message can
+		// repeat an earlier answer, so only exact provenance identifies an echo.
+		ours, err = e.Store.SentByBotIdentity(m.ConversationID, m.TransactionID, m.ID)
+	} else {
+		ours, err = e.Store.SentByBot(m.ConversationID, m.TransactionID, m.Text)
+	}
+	if err != nil || ours {
+		return "", false, err
+	}
+	return peer, true, nil
+}
+
+// parseCommand splits "!name input". Text without "!" is a plain follow-up
+// to an AI answer, handled as an ask.
+func parseCommand(text string) (name, input string, ok bool) {
+	parts := strings.Fields(text)
+	if len(parts) == 0 {
+		return "", "", false
+	}
+	if !strings.HasPrefix(parts[0], "!") {
+		return "ask", text, true
+	}
+	return strings.TrimPrefix(parts[0], "!"), strings.TrimSpace(strings.TrimPrefix(text, parts[0])), true
+}
+
+// builtinReply answers the built-in commands, which take no input. builtin is
+// false for any other name; ok is false when a built-in was misused.
+func (e *Engine) builtinReply(conv, name, input string, cfg Configuration) (reply string, builtin, ok bool, err error) {
+	switch name {
+	case "ping", "help", "status", "new", "more":
+	default:
+		return "", false, true, nil
+	}
+	if input != "" {
+		return "", true, false, nil
+	}
 	switch name {
 	case "ping":
-		if input != "" {
-			return false, nil
-		}
-		p.Reply = "pong"
+		return "pong", true, true, nil
 	case "help":
-		if input != "" {
-			return false, nil
-		}
 		names := []string{"!ping", "!help", "!status", "!new"}
 		for _, cmd := range cfg.Commands {
-			if cmd.Enabled && allowed(cmd, m.ConversationID) {
+			if cmd.Enabled && allowed(cmd, conv) {
 				names = append(names, "!"+cmd.Name)
 			}
 		}
-		p.Reply = "Commands: " + strings.Join(names, ", ")
+		return "Commands: " + strings.Join(names, ", "), true, true, nil
 	case "status":
-		if input != "" {
-			return false, nil
-		}
-		p.Reply = "Bot active. Default model: " + cfg.Settings.DefaultModel
+		return "Bot active. Default model: " + cfg.Settings.DefaultModel, true, true, nil
 	case "new":
-		if input != "" {
-			return false, nil
-		}
-		if err = e.Store.ClearMemory(m.ConversationID); err != nil {
-			return false, err
+		if err = e.Store.ClearMemory(conv); err != nil {
+			return "", true, false, err
 		}
 		e.cancelClearedThreadRuns()
-		p.Reply = "Conversation memory cleared."
-	case "more":
-		if input != "" {
-			return false, nil
+		return "Conversation memory cleared.", true, true, nil
+	default: // more
+		return "Paired replies are sent in full, subject to the configured character limit.", true, true, nil
+	}
+}
+
+// planCommand fills the plan for a configured fixed or AI command and returns
+// its canonical name.
+func (e *Engine) planCommand(m transport.Incoming, p *store.Plan, cfg Configuration, name, input string, parent *store.AIParent) (string, bool, error) {
+	cmd, model, instructions, g, ok := resolve(cfg, name)
+	if !ok || !allowed(cmd, m.ConversationID) {
+		return "", false, nil
+	}
+	name = cmd.Name
+	// Only the canonical AI ask uses explicit threads. Other command memory stays unchanged.
+	threaded := cmd.Name == "ask" && cmd.Type == "ai"
+	if parent != nil && (!threaded || !cmd.Memory) {
+		return "", false, nil
+	}
+	p.Memory = cmd.Memory
+	if p.Memory {
+		var err error
+		if p.MemoryEpoch, err = e.Store.MemoryEpoch(m.ConversationID); err != nil {
+			return "", false, err
 		}
-		p.Reply = "Paired replies are sent in full, subject to the configured character limit."
-	default:
-		cmd, model, instructions, g, ok := resolve(cfg, name)
-		if !ok || !allowed(cmd, m.ConversationID) {
-			return false, nil
-		}
-		name = cmd.Name
-		// Only the canonical AI ask uses explicit threads. Other command memory stays unchanged.
-		threaded := cmd.Name == "ask" && cmd.Type == "ai"
-		if parent != nil && (!threaded || !cmd.Memory) {
-			return false, nil
-		}
-		p.Memory = cmd.Memory
-		if threaded && !cmd.Memory {
-			p.Memory = false
-		}
-		if p.Memory {
-			p.MemoryEpoch, err = e.Store.MemoryEpoch(m.ConversationID)
-			if err != nil {
-				return false, err
-			}
-			if !threaded {
-				p.Context, err = e.Store.Memory(memoryScope(m.ConversationID, "!"+name, model), e.now())
-				if err != nil {
-					return false, err
-				}
-			}
-		}
-		p.MemoryHours = cfg.Settings.MemoryHours
-		p.Approval = cmd.Approval
-		p.Input = input
-		if cmd.Type == "fixed" {
-			p.Reply = strings.ReplaceAll(instructions, "{input}", input)
-		} else {
-			if model == "" {
-				return false, nil
-			}
-			selectedModel, err := e.model(model)
-			if err != nil {
-				return false, err
-			}
-			if !e.ProviderConfiguredFor(selectedModel) {
-				return false, nil
-			}
-			if err = validateModel(g, selectedModel); err != nil {
-				return false, err
-			}
-			p.Model = model
-			p.Instructions = instructions
-			p.Generation, _ = json.Marshal(g)
-			if parent == nil {
-				if quoted, ok := e.quotedInput(m, input); ok {
-					// A bare "!ask" on a quoted message responds to that message.
-					p.Input, input = quoted, quoted
-				}
-			}
-			if threaded {
-				if input == "" {
-					p.Model = ""
-					p.Memory = false
-					p.Reply = "Send !ask followed by a question. Reply to an AI answer to continue it."
-				} else if cmd.Memory {
-					if err = e.planAIThread(m, &p, parent, selectedModel, g, cfg.Settings); err != nil {
-						return false, err
-					}
-				}
+		if !threaded {
+			if p.Context, err = e.Store.Memory(memoryScope(m.ConversationID, "!"+name, model), e.now()); err != nil {
+				return "", false, err
 			}
 		}
 	}
+	p.MemoryHours = cfg.Settings.MemoryHours
+	p.Approval = cmd.Approval
+	p.Input = input
+	if cmd.Type == "fixed" {
+		p.Reply = strings.ReplaceAll(instructions, "{input}", input)
+		return name, true, nil
+	}
+	ok, err := e.planAI(m, p, cfg, cmd, model, instructions, g, input, threaded, parent)
+	return name, ok, err
+}
+
+// planAI selects the model for an AI command and, for !ask, its thread.
+func (e *Engine) planAI(m transport.Incoming, p *store.Plan, cfg Configuration, cmd Command, model, instructions string, g Generation, input string, threaded bool, parent *store.AIParent) (bool, error) {
+	if model == "" {
+		return false, nil
+	}
+	selectedModel, err := e.model(model)
+	if err != nil {
+		return false, err
+	}
+	if !e.ProviderConfiguredFor(selectedModel) {
+		return false, nil
+	}
+	if err = validateModel(g, selectedModel); err != nil {
+		return false, err
+	}
+	p.Model = model
+	p.Instructions = instructions
+	p.Generation, _ = json.Marshal(g)
+	if parent == nil {
+		if quoted, ok := e.quotedInput(m, input); ok {
+			// A bare "!ask" on a quoted message responds to that message.
+			p.Input, input = quoted, quoted
+		}
+	}
+	if !threaded {
+		return true, nil
+	}
+	if input == "" {
+		p.Model = ""
+		p.Memory = false
+		p.Reply = "Send !ask followed by a question. Reply to an AI answer to continue it."
+		return true, nil
+	}
+	if cmd.Memory {
+		if err = e.planAIThread(m, p, parent, selectedModel, g, cfg.Settings); err != nil {
+			return false, err
+		}
+	}
+	return true, nil
+}
+
+// record enqueues the job and saves the command message under it.
+func (e *Engine) record(m transport.Incoming, id, name, text string, p store.Plan) (bool, error) {
 	accepted, err := e.Store.Enqueue(id, m.ConversationID, "!"+name, p)
 	if err != nil || !accepted {
 		return accepted, err
