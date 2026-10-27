@@ -452,39 +452,52 @@ func (e *Engine) record(m transport.Incoming, id, name, text string, p store.Pla
 
 const quoteLimit = 2000
 
-// quotedInput adds the message an AI command natively replies to, so a reply
-// like "!ask what does this mean" can refer to it. Only that one message is
-// added, from the same conversation; without it the question is sent alone.
-// With no question, the AI is asked to respond to the quoted message. A quoted
-// photo is returned as a reference; its bytes are read only to generate.
+// quotedInput adds the messages an AI command natively replies to, so a reply
+// like "!ask what does this mean" can refer to them. The chain is followed up
+// through each message's own reply, within the same conversation only; without
+// it the question is sent alone. With no question, the AI is asked to respond
+// to the last message. A photo on the message replied to directly is returned
+// as a reference; its bytes are read only to generate.
 func (e *Engine) quotedInput(m transport.Incoming, input string) (string, *quotedPhoto, bool) {
 	if m.Interaction == nil || m.Interaction.ReplyTo == "" || !strings.Contains(strings.ToUpper(m.Interaction.Protocol), "RCS") {
 		return input, nil, false
 	}
-	id, direction, text, ok, err := e.Store.QuotedMessage(m.ConversationID, m.Interaction.ReplyTo)
-	if err != nil || !ok {
+	chain, more, photo, err := e.replyChain(m)
+	if err != nil || len(chain) == 0 {
 		return input, nil, false
-	}
-	photo, err := e.quotedPhoto(m.ConversationID, id)
-	text = strings.TrimSpace(text)
-	if err != nil || text == "" && photo == nil {
-		return input, nil, false
-	}
-	if r := []rune(text); len(r) > quoteLimit {
-		text = string(r[:quoteLimit]) + "…"
-	}
-	author := "the other person in this chat"
-	if (direction == "outgoing") == m.Outgoing {
-		author = "the person asking"
 	}
 	var quote string
-	switch {
-	case photo == nil:
-		quote = "This question replies to an earlier message in the chat, sent by " + author + ":\n\"\"\"\n" + text + "\n\"\"\"\n\n"
-	case text == "":
-		quote = "This question replies to a photo in the chat, sent by " + author + ". The photo is attached.\n\n"
-	default:
-		quote = "This question replies to a photo in the chat, sent by " + author + ". The photo is attached, with this text:\n\"\"\"\n" + text + "\n\"\"\"\n\n"
+	last := chain[len(chain)-1]
+	if len(chain) == 1 && !more {
+		switch {
+		case photo == nil:
+			quote = "This question replies to an earlier message in the chat, sent by " + last.author + ":\n\"\"\"\n" + last.text + "\n\"\"\"\n\n"
+		case last.text == "":
+			quote = "This question replies to a photo in the chat, sent by " + last.author + ". The photo is attached.\n\n"
+		default:
+			quote = "This question replies to a photo in the chat, sent by " + last.author + ". The photo is attached, with this text:\n\"\"\"\n" + last.text + "\n\"\"\"\n\n"
+		}
+	} else {
+		quote = "This question replies to a chain of messages in the chat, oldest first"
+		if more {
+			quote += " (earlier ones are left out)"
+		}
+		quote += ". It replies to the last one.\n\n"
+		for i, q := range chain {
+			quote += fmt.Sprintf("%d. Sent by %s", i+1, q.author)
+			if q.photo {
+				quote += ", a photo"
+				if q.attached {
+					quote += " (attached)"
+				} else {
+					quote += " (not shown)"
+				}
+			}
+			if q.text != "" {
+				quote += ":\n\"\"\"\n" + q.text + "\n\"\"\""
+			}
+			quote += "\n\n"
+		}
 	}
 	if input == "" {
 		if photo != nil {
@@ -493,6 +506,78 @@ func (e *Engine) quotedInput(m transport.Incoming, input string) (string, *quote
 		return quote + "No question was given. Respond to that message.", nil, true
 	}
 	return quote + "Question: " + input, photo, true
+}
+
+// A reply chain is followed at most chainDepth messages up, and the chain's
+// text is kept to about chainChars, dropping the oldest messages first.
+const (
+	chainDepth = 8
+	chainChars = 6000
+)
+
+type chainMessage struct {
+	author, text    string
+	photo, attached bool
+}
+
+// replyChain returns the messages m replies to, oldest first. more reports that
+// older messages exist but were left out. photo is the image on the message m
+// replies to directly, if any. The bot's own answers are part of the chain.
+func (e *Engine) replyChain(m transport.Incoming) (chain []chainMessage, more bool, photo *quotedPhoto, err error) {
+	seen := map[string]bool{}
+	budget := chainChars
+	wire := m.Interaction.ReplyTo
+	for wire != "" {
+		if len(chain) >= chainDepth || budget <= 0 {
+			more = true
+			break
+		}
+		id, direction, text, ok, err := e.Store.QuotedMessage(m.ConversationID, wire)
+		if err != nil {
+			return nil, false, nil, err
+		}
+		if !ok || seen[id] {
+			break
+		}
+		seen[id] = true
+		wire = ""
+		if v, err := e.Store.Interaction(m.ConversationID, id); err != nil {
+			return nil, false, nil, err
+		} else if v != nil && strings.Contains(strings.ToUpper(v.Protocol), "RCS") {
+			wire = v.ReplyTo
+		}
+		img, err := e.quotedPhoto(m.ConversationID, id)
+		if err != nil {
+			return nil, false, nil, err
+		}
+		text = strings.TrimSpace(text)
+		if text == "" && img == nil {
+			continue
+		}
+		if r := []rune(text); len(r) > quoteLimit {
+			text = string(r[:quoteLimit]) + "…"
+		}
+		origin, _, err := e.Store.MessageOrigin(m.ConversationID, id)
+		if err != nil {
+			return nil, false, nil, err
+		}
+		author := "the other person in this chat"
+		switch {
+		case origin == "bot":
+			author = "the AI assistant in this chat"
+		case (direction == "outgoing") == m.Outgoing:
+			author = "the person asking"
+		}
+		if len(chain) == 0 {
+			photo = img
+		}
+		chain = append(chain, chainMessage{author: author, text: text, photo: img != nil, attached: len(chain) == 0 && img != nil})
+		budget -= len([]rune(text))
+	}
+	for i, j := 0, len(chain)-1; i < j; i, j = i+1, j-1 {
+		chain[i], chain[j] = chain[j], chain[i]
+	}
+	return chain, more, photo, nil
 }
 
 // A quoted photo is read up to maxPhotoMB. One over the owner's setting
