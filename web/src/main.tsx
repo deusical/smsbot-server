@@ -15,24 +15,25 @@ import { Icon } from "./components/Icon";
 import { SettingsPage } from "./pages/Settings";
 import { Switch } from "./components/ui";
 import { useWorkspace } from "./lib/workspace";
+import {
+  notificationRoute,
+  pages,
+  parseRoute,
+  routePath,
+  type Page,
+  type Route,
+} from "./lib/routes";
 import "./styles/index.css";
 
-const pages = [
-  "Home",
-  "Conversations",
-  "Commands",
-  "Activity",
-  "Archive",
-  "Settings",
-] as const;
-type Page = (typeof pages)[number];
 type Toast = { id: number; text: string };
 
 function App() {
-  const [page, setPage] = useState<Page>("Home");
+  // Each page has its own URL, so the browser's Back and Forward move between them.
+  const [initialRoute] = useState(() => parseRoute(window.location.pathname));
+  const [page, setPage] = useState<Page>(initialRoute.page);
   const [token, setToken] = useState(""),
     [busy, setBusy] = useState(false);
-  const [selected, setSelected] = useState("");
+  const [selected, setSelected] = useState(initialRoute.selected);
   const [theme, setTheme] = useState<"dark" | "light">(() =>
     window.matchMedia?.("(prefers-color-scheme: light)")?.matches
       ? "light"
@@ -42,12 +43,17 @@ function App() {
     [confirmSignOut, setConfirmSignOut] = useState(false);
   const session = useSession();
   const signedIn = session.signedIn;
-  // Expiry and sign-out end the session, clear its data and return home.
+  const wasSignedIn = useRef(false);
+  wasSignedIn.current = signedIn;
+  // Expiry and sign-out end the session, clear its data and return home. Finding
+  // no session when the app opens keeps the address, so signing in lands on it.
   const endSession = useCallback(() => {
     session.end();
     dashboardReset.current();
+    if (!wasSignedIn.current) return;
     setPage("Home");
     setSelected("");
+    window.history.replaceState(null, "", "/");
   }, [session.end]);
   const dashboardReset = useRef<() => void>(() => {});
   const dashboard = useDashboard(session, endSession);
@@ -87,38 +93,76 @@ function App() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   });
+  // Shows a route and records it in the browser history: "push" adds an entry,
+  // "replace" rewrites the current one, "none" is for the browser having moved
+  // already (Back and Forward).
+  function show(next: Route, mode: "push" | "replace" | "none", state: unknown = null) {
+    if (
+      next.page !== page &&
+      (next.page === "Commands" || next.page === "Settings") &&
+      !dirty
+    )
+      workspace.reload();
+    setPage(next.page);
+    setSelected(next.selected);
+    const path = routePath(next);
+    if (mode !== "none") {
+      if (mode === "push" && path !== window.location.pathname)
+        window.history.pushState(state, "", path);
+      else if (mode === "replace" || window.location.search)
+        window.history.replaceState(state, "", path);
+    }
+    if (next.page !== page) {
+      window.scrollTo(0, 0);
+      // Phones scroll the workspace rather than the document.
+      document.getElementById("workspace")?.scrollTo(0, 0);
+    }
+  }
   function navigate(next: Page) {
     if (next === page) return;
-    if ((next === "Commands" || next === "Settings") && !dirty)
-      workspace.reload();
-    setPage(next);
-    window.scrollTo(0, 0);
-    // Phones scroll the workspace rather than the document.
-    document.getElementById("workspace")?.scrollTo(0, 0);
+    show({ page: next, selected: next === "Conversations" ? selected : "" }, "push");
   }
+  // Choosing a conversation adds a history entry the first time, so Back returns
+  // to the list; moving between conversations just replaces it.
+  function selectConversation(id: string) {
+    if (id === selected && page === "Conversations") return;
+    const fromList = !selected && page === "Conversations";
+    if (!id && window.history.state?.fromList) {
+      window.history.back();
+      return;
+    }
+    show(
+      { page: "Conversations", selected: id },
+      selected && page === "Conversations" && id ? "replace" : "push",
+      id ? { fromList: fromList || !!window.history.state?.fromList } : null,
+    );
+  }
+  const showRef = useRef(show);
+  showRef.current = show;
+  useEffect(() => {
+    const onPop = () => showRef.current(parseRoute(window.location.pathname), "none");
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
+  useEffect(() => {
+    document.title = (page === "Home" ? "" : page + " · ") + "SmsBot";
+  }, [page]);
   // Notifications link to a page or conversation: "/?open=conversation&id=…".
   // A tap opens the dashboard at that link, or messages an open one.
-  const navigateRef = useRef(navigate);
-  navigateRef.current = navigate;
   useEffect(() => {
     if (!signedIn) return;
-    const open = (search: string) => {
-      const params = new URLSearchParams(search);
-      const target = params.get("open");
-      if (target === "conversation" && params.get("id")) {
-        navigateRef.current("Conversations");
-        setSelected(params.get("id")!);
-      } else if (target === "activity") navigateRef.current("Activity");
-      else if (target === "settings") navigateRef.current("Settings");
-      else if (target === "home") navigateRef.current("Home");
+    const open = (search: string, mode: "push" | "replace") => {
+      const route = notificationRoute(search);
+      if (route) showRef.current(route, mode);
     };
     if (window.location.search) {
-      open(window.location.search);
-      window.history.replaceState(null, "", "/");
+      if (notificationRoute(window.location.search))
+        open(window.location.search, "replace");
+      else window.history.replaceState(null, "", routePath(parseRoute(window.location.pathname)));
     }
     const onMessage = (event: MessageEvent) => {
       if (event.data?.type === "open" && typeof event.data.url === "string")
-        open(new URL(event.data.url, window.location.origin).search);
+        open(new URL(event.data.url, window.location.origin).search, "push");
     };
     navigator.serviceWorker?.addEventListener("message", onMessage);
     return () => navigator.serviceWorker?.removeEventListener("message", onMessage);
@@ -329,10 +373,9 @@ function App() {
             act={act}
             onToggle={() => void togglePaused()}
             navigate={navigate}
-            openConversation={(id) => {
-              setSelected(id);
-              navigate("Conversations");
-            }}
+            openConversation={(id) =>
+              show({ page: "Conversations", selected: id }, "push")
+            }
           />
         )}
         {page === "Conversations" && (
@@ -343,7 +386,7 @@ function App() {
             busy={busy}
             act={act}
             selected={selected}
-            onSelect={setSelected}
+            onSelect={selectConversation}
             partial={dashboard.discoveryPartial}
             canLoadMore={!!inbox?.enabled && !!dashboard.conversationCursor}
             onLoadMore={loadMoreConversations}

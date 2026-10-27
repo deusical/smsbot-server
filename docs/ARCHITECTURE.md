@@ -80,6 +80,10 @@ sends twice.
 - **Archive sync:** each workflow (import, recent check, viewed section) keeps its own
   checkpoint, and `internal/history/plan.go` decides what runs next.
 - **Database access:** queries live in `internal/store` as named operations.
+- **Dashboard URLs:** each page and open conversation has its own path
+  (`/settings`, `/conversations/ID`), defined in `web/src/lib/routes.ts`, so Back,
+  reload and bookmarks work. The server answers those paths with the app
+  (`internal/httpapi/dashboard.go`); other unknown paths stay 404.
 - **Dashboard state:** `useDashboard` owns app-wide polling; `useConversationMessages`,
   `useThreadScroll` and `useComposer` own a single conversation.
 - **State on disk:** the data directory holds `smsbot.db`, the encrypted Google session

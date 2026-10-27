@@ -3,6 +3,8 @@
 The dashboard follows your system's light or dark theme (switch it in the top bar) and
 uses a bottom tab bar on phones. Served over HTTPS, it installs as a phone app. On the
 sign-in page, **Keep me signed in** keeps you signed in until you sign out.
+Every page, and each open conversation, has its own address, so your browser's Back
+button, reload and bookmarks work as expected.
 
 <img src="images/mobile.png" alt="SmsBot on a phone" width="260">
 
