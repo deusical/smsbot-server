@@ -1,0 +1,3 @@
+# Synthetic test data, not secrets. One fingerprint per line.
+# base64 of "fixture-token" in the cookie update test fixture
+8cc6fdde5543f8615a40a8912c979841f92b4d4a:internal/transport/cookies_test.go:generic-api-key:16
