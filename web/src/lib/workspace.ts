@@ -63,6 +63,8 @@ function validate(c: Configuration): string {
     ["max_chars", "Reply length"],
   ] as const)
     if (!(s[key] >= 1)) return `${label} must be at least 1.`;
+  if (s.ai_photo_max_mb !== undefined && !(s.ai_photo_max_mb >= 1 && s.ai_photo_max_mb <= 25))
+    return "Photo size limit must be between 1 and 25 MB.";
   if (!(s.daily_budget >= 0)) return "Daily AI budget cannot be negative.";
   return "";
 }

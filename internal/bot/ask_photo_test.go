@@ -6,6 +6,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"image"
+	"image/png"
+	"math/rand"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -103,7 +106,8 @@ func TestAskOnAPhotoTheModelCannotRead(t *testing.T) {
 	}{
 		{"text_only_model", "image/png", len(syntheticPNG), []string{"text"}, "This model can't read images; pick one that can for this command."},
 		{"unsupported_format", "image/heic", len(syntheticPNG), nil, "I can only read JPEG, PNG, GIF and WebP photos."},
-		{"too_large", "image/png", imageLimit + 1, nil, "That photo is too large for the AI; the limit is 5 MB."},
+		{"too_large", "image/png", maxPhotoMB<<20 + 1, nil, "That photo is too large for the AI; the limit is 25 MB."},
+		{"webp_over_setting", "image/webp", defaultPhotoMB<<20 + 1, nil, "That WebP photo is over 5 MB and can't be shrunk; the limit is set in Settings."},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e, _ := setup(t)
@@ -271,6 +275,80 @@ func TestAskDownloadsAPhotoOnlyFromACollectedConversation(t *testing.T) {
 		}
 		if !collected && (state != "failed" || len(provider.history) != 0 || phone.downloads != 0) {
 			t.Fatalf("not collected: state=%s downloads=%d", state, phone.downloads)
+		}
+	}
+}
+
+// noisePNG is incompressible, so it is about 5.7 MB: over the default limit
+// and well under the 25 MB maximum.
+func noisePNG(t *testing.T) []byte {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, 1600, 1200))
+	rand.New(rand.NewSource(1)).Read(img.Pix)
+	var b bytes.Buffer
+	if err := png.Encode(&b, img); err != nil {
+		t.Fatal(err)
+	}
+	return b.Bytes()
+}
+
+func TestPhotoSizeSettingDecidesWhatIsShrunk(t *testing.T) {
+	big := noisePNG(t)
+	if len(big) <= defaultPhotoMB<<20 || len(big) >= maxPhotoMB<<20 {
+		t.Fatalf("test photo is %d bytes", len(big))
+	}
+	for _, tc := range []struct {
+		name   string
+		limit  int // 0 keeps what older saved settings had
+		mime   string
+		failed bool
+	}{
+		{"default_shrinks", 0, "image/jpeg", false},
+		{"raised_sends_original", 25, "image/png", false},
+		{"unshrinkable_fails", 1, "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e, _ := setup(t)
+			enableInbox(t, e)
+			arm(t, e)
+			cfg := configureAI(t, e, false, false)
+			cfg.Settings.AIPhotoMaxMB = tc.limit
+			if err := e.SetConfiguration(cfg); err != nil {
+				t.Fatal(err)
+			}
+			if saved, _ := e.Configuration(); tc.limit == 0 && saved.Settings.AIPhotoMaxMB != defaultPhotoMB {
+				t.Fatalf("saved limit = %d", saved.Settings.AIPhotoMaxMB)
+			}
+			provider := &transcriptProvider{}
+			e.Provider = provider
+			savePhoto(t, e, "photo-wire", "image/png", "", big)
+			threadAccept(t, e, threadPrompt("ask-photo", "!ask what's this?", "photo-wire"))
+			if err := e.Dispatch(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			state := stateOf(t, e, store.Hash("demo-chat\x00ask-photo"))
+			if tc.failed {
+				if state != "failed" || len(provider.history) != 0 {
+					t.Fatalf("state=%s", state)
+				}
+				return
+			}
+			if state != "submitted" || len(provider.images) != 1 || provider.images[0].MIME != tc.mime {
+				t.Fatalf("state=%s images=%v", state, provider.images)
+			}
+			if tc.mime == "image/jpeg" && len(provider.images[0].Data) >= defaultPhotoMB<<20 {
+				t.Fatalf("shrunk photo is still %d bytes", len(provider.images[0].Data))
+			}
+		})
+	}
+}
+
+func TestPhotoSizeSettingIsValidated(t *testing.T) {
+	for limit, ok := range map[int]bool{-1: false, 0: true, 1: true, maxPhotoMB: true, maxPhotoMB + 1: false} {
+		c := DefaultConfiguration()
+		c.Settings.AIPhotoMaxMB = limit
+		if (c.Validate() == nil) != ok {
+			t.Errorf("limit %d: valid=%t want %t", limit, !ok, ok)
 		}
 	}
 }

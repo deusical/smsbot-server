@@ -1462,6 +1462,13 @@ components:
         memory_hours: *id003
         retention_days: *id003
         max_chars: *id003
+        ai_photo_max_mb:
+          type: integer
+          minimum: 1
+          maximum: 25
+          description: Photos quoted with an AI command that are larger than this many
+            megabytes are scaled down before they are sent to the provider. Photos over
+            25 MB are refused. 5 when absent.
         default_model: *id002
         daily_budget: *id004
         quiet_enabled: *id001

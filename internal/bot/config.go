@@ -16,17 +16,20 @@ type Generation struct {
 	Temperature  *float64 `json:"temperature,omitempty"`
 }
 type Settings struct {
-	DefaultModel    string                `json:"default_model"`
-	HourlyLimit     int                   `json:"hourly_limit"`
-	DailyLimit      int                   `json:"daily_limit"`
-	DailyBudget     float64               `json:"daily_budget"`
-	QuietEnabled    bool                  `json:"quiet_enabled"`
-	QuietStart      int                   `json:"quiet_start"`
-	QuietEnd        int                   `json:"quiet_end"`
-	Timezone        string                `json:"timezone"`
-	MemoryHours     int                   `json:"memory_hours"`
-	RetentionDays   int                   `json:"retention_days"`
-	MaxChars        int                   `json:"max_chars"`
+	DefaultModel  string  `json:"default_model"`
+	HourlyLimit   int     `json:"hourly_limit"`
+	DailyLimit    int     `json:"daily_limit"`
+	DailyBudget   float64 `json:"daily_budget"`
+	QuietEnabled  bool    `json:"quiet_enabled"`
+	QuietStart    int     `json:"quiet_start"`
+	QuietEnd      int     `json:"quiet_end"`
+	Timezone      string  `json:"timezone"`
+	MemoryHours   int     `json:"memory_hours"`
+	RetentionDays int     `json:"retention_days"`
+	MaxChars      int     `json:"max_chars"`
+	// AIPhotoMaxMB is the size above which a photo is scaled down before it
+	// goes to the AI provider. Zero, from older saved settings, means 5.
+	AIPhotoMaxMB    int                   `json:"ai_photo_max_mb"`
 	Favorites       []string              `json:"favorites"`
 	ModelGeneration map[string]Generation `json:"model_generation"`
 	// OwnerCommands lets the owner run commands from their own phone in
@@ -59,7 +62,7 @@ type Configuration struct {
 }
 
 func DefaultConfiguration() Configuration {
-	return Configuration{Settings: Settings{DefaultModel: "", HourlyLimit: 20, DailyLimit: 100, DailyBudget: 1, QuietStart: 22, QuietEnd: 8, Timezone: "UTC", MemoryHours: 24, RetentionDays: 7, MaxChars: 12000, Favorites: []string{}, ModelGeneration: map[string]Generation{}}, Commands: []Command{}, Profiles: []Profile{}}
+	return Configuration{Settings: Settings{DefaultModel: "", HourlyLimit: 20, DailyLimit: 100, DailyBudget: 1, QuietStart: 22, QuietEnd: 8, Timezone: "UTC", MemoryHours: 24, RetentionDays: 7, MaxChars: 12000, AIPhotoMaxMB: defaultPhotoMB, Favorites: []string{}, ModelGeneration: map[string]Generation{}}, Commands: []Command{}, Profiles: []Profile{}}
 }
 func DefaultGeneration() Generation {
 	return Generation{Reasoning: "default", AnswerLength: "short", Tokens: 2048}
@@ -78,7 +81,7 @@ var commandPattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,23}$`)
 
 func (c Configuration) Validate() error {
 	s := c.Settings
-	if s.HourlyLimit < 1 || s.HourlyLimit > 10000 || s.DailyLimit < 1 || s.DailyLimit > 100000 || s.DailyBudget < 0 || s.DailyBudget > 10000 || math.IsNaN(s.DailyBudget) || math.IsInf(s.DailyBudget, 0) || s.MemoryHours < 1 || s.MemoryHours > 168 || s.RetentionDays < 1 || s.RetentionDays > 365 || s.MaxChars < 128 || s.MaxChars > 12000 || s.QuietStart < 0 || s.QuietStart > 23 || s.QuietEnd < 0 || s.QuietEnd > 23 || len(s.DefaultModel) > 200 || len(s.Favorites) > 100 || len(s.ModelGeneration) > 100 {
+	if s.HourlyLimit < 1 || s.HourlyLimit > 10000 || s.DailyLimit < 1 || s.DailyLimit > 100000 || s.DailyBudget < 0 || s.DailyBudget > 10000 || math.IsNaN(s.DailyBudget) || math.IsInf(s.DailyBudget, 0) || s.MemoryHours < 1 || s.MemoryHours > 168 || s.RetentionDays < 1 || s.RetentionDays > 365 || s.MaxChars < 128 || s.MaxChars > 12000 || s.AIPhotoMaxMB < 0 || s.AIPhotoMaxMB > maxPhotoMB || s.QuietStart < 0 || s.QuietStart > 23 || s.QuietEnd < 0 || s.QuietEnd > 23 || len(s.DefaultModel) > 200 || len(s.Favorites) > 100 || len(s.ModelGeneration) > 100 {
 		return errors.New("invalid bot settings")
 	}
 	if _, err := time.LoadLocation(s.Timezone); err != nil {
@@ -125,11 +128,17 @@ func (e *Engine) Configuration() (Configuration, error) {
 	if json.Unmarshal(b, &c) != nil {
 		return c, errors.New("invalid saved configuration")
 	}
+	if c.Settings.AIPhotoMaxMB == 0 {
+		c.Settings.AIPhotoMaxMB = defaultPhotoMB
+	}
 	return c, c.Validate()
 }
 func (e *Engine) SetConfiguration(c Configuration) error {
 	if err := c.Validate(); err != nil {
 		return err
+	}
+	if c.Settings.AIPhotoMaxMB == 0 {
+		c.Settings.AIPhotoMaxMB = defaultPhotoMB
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
