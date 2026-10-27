@@ -63,9 +63,12 @@ type Plan struct {
 }
 
 // ImageRef names one archived attachment by local message and attachment ID.
+// A command's own photo isn't saved yet when it is planned, so it is named by
+// the message's upstream ID (Wire) instead and found when generating.
 type ImageRef struct {
-	Message    string `json:"message"`
-	Attachment string `json:"attachment"`
+	Message    string `json:"message,omitempty"`
+	Attachment string `json:"attachment,omitempty"`
+	Wire       string `json:"wire,omitempty"`
 }
 
 func ID() string {
