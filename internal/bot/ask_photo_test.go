@@ -136,8 +136,18 @@ func TestAskOnAPhotoTheModelCannotRead(t *testing.T) {
 	}
 }
 
-func TestAskOnAPhotoThatIsNotAnImageFails(t *testing.T) {
-	e, _ := setup(t)
+// sentContains reports whether any message the fixture sent contains text.
+func sentContains(f *transport.Fixture, text string) bool {
+	for _, sent := range f.Sent {
+		if strings.Contains(sent, text) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestAskOnAPhotoThatIsNotAnImageIsExplained(t *testing.T) {
+	e, fixture := setup(t)
 	enableInbox(t, e)
 	arm(t, e)
 	configureAI(t, e, false, false)
@@ -149,12 +159,9 @@ func TestAskOnAPhotoThatIsNotAnImageFails(t *testing.T) {
 	if err := e.Dispatch(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	var state, code string
-	if err := e.Store.DB.QueryRow("SELECT state,code FROM jobs WHERE id=?", store.Hash("demo-chat\x00ask-photo")).Scan(&state, &code); err != nil {
-		t.Fatal(err)
-	}
-	if state != "failed" || code != "image_unavailable" || len(provider.history) != 0 {
-		t.Fatalf("state=%s code=%s", state, code)
+	// The chat is told, instead of the request failing quietly.
+	if state := stateOf(t, e, store.Hash("demo-chat\x00ask-photo")); state != "submitted" || len(provider.history) != 0 || !sentContains(fixture, "(image_unsupported)") {
+		t.Fatalf("state=%s sent=%v", state, fixture.Sent)
 	}
 	_, unknown, err := e.Store.SpendSince(time.Now().UTC().Format("2006-01-02") + "T00:00:00Z")
 	if err != nil || unknown != 0 {
@@ -273,7 +280,7 @@ func TestAskDownloadsAPhotoOnlyFromACollectedConversation(t *testing.T) {
 		if collected && (state != "submitted" || len(provider.images) != 1 || provider.images[0] == nil || phone.downloads != 1) {
 			t.Fatalf("collected: state=%s downloads=%d", state, phone.downloads)
 		}
-		if !collected && (state != "failed" || len(provider.history) != 0 || phone.downloads != 0) {
+		if !collected && (state != "submitted" || len(provider.history) != 0 || phone.downloads != 0 || !sentContains(fixture, "(inbox_access_disabled)")) {
 			t.Fatalf("not collected: state=%s downloads=%d", state, phone.downloads)
 		}
 	}
@@ -305,10 +312,10 @@ func TestPhotoSizeSettingDecidesWhatIsShrunk(t *testing.T) {
 	}{
 		{"default_shrinks", 0, "image/jpeg", false},
 		{"raised_sends_original", 25, "image/png", false},
-		{"unshrinkable_fails", 1, "", true},
+		{"unshrinkable_is_explained", 1, "", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			e, _ := setup(t)
+			e, fixture := setup(t)
 			enableInbox(t, e)
 			arm(t, e)
 			cfg := configureAI(t, e, false, false)
@@ -328,8 +335,8 @@ func TestPhotoSizeSettingDecidesWhatIsShrunk(t *testing.T) {
 			}
 			state := stateOf(t, e, store.Hash("demo-chat\x00ask-photo"))
 			if tc.failed {
-				if state != "failed" || len(provider.history) != 0 {
-					t.Fatalf("state=%s", state)
+				if state != "submitted" || len(provider.history) != 0 || !sentContains(fixture, "(image_too_large)") {
+					t.Fatalf("state=%s sent=%v", state, fixture.Sent)
 				}
 				return
 			}
