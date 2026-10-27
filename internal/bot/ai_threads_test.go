@@ -3,7 +3,6 @@ package bot
 import (
 	"context"
 	"errors"
-	"github.com/deusical/smsbot-server/internal/media"
 	"github.com/deusical/smsbot-server/internal/store"
 	"github.com/deusical/smsbot-server/internal/transport"
 	"reflect"
@@ -14,13 +13,13 @@ import (
 
 type transcriptProvider struct {
 	history [][]store.Turn
-	images  []*Image
+	images  []*Attachment
 }
 
 func (p *transcriptProvider) Models(context.Context) ([]Model, error) {
 	return SimulatedProvider{}.Models(context.Background())
 }
-func (p *transcriptProvider) Generate(_ context.Context, _ string, plan store.Plan, h []store.Turn, _ Model, image *Image) (Result, error) {
+func (p *transcriptProvider) Generate(_ context.Context, _ string, plan store.Plan, h []store.Turn, _ Model, image *Attachment) (Result, error) {
 	p.images = append(p.images, image)
 	p.history = append(p.history, append([]store.Turn{}, h...))
 	zero := 0.0
@@ -152,7 +151,7 @@ func TestAskThreadRestartAndModelSwitch(t *testing.T) {
 	}
 }
 func TestAskThreadFollowupAccessAndUnsupportedTargets(t *testing.T) {
-	for _, mode := range []string{"ordinary", "unknown", "sms", "historical", "stale", "wrong-peer", "wrong-chat", "paused", "memory-off", "owner-disabled", "files"} {
+	for _, mode := range []string{"ordinary", "unknown", "sms", "historical", "stale", "wrong-peer", "wrong-chat", "paused", "memory-off", "owner-disabled"} {
 		t.Run(mode, func(t *testing.T) {
 			e, _ := setup(t)
 			arm(t, e)
@@ -188,8 +187,6 @@ func TestAskThreadFollowupAccessAndUnsupportedTargets(t *testing.T) {
 				}
 			case "owner-disabled":
 				m.Outgoing = true
-			case "files":
-				m.Attachments = []media.File{{Info: media.Info{ID: "part"}, Data: []byte("synthetic")}}
 			}
 			if ok, err := e.Accept(context.Background(), m); err != nil || ok {
 				t.Fatalf("unexpected routing %t %v", ok, err)

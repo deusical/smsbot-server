@@ -43,10 +43,10 @@ func TestPhotoOnlyReplyToAnAnswerContinuesTheThread(t *testing.T) {
 	// A reply that is only a photo, as the dashboard sends one.
 	reply := withPhoto(t, e, threadPrompt("photo-reply", "", "answer-root"), "image/png", true)
 	p := threadAccept(t, e, reply)
-	if p.Thread == nil || p.Thread.Parent != store.Hash("demo-chat\x00root") || len(p.Context) != 2 || p.Image == nil || p.Image.Wire != "photo-reply" {
+	if p.Thread == nil || p.Thread.Parent != store.Hash("demo-chat\x00root") || len(p.Context) != 2 || p.File == nil || p.File.Wire != "photo-reply" {
 		t.Fatalf("not a threaded follow-up with its photo: %+v", p)
 	}
-	if p.Input != ownPhotoPrompt("") {
+	if p.Input != ownFilePrompt("", p.File) {
 		t.Fatalf("input %q", p.Input)
 	}
 	if err := e.Dispatch(context.Background()); err != nil {
@@ -57,7 +57,7 @@ func TestPhotoOnlyReplyToAnAnswerContinuesTheThread(t *testing.T) {
 	}
 	// Words with the photo are kept.
 	again := withPhoto(t, e, threadPrompt("photo-words", "Is this a cat?", "answer-root"), "image/png", true)
-	if p = threadAccept(t, e, again); p.Input != ownPhotoPrompt("Is this a cat?") || p.Image == nil {
+	if p = threadAccept(t, e, again); p.Input != ownFilePrompt("Is this a cat?", &store.FileRef{MIME: "image/png"}) || p.File == nil {
 		t.Fatalf("input %q", p.Input)
 	}
 }
@@ -66,8 +66,8 @@ func TestAskWithItsOwnPhoto(t *testing.T) {
 	e, provider := photoSetup(t, false)
 	m := withPhoto(t, e, threadPrompt("ask-own", "!ask what is this?", ""), "image/png", true)
 	p := threadAccept(t, e, m)
-	if p.Image == nil || p.Input != "(A photo is attached.) what is this?" {
-		t.Fatalf("image=%v input=%q", p.Image, p.Input)
+	if p.File == nil || p.Input != "(A photo is attached.) what is this?" {
+		t.Fatalf("image=%v input=%q", p.File, p.Input)
 	}
 	if err := e.Dispatch(context.Background()); err != nil {
 		t.Fatal(err)
@@ -78,8 +78,8 @@ func TestAskWithItsOwnPhoto(t *testing.T) {
 	// Its own photo wins over the one it quotes.
 	savePhoto(t, e, "quoted-photo", "image/png", "", syntheticPNG)
 	both := withPhoto(t, e, threadPrompt("ask-both", "!ask compare", "quoted-photo"), "image/png", true)
-	if p = threadAccept(t, e, both); p.Image == nil || p.Image.Wire != "ask-both" || p.Image.Message != "" {
-		t.Fatalf("image=%+v", p.Image)
+	if p = threadAccept(t, e, both); p.File == nil || p.File.Wire != "ask-both" || p.File.Message != "" {
+		t.Fatalf("image=%+v", p.File)
 	}
 }
 
@@ -95,8 +95,6 @@ func TestFilesThatAreNotCommandsStayIgnored(t *testing.T) {
 		"photo alone":                    withPhoto(t, e, threadPrompt("a", "", ""), "image/png", true),
 		"photo replying to a person":     withPhoto(t, e, threadPrompt("b", "", "unknown-wire"), "image/png", true),
 		"photo with chat, not a command": withPhoto(t, e, threadPrompt("c", "look at this", ""), "image/png", true),
-		"document with a command":        withPhoto(t, e, threadPrompt("d", "!ask summarize", ""), "application/pdf", false),
-		"document replying to an answer": withPhoto(t, e, threadPrompt("e", "", "answer-root"), "application/pdf", false),
 	} {
 		if ok, err := e.Accept(context.Background(), m); err != nil || ok {
 			t.Errorf("%s: accepted=%t err=%v", name, ok, err)
@@ -111,7 +109,7 @@ func TestPhotoCommandsExplainWhatTheyCannotDo(t *testing.T) {
 	configureAI(t, e, false, false)
 	setModalities(t, e, "text", "image")
 	p := threadAccept(t, e, withPhoto(t, e, threadPrompt("ask-unsaved", "!ask what is this?", ""), "image/png", false))
-	if p.Model != "" || p.Image != nil || p.Reply == "" {
+	if p.Model != "" || p.File != nil || p.Reply == "" {
 		t.Fatalf("unsaved conversation: model=%q reply=%q", p.Model, p.Reply)
 	}
 	// And only from models that read images.

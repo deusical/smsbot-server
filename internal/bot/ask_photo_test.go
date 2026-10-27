@@ -58,8 +58,8 @@ func TestAskAboutAQuotedPhotoSendsItOnce(t *testing.T) {
 	ask := threadPrompt("ask-photo", "!ask what's in this?", "photo-wire")
 	p := threadAccept(t, e, ask)
 	want := "This question replies to a photo in the chat, sent by the person asking. The photo is attached.\n\nQuestion: what's in this?"
-	if p.Image == nil || p.Input != want || p.Thread == nil {
-		t.Fatalf("photo not planned: image=%v input=%q", p.Image, p.Input)
+	if p.File == nil || p.Input != want || p.Thread == nil {
+		t.Fatalf("photo not planned: image=%v input=%q", p.File, p.Input)
 	}
 	if err := e.Dispatch(context.Background()); err != nil {
 		t.Fatal(err)
@@ -73,8 +73,8 @@ func TestAskAboutAQuotedPhotoSendsItOnce(t *testing.T) {
 	// A follow-up keeps the conversation's text but not the photo.
 	threadEcho(t, e, ask, "answer-photo")
 	follow := threadAccept(t, e, threadPrompt("follow-photo", "What colour is it?", "answer-photo"))
-	if follow.Image != nil || len(follow.Context) != 2 || follow.Context[0].Content != want {
-		t.Fatalf("follow-up context wrong: image=%v context=%v", follow.Image, follow.Context)
+	if follow.File != nil || len(follow.Context) != 2 || follow.Context[0].Content != want {
+		t.Fatalf("follow-up context wrong: image=%v context=%v", follow.File, follow.Context)
 	}
 	if err := e.Dispatch(context.Background()); err != nil {
 		t.Fatal(err)
@@ -92,7 +92,7 @@ func TestBareAskOnAQuotedPhotoWithText(t *testing.T) {
 	savePhoto(t, e, "photo-wire", "image/png", "Synthetic caption", syntheticPNG)
 	p := threadAccept(t, e, threadPrompt("ask-bare-photo", "!ask", "photo-wire"))
 	want := "This question replies to a photo in the chat, sent by the person asking. The photo is attached, with this text:\n\"\"\"\nSynthetic caption\n\"\"\"\n\nNo question was given. Describe or respond to the photo."
-	if p.Image == nil || p.Input != want || p.Model == "" || p.Reply != "" {
+	if p.File == nil || p.Input != want || p.Model == "" || p.Reply != "" {
 		t.Fatalf("input=%q reply=%q", p.Input, p.Reply)
 	}
 }
@@ -123,7 +123,7 @@ func TestAskOnAPhotoTheModelCannotRead(t *testing.T) {
 			}
 			savePhoto(t, e, "photo-wire", tc.mime, "", data)
 			p := threadAccept(t, e, threadPrompt("ask-photo", "!ask what's this?", "photo-wire"))
-			if p.Reply != tc.reply || p.Model != "" || p.Image != nil || p.Thread != nil {
+			if p.Reply != tc.reply || p.Model != "" || p.File != nil || p.Thread != nil {
 				t.Fatalf("reply=%q model=%q", p.Reply, p.Model)
 			}
 			if err := e.Dispatch(context.Background()); err != nil {
@@ -183,7 +183,7 @@ func TestProvidersSendThePhotoWithThePrompt(t *testing.T) {
 	generation, _ := json.Marshal(DefaultGeneration())
 	plan := store.Plan{Model: "vendor/model", Generation: generation, Input: "Synthetic question"}
 	history := []store.Turn{{Role: "user", Content: "Synthetic earlier"}, {Role: "assistant", Content: "Synthetic reply"}}
-	image := &Image{MIME: "image/png", Data: syntheticPNG}
+	image := &Attachment{MIME: "image/png", Data: syntheticPNG}
 	openrouter := NewOpenRouter()
 	openrouter.base = server.URL
 	for name, provider := range map[string]Provider{"openrouter": openrouter, "compatible": NewOpenAICompatible(server.URL, "")} {

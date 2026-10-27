@@ -84,7 +84,7 @@ func (p *OpenAICompatible) request(ctx context.Context, path, key string, body a
 	return b, nil
 }
 
-func (p *OpenAICompatible) Generate(ctx context.Context, key string, plan store.Plan, history []store.Turn, model Model, image *Image) (Result, error) {
+func (p *OpenAICompatible) Generate(ctx context.Context, key string, plan store.Plan, history []store.Turn, model Model, image *Attachment) (Result, error) {
 	var generation Generation
 	if json.Unmarshal(plan.Generation, &generation) != nil {
 		return Result{}, errors.New("generation_invalid")

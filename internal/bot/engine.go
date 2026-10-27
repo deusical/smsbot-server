@@ -7,11 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"github.com/deusical/smsbot-server/internal/collection"
-	"github.com/deusical/smsbot-server/internal/media"
 	"github.com/deusical/smsbot-server/internal/store"
 	"github.com/deusical/smsbot-server/internal/transport"
-	"net/http"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -228,7 +225,7 @@ func (e *Engine) Accept(ctx context.Context, m transport.Incoming) (bool, error)
 // with "!", or a native RCS reply to one of the bot's AI answers (which may be
 // just a photo).
 func (e *Engine) commandCandidate(m transport.Incoming, text string) (*store.AIParent, bool, error) {
-	if text == "" && ownImage(m) == nil {
+	if text == "" && ownFile(m) == nil {
 		return nil, false, nil
 	}
 	var parent *store.AIParent
@@ -247,7 +244,7 @@ func (e *Engine) commandCandidate(m transport.Incoming, text string) (*store.AIP
 func (e *Engine) admit(ctx context.Context, m transport.Incoming, parent *store.AIParent) (Configuration, string, bool, error) {
 	var cfg Configuration
 	age := e.now().Sub(m.At)
-	if len(m.Attachments) > 0 && ownImage(m) == nil || m.ID == "" || m.Historical || age > 2*time.Minute || age < -5*time.Second || len(m.Text) > 12000 {
+	if m.ID == "" || m.Historical || age > 2*time.Minute || age < -5*time.Second || len(m.Text) > 12000 {
 		return cfg, "", false, nil
 	}
 	paused, err := e.Store.Paused()
@@ -406,11 +403,11 @@ func (e *Engine) planAI(ctx context.Context, m transport.Incoming, p *store.Plan
 	p.Model = model
 	p.Instructions = instructions
 	p.Generation, _ = json.Marshal(g)
-	own := ownImage(m)
+	own := ownFile(m)
 	if own != nil {
-		reply := photoUnreadable(*own, selectedModel, cfg.Settings.AIPhotoMaxMB)
-		if reply == "" && !e.photoSaved(m.ConversationID) {
-			reply = "I can only read photos in conversations you archive. Turn that on in Settings, or reply to the photo with !ask once it's saved."
+		reply := fileUnreadable(*own, selectedModel, cfg.Settings.AIPhotoMaxMB)
+		if reply == "" && !e.filesSaved(m.ConversationID) {
+			reply = "I can only read files in conversations you archive. Turn that on in Settings, or reply to the file with !ask once it's saved."
 		}
 		if reply != "" {
 			p.Model = ""
@@ -418,22 +415,22 @@ func (e *Engine) planAI(ctx context.Context, m transport.Incoming, p *store.Plan
 			p.Reply = reply
 			return true, nil
 		}
-		input = ownPhotoPrompt(input)
+		input = ownFilePrompt(input, own)
 		p.Input = input
-		p.Image = &store.ImageRef{Wire: m.ID}
+		p.File = own
 	}
 	if parent == nil {
-		if quoted, photo, ok := e.quotedInput(m, input, own != nil); ok {
+		if quoted, file, ok := e.quotedInput(m, input, own != nil); ok {
 			// A bare "!ask" on a quoted message responds to that message.
 			p.Input, input = quoted, quoted
-			if photo != nil && own == nil {
-				if reply := photoUnreadable(*photo, selectedModel, cfg.Settings.AIPhotoMaxMB); reply != "" {
+			if file != nil && own == nil {
+				if reply := fileUnreadable(*file, selectedModel, cfg.Settings.AIPhotoMaxMB); reply != "" {
 					p.Model = ""
 					p.Memory = false
 					p.Reply = reply
 					return true, nil
 				}
-				p.Image = &photo.ImageRef
+				p.File = file
 			}
 		}
 	}
@@ -480,28 +477,28 @@ const quoteLimit = 2000
 // it the question is sent alone. With no question, the AI is asked to respond
 // to the last message. A photo on the message replied to directly is returned
 // as a reference; its bytes are read only to generate.
-func (e *Engine) quotedInput(m transport.Incoming, input string, ownPhoto bool) (string, *quotedPhoto, bool) {
+func (e *Engine) quotedInput(m transport.Incoming, input string, hasOwn bool) (string, *store.FileRef, bool) {
 	if m.Interaction == nil || m.Interaction.ReplyTo == "" || !strings.Contains(strings.ToUpper(m.Interaction.Protocol), "RCS") {
 		return input, nil, false
 	}
-	chain, more, photo, err := e.replyChain(m, ownPhoto)
+	chain, more, file, err := e.replyChain(m, hasOwn)
 	if err != nil || len(chain) == 0 {
 		return input, nil, false
 	}
 	var quote string
 	last := chain[len(chain)-1]
 	if len(chain) == 1 && !more {
-		shown := "The photo is attached"
+		shown := "The " + last.noun + " is attached"
 		if !last.attached {
-			shown = "The photo isn't shown"
+			shown = "The " + last.noun + " isn't shown"
 		}
 		switch {
-		case !last.photo:
+		case last.noun == "":
 			quote = "This question replies to an earlier message in the chat, sent by " + last.author + ":\n\"\"\"\n" + last.text + "\n\"\"\"\n\n"
 		case last.text == "":
-			quote = "This question replies to a photo in the chat, sent by " + last.author + ". " + shown + ".\n\n"
+			quote = "This question replies to a " + last.noun + " in the chat, sent by " + last.author + ". " + shown + ".\n\n"
 		default:
-			quote = "This question replies to a photo in the chat, sent by " + last.author + ". " + shown + ", with this text:\n\"\"\"\n" + last.text + "\n\"\"\"\n\n"
+			quote = "This question replies to a " + last.noun + " in the chat, sent by " + last.author + ". " + shown + ", with this text:\n\"\"\"\n" + last.text + "\n\"\"\"\n\n"
 		}
 	} else {
 		quote = "This question replies to a chain of messages in the chat, oldest first"
@@ -511,8 +508,8 @@ func (e *Engine) quotedInput(m transport.Incoming, input string, ownPhoto bool) 
 		quote += ". It replies to the last one.\n\n"
 		for i, q := range chain {
 			quote += fmt.Sprintf("%d. Sent by %s", i+1, q.author)
-			if q.photo {
-				quote += ", a photo"
+			if q.noun != "" {
+				quote += ", a " + q.noun
 				if q.attached {
 					quote += " (attached)"
 				} else {
@@ -526,12 +523,12 @@ func (e *Engine) quotedInput(m transport.Incoming, input string, ownPhoto bool) 
 		}
 	}
 	if input == "" {
-		if photo != nil {
-			return quote + "No question was given. Describe or respond to the photo.", photo, true
+		if file != nil {
+			return quote + "No question was given. Describe or respond to the " + fileNoun(file) + ".", file, true
 		}
 		return quote + "No question was given. Respond to that message.", nil, true
 	}
-	return quote + "Question: " + input, photo, true
+	return quote + "Question: " + input, file, true
 }
 
 // A reply chain is followed at most chainDepth messages up, and the chain's
@@ -542,14 +539,14 @@ const (
 )
 
 type chainMessage struct {
-	author, text    string
-	photo, attached bool
+	author, text, noun string
+	attached           bool
 }
 
 // replyChain returns the messages m replies to, oldest first. more reports that
 // older messages exist but were left out. photo is the image on the message m
 // replies to directly, if any. The bot's own answers are part of the chain.
-func (e *Engine) replyChain(m transport.Incoming, ownPhoto bool) (chain []chainMessage, more bool, photo *quotedPhoto, err error) {
+func (e *Engine) replyChain(m transport.Incoming, hasOwn bool) (chain []chainMessage, more bool, file *store.FileRef, err error) {
 	seen := map[string]bool{}
 	budget := chainChars
 	wire := m.Interaction.ReplyTo
@@ -572,12 +569,12 @@ func (e *Engine) replyChain(m transport.Incoming, ownPhoto bool) (chain []chainM
 		} else if v != nil && strings.Contains(strings.ToUpper(v.Protocol), "RCS") {
 			wire = v.ReplyTo
 		}
-		img, err := e.quotedPhoto(m.ConversationID, id)
+		attached, err := e.quotedFile(m.ConversationID, id)
 		if err != nil {
 			return nil, false, nil, err
 		}
 		text = strings.TrimSpace(text)
-		if text == "" && img == nil {
+		if text == "" && attached == nil {
 			continue
 		}
 		if r := []rune(text); len(r) > quoteLimit {
@@ -594,207 +591,23 @@ func (e *Engine) replyChain(m transport.Incoming, ownPhoto bool) (chain []chainM
 		case (direction == "outgoing") == m.Outgoing:
 			author = "the person asking"
 		}
-		if len(chain) == 0 && !ownPhoto {
-			photo = img
+		noun := ""
+		if attached != nil {
+			noun = fileNoun(attached)
 		}
-		chain = append(chain, chainMessage{author: author, text: text, photo: img != nil, attached: len(chain) == 0 && img != nil && !ownPhoto})
+		shown := len(chain) == 0 && attached != nil && !hasOwn
+		if shown {
+			file = attached
+		}
+		chain = append(chain, chainMessage{author: author, text: text, noun: noun, attached: shown})
 		budget -= len([]rune(text))
 	}
 	for i, j := 0, len(chain)-1; i < j; i, j = i+1, j-1 {
 		chain[i], chain[j] = chain[j], chain[i]
 	}
-	return chain, more, photo, nil
+	return chain, more, file, nil
 }
 
-// A quoted photo is read up to maxPhotoMB. One over the owner's setting
-// (defaultPhotoMB unless changed) is scaled to at most imageMaxSide pixels
-// first. imageTokens is the allowance reserved for it in the context and
-// spending estimates.
-const (
-	defaultPhotoMB = 5
-	maxPhotoMB     = 25
-	imageMaxSide   = 2048
-	imageTokens    = 2000
-)
-
-// imageTypes are the photo formats every Chat Completions provider accepts.
-var imageTypes = []string{"image/jpeg", "image/png", "image/gif", "image/webp"}
-
-type quotedPhoto struct {
-	store.ImageRef
-	media.Info
-}
-
-// quotedPhoto returns the first image attached to a saved message, if any.
-func (e *Engine) quotedPhoto(conv, message string) (*quotedPhoto, error) {
-	files, err := e.Store.MessageFiles(conv, message)
-	if err != nil {
-		return nil, err
-	}
-	for _, f := range files {
-		if strings.HasPrefix(f.MIME, "image/") {
-			return &quotedPhoto{ImageRef: store.ImageRef{Message: message, Attachment: f.ID}, Info: f.Info}, nil
-		}
-	}
-	return nil, nil
-}
-
-// ownImage is the first image attached to a message. A command may carry one:
-// it, rather than a quoted photo, is what the AI is shown.
-func ownImage(m transport.Incoming) *quotedPhoto {
-	for _, f := range m.Attachments {
-		if strings.HasPrefix(f.MIME, "image/") {
-			return &quotedPhoto{ImageRef: store.ImageRef{Wire: m.ID}, Info: f.Info}
-		}
-	}
-	return nil
-}
-
-// ownPhotoPrompt words the prompt for a command that came with its own photo.
-func ownPhotoPrompt(input string) string {
-	if input == "" {
-		return "The person sent a photo with no message. Describe or respond to the attached photo."
-	}
-	return "(A photo is attached.) " + input
-}
-
-// photoSaved reports whether photos in conv are saved, which is how a command's
-// own photo reaches the AI: the conversation must be archived or open in the
-// dashboard.
-func (e *Engine) photoSaved(conv string) bool {
-	s, err := e.Collection.Settings()
-	return err == nil && s.AllowsID(conv)
-}
-
-// waitForPhoto finds a command's own photo once it has been saved. Saving runs
-// beside command handling, so it may need a moment.
-func (e *Engine) waitForPhoto(ctx context.Context, conv, wire string) (message, attachment string, err error) {
-	for attempt := 0; attempt < 20; attempt++ {
-		id, _, _, ok, err := e.Store.QuotedMessage(conv, wire)
-		if err != nil {
-			return "", "", err
-		}
-		if ok {
-			photo, err := e.quotedPhoto(conv, id)
-			if err != nil {
-				return "", "", err
-			}
-			if photo != nil {
-				return id, photo.Attachment, nil
-			}
-		}
-		select {
-		case <-ctx.Done():
-			return "", "", ctx.Err()
-		case <-time.After(500 * time.Millisecond):
-		}
-	}
-	return "", "", errors.New("image_not_saved")
-}
-
-// photoUnreadable explains why a quoted photo can't go to the model, or
-// returns "" when it can. A photo over limitMB is shrunk later, except a WebP,
-// which can't be.
-func photoUnreadable(photo quotedPhoto, m Model, limitMB int) string {
-	switch {
-	case !readsImages(m):
-		return "This model can't read images; pick one that can for this command."
-	case !contains(imageTypes, photo.MIME):
-		return "I can only read JPEG, PNG, GIF and WebP photos."
-	case photo.Size > maxPhotoMB<<20:
-		return fmt.Sprintf("That photo is too large for the AI; the limit is %d MB.", maxPhotoMB)
-	case photo.MIME == "image/webp" && photo.Size > int64(limitMB)<<20:
-		return fmt.Sprintf("That WebP photo is over %d MB and can't be shrunk; the limit is set in Settings.", limitMB)
-	}
-	return ""
-}
-
-// imageRetryDelay is the pause before reading a photo again after a temporary
-// error. It is a variable so tests need not wait.
-var imageRetryDelay = 2 * time.Second
-
-// transientImageError reports a failure that may pass: the file changed while
-// it was being saved elsewhere, or the phone hasn't produced it yet.
-func transientImageError(err error) bool {
-	switch err.Error() {
-	case "attachment_changed", "original_pending", "attachment_unavailable":
-		return true
-	}
-	return false
-}
-
-var photoCodePattern = regexp.MustCompile(`^[a-z_]{1,40}$`)
-
-// photoFailureReply is what the chat is told when a photo can't be loaded. The
-// code is one of this service's own fixed error names, never upstream text.
-func photoFailureReply(err error) string {
-	code := "image_unavailable"
-	if photoCodePattern.MatchString(err.Error()) {
-		code = err.Error()
-	}
-	why := "I couldn't get that photo from your phone. Try sending it again in a moment."
-	switch code {
-	case "inbox_access_disabled", "image_not_saved":
-		why = "I couldn't read that photo; I can only read photos in conversations you archive."
-	case "attachment_size_limit", "image_too_large":
-		why = "That photo is too large for the AI. Send a smaller one, or raise Shrink photos over in Settings."
-	case "image_unsupported":
-		why = "I can only read JPEG, PNG, GIF and WebP photos."
-	case "image_unreadable":
-		why = "I couldn't read that photo."
-	}
-	return why + " (" + code + ")"
-}
-
-// loadImage reads a planned photo for one generation, shrinking it when it is
-// over limitMB. Caller doesn't hold the control lock: the photo may be
-// downloaded from the phone.
-func (e *Engine) loadImage(ctx context.Context, conv string, ref *store.ImageRef, limitMB int) (*Image, error) {
-	if ref == nil {
-		return nil, nil
-	}
-	message, attachment := ref.Message, ref.Attachment
-	if ref.Wire != "" {
-		var err error
-		if message, attachment, err = e.waitForPhoto(ctx, conv, ref.Wire); err != nil {
-			return nil, err
-		}
-	}
-	var data []byte
-	var err error
-	for attempt := 0; ; attempt++ {
-		data, err = e.Collection.QuotedFile(ctx, conv, message, attachment, maxPhotoMB<<20)
-		if err == nil || attempt >= 3 || !transientImageError(err) {
-			break
-		}
-		// Another worker may be saving the same file, or the phone is slow.
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(imageRetryDelay):
-		}
-	}
-	if err != nil {
-		return nil, err
-	}
-	mime := http.DetectContentType(data)
-	if !contains(imageTypes, mime) {
-		return nil, errors.New("image_unsupported")
-	}
-	if limit := int64(limitMB) << 20; int64(len(data)) > limit {
-		if mime == "image/webp" {
-			return nil, errors.New("image_too_large")
-		}
-		if data, err = media.Shrink(data, imageMaxSide); err != nil {
-			return nil, err
-		}
-		mime = "image/jpeg"
-		if int64(len(data)) > limit {
-			return nil, errors.New("image_too_large")
-		}
-	}
-	return &Image{MIME: mime, Data: data}, nil
-}
 func memoryScope(conv, command, model string) string {
 	return store.Hash(conv) + ":" + store.Hash(command+"\x00"+model)
 }
@@ -987,13 +800,13 @@ func (e *Engine) generateReply(ctx context.Context, j store.Job, p *store.Plan, 
 		err = e.Store.Complete(j.ID, "failed", "generation_unsupported")
 		return true, err
 	}
-	if p.Image != nil && !readsImages(m) {
+	if p.File != nil && kindOf(p.File) == kindImage && !readsImages(m) {
 		err = e.Store.Complete(j.ID, "failed", "model_images_unsupported")
 		return true, err
 	}
 	reserve := m.OutputPrice*float64(g.Tokens) + m.InputPrice*float64(len(p.Input)+len(p.Instructions)+512)
-	if p.Image != nil {
-		reserve += m.InputPrice * imageTokens
+	if p.File != nil {
+		reserve += m.InputPrice * float64(fileTokens(p.File))
 	}
 	for _, turn := range history {
 		reserve += m.InputPrice * float64(len(turn.Content)+64)
@@ -1026,7 +839,7 @@ func (e *Engine) generateReply(ctx context.Context, j store.Job, p *store.Plan, 
 	e.pending[j.ID] = cancel
 	e.mu.Unlock()
 	var result Result
-	image, imageErr := e.loadImage(genctx, j.ConversationID, p.Image, cfg.Settings.AIPhotoMaxMB)
+	image, imageErr := e.loadFile(genctx, j.ConversationID, p.File, cfg.Settings.AIPhotoMaxMB)
 	var generr error
 	if imageErr != nil {
 		zero := 0.0
@@ -1053,7 +866,7 @@ func (e *Engine) generateReply(ctx context.Context, j store.Job, p *store.Plan, 
 	}
 	if imageErr != nil {
 		// Say so in the chat rather than leaving the person waiting.
-		result, generr = Result{Text: photoFailureReply(imageErr), Model: p.Model}, nil
+		result, generr = Result{Text: fileFailureReply(imageErr), Model: p.Model}, nil
 	}
 	if generr != nil {
 		err = e.Store.Complete(j.ID, "failed", safeProviderCode(generr))
