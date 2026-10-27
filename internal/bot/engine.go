@@ -11,6 +11,7 @@ import (
 	"github.com/deusical/smsbot-server/internal/store"
 	"github.com/deusical/smsbot-server/internal/transport"
 	"net/http"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -668,7 +669,7 @@ func (e *Engine) photoSaved(conv string) bool {
 // waitForPhoto finds a command's own photo once it has been saved. Saving runs
 // beside command handling, so it may need a moment.
 func (e *Engine) waitForPhoto(ctx context.Context, conv, wire string) (message, attachment string, err error) {
-	for attempt := 0; attempt < 10; attempt++ {
+	for attempt := 0; attempt < 20; attempt++ {
 		id, _, _, ok, err := e.Store.QuotedMessage(conv, wire)
 		if err != nil {
 			return "", "", err
@@ -685,10 +686,10 @@ func (e *Engine) waitForPhoto(ctx context.Context, conv, wire string) (message, 
 		select {
 		case <-ctx.Done():
 			return "", "", ctx.Err()
-		case <-time.After(300 * time.Millisecond):
+		case <-time.After(500 * time.Millisecond):
 		}
 	}
-	return "", "", errors.New("image_unavailable")
+	return "", "", errors.New("image_not_saved")
 }
 
 // photoUnreadable explains why a quoted photo can't go to the model, or
@@ -708,6 +709,43 @@ func photoUnreadable(photo quotedPhoto, m Model, limitMB int) string {
 	return ""
 }
 
+// imageRetryDelay is the pause before reading a photo again after a temporary
+// error. It is a variable so tests need not wait.
+var imageRetryDelay = 2 * time.Second
+
+// transientImageError reports a failure that may pass: the file changed while
+// it was being saved elsewhere, or the phone hasn't produced it yet.
+func transientImageError(err error) bool {
+	switch err.Error() {
+	case "attachment_changed", "original_pending", "attachment_unavailable":
+		return true
+	}
+	return false
+}
+
+var photoCodePattern = regexp.MustCompile(`^[a-z_]{1,40}$`)
+
+// photoFailureReply is what the chat is told when a photo can't be loaded. The
+// code is one of this service's own fixed error names, never upstream text.
+func photoFailureReply(err error) string {
+	code := "image_unavailable"
+	if photoCodePattern.MatchString(err.Error()) {
+		code = err.Error()
+	}
+	why := "I couldn't get that photo from your phone. Try sending it again in a moment."
+	switch code {
+	case "inbox_access_disabled", "image_not_saved":
+		why = "I couldn't read that photo; I can only read photos in conversations you archive."
+	case "attachment_size_limit", "image_too_large":
+		why = "That photo is too large for the AI. Send a smaller one, or raise Shrink photos over in Settings."
+	case "image_unsupported":
+		why = "I can only read JPEG, PNG, GIF and WebP photos."
+	case "image_unreadable":
+		why = "I couldn't read that photo."
+	}
+	return why + " (" + code + ")"
+}
+
 // loadImage reads a planned photo for one generation, shrinking it when it is
 // over limitMB. Caller doesn't hold the control lock: the photo may be
 // downloaded from the phone.
@@ -722,7 +760,20 @@ func (e *Engine) loadImage(ctx context.Context, conv string, ref *store.ImageRef
 			return nil, err
 		}
 	}
-	data, err := e.Collection.QuotedFile(ctx, conv, message, attachment, maxPhotoMB<<20)
+	var data []byte
+	var err error
+	for attempt := 0; ; attempt++ {
+		data, err = e.Collection.QuotedFile(ctx, conv, message, attachment, maxPhotoMB<<20)
+		if err == nil || attempt >= 3 || !transientImageError(err) {
+			break
+		}
+		// Another worker may be saving the same file, or the phone is slow.
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(imageRetryDelay):
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -1001,8 +1052,8 @@ func (e *Engine) generateReply(ctx context.Context, j store.Job, p *store.Plan, 
 		return true, nil
 	}
 	if imageErr != nil {
-		err = e.Store.Complete(j.ID, "failed", "image_unavailable")
-		return true, err
+		// Say so in the chat rather than leaving the person waiting.
+		result, generr = Result{Text: photoFailureReply(imageErr), Model: p.Model}, nil
 	}
 	if generr != nil {
 		err = e.Store.Complete(j.ID, "failed", safeProviderCode(generr))
