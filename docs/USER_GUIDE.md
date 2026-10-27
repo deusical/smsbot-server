@@ -61,9 +61,11 @@ own messages can run commands too.
 - **Continue it** by using your phone's Reply on the AI's answer; you don't need `!ask`
   again. Replying to an older answer continues from that point. This needs **Remember
   the conversation** on for the command.
-- **Ask about a message** by replying to it with `!ask question`. The AI sees that one
-  message (up to 2,000 characters) and nothing else from the chat. Reply with just
-  `!ask` to have the AI respond to the message.
+- **Ask about a message** by replying to it with `!ask question`. The AI sees that
+  message and, if it was itself a reply, the messages it replied to, up the chain: up to
+  8 messages and about 6,000 characters, newest kept first (2,000 characters each). It
+  sees nothing else from the chat, and only messages the server has saved. Reply with
+  just `!ask` to have the AI respond to the message.
 - **Ask about a photo** the same way: reply to it with `!ask what's in this?`, or just
   `!ask`. The AI gets the photo with your question; the follow-ups get the text of the
   conversation, not the photo again. This needs a model that reads images, a JPEG, PNG,
