@@ -27,7 +27,7 @@ func TestProviderRequestAndUsageContracts(t *testing.T) {
 	temperature := 0.3
 	g.Temperature = &temperature
 	b, _ := json.Marshal(g)
-	result, err := p.Generate(context.Background(), "SYNTHETIC_KEY", store.Plan{Model: "fixture/model", Generation: b, Input: "Synthetic input", Instructions: "Synthetic instructions"}, []store.Turn{{Role: "user", Content: "Synthetic prior"}, {Role: "tool", Content: "Excluded synthetic tool"}}, Model{HasReasoning: true, ReasoningEfforts: nil, Parameters: []string{"temperature"}})
+	result, err := p.Generate(context.Background(), "SYNTHETIC_KEY", store.Plan{Model: "fixture/model", Generation: b, Input: "Synthetic input", Instructions: "Synthetic instructions"}, []store.Turn{{Role: "user", Content: "Synthetic prior"}, {Role: "tool", Content: "Excluded synthetic tool"}}, Model{HasReasoning: true, ReasoningEfforts: nil, Parameters: []string{"temperature"}}, nil)
 	if err != nil || result.ReasoningTokens != 10 || result.Cost == nil || *result.Cost != 0.01 || !strings.Contains(result.Text, "token limit") {
 		t.Fatalf("result contract failed %v", err)
 	}
@@ -65,7 +65,7 @@ func TestProviderDefaultAndFailures(t *testing.T) {
 			defer server.Close()
 			p := &OpenRouter{client: server.Client(), base: server.URL}
 			b, _ := json.Marshal(DefaultGeneration())
-			_, err := p.Generate(context.Background(), "SYNTHETIC_KEY", store.Plan{Model: "fixture/model", Generation: b}, nil, Model{})
+			_, err := p.Generate(context.Background(), "SYNTHETIC_KEY", store.Plan{Model: "fixture/model", Generation: b}, nil, Model{}, nil)
 			if err == nil || err.Error() != tc.want {
 				t.Fatalf("error %v", err)
 			}
@@ -80,14 +80,14 @@ func TestUnsupportedGenerationNeverContactsProvider(t *testing.T) {
 	g := DefaultGeneration()
 	g.Reasoning = "off"
 	b, _ := json.Marshal(g)
-	if _, err := p.Generate(context.Background(), "SYNTHETIC_KEY", store.Plan{Generation: b}, nil, Model{HasReasoning: true, ReasoningMandatory: true}); err == nil {
+	if _, err := p.Generate(context.Background(), "SYNTHETIC_KEY", store.Plan{Generation: b}, nil, Model{HasReasoning: true, ReasoningMandatory: true}, nil); err == nil {
 		t.Fatal("mandatory reasoning disabled")
 	}
 	temperature := 0.5
 	g = DefaultGeneration()
 	g.Temperature = &temperature
 	b, _ = json.Marshal(g)
-	if _, err := p.Generate(context.Background(), "SYNTHETIC_KEY", store.Plan{Generation: b}, nil, Model{}); err == nil {
+	if _, err := p.Generate(context.Background(), "SYNTHETIC_KEY", store.Plan{Generation: b}, nil, Model{}, nil); err == nil {
 		t.Fatal("unsupported temperature accepted")
 	}
 	if calls != 0 {

@@ -123,6 +123,7 @@ export type Model = {
   reasoning_mandatory: boolean;
   reasoning_efforts: string[] | null;
   pricing_known?: boolean;
+  input_modalities?: string[];
 };
 export type CompatibleProviderStatus = {
   base_url: string;

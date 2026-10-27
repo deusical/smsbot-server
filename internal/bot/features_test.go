@@ -22,7 +22,7 @@ type controlledProvider struct {
 func (p *controlledProvider) Models(context.Context) ([]Model, error) {
 	return SimulatedProvider{}.Models(context.Background())
 }
-func (p *controlledProvider) Generate(ctx context.Context, key string, plan store.Plan, history []store.Turn, m Model) (Result, error) {
+func (p *controlledProvider) Generate(ctx context.Context, key string, plan store.Plan, history []store.Turn, m Model, _ *Image) (Result, error) {
 	p.calls.Add(1)
 	if deadline, ok := ctx.Deadline(); ok {
 		p.deadline = deadline

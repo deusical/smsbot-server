@@ -55,7 +55,7 @@ func TestCompatibleProviderModelsAndGeneration(t *testing.T) {
 	temperature := 0.3
 	g.Temperature = &temperature
 	generation, _ := json.Marshal(g)
-	result, err := p.Generate(context.Background(), "SYNTHETIC_KEY", store.Plan{Model: model.ID, Generation: generation, Input: "Synthetic input", Instructions: "Synthetic instructions"}, []store.Turn{{Role: "user", Content: "Synthetic history"}, {Role: "tool", Content: "Excluded"}}, model)
+	result, err := p.Generate(context.Background(), "SYNTHETIC_KEY", store.Plan{Model: model.ID, Generation: generation, Input: "Synthetic input", Instructions: "Synthetic instructions"}, []store.Turn{{Role: "user", Content: "Synthetic history"}, {Role: "tool", Content: "Excluded"}}, model, nil)
 	if err != nil || result.Text != "Synthetic answer" || result.Model != "vendor/model-alias" || result.PromptTokens != 12 || result.CompletionTokens != 8 || result.Cost == nil || *result.Cost != 0.001 {
 		t.Fatalf("result=%+v error=%v", result, err)
 	}

@@ -64,6 +64,13 @@ own messages can run commands too.
 - **Ask about a message** by replying to it with `!ask question`. The AI sees that one
   message (up to 2,000 characters) and nothing else from the chat. Reply with just
   `!ask` to have the AI respond to the message.
+- **Ask about a photo** the same way: reply to it with `!ask what's in this?`, or just
+  `!ask`. The AI gets the photo with your question; the follow-ups get the text of the
+  conversation, not the photo again. This needs a model that reads images, a JPEG, PNG,
+  GIF or WebP photo up to 5 MB, and a conversation you archive or let the dashboard
+  open. The bot replies when the model can't read images or the photo's type or size
+  doesn't fit; a photo it can't fetch shows as failed in Activity. Refresh the model
+  list once so text-only models are recognized.
 - `!new` clears the AI's memory for that chat. Conversations also expire after the
   memory window (24 hours by default).
 

@@ -282,6 +282,19 @@ func (s *Store) QuotedMessage(conv, wire string) (id, direction, text string, ok
 	}
 	return id, direction, string(b), true, nil
 }
+
+// MessageFiles returns the attachments saved for one message, or none.
+func (s *Store) MessageFiles(conv, id string) ([]media.File, error) {
+	var payload string
+	err := s.DB.QueryRow("SELECT a.payload FROM message_attachments a JOIN messages m ON m.id=a.message WHERE m.conversation=? AND m.id=?", conv, id).Scan(&payload)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return s.openAttachments(id, payload)
+}
 func InteractionVersion(v *transport.MessageInteraction) string {
 	if v == nil {
 		return ""

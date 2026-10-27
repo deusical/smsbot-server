@@ -1564,6 +1564,11 @@ components:
         input_price: *id004
         output_price: *id004
         pricing_known: *id001
+        input_modalities:
+          type: array
+          description: What the provider's catalog says the model reads, such as text and image. Absent when the catalog doesn't say; photos quoted with an AI command are then still sent to it.
+          items:
+            type: string
     CompatibleProviderStatus:
       type: object
       additionalProperties: false
