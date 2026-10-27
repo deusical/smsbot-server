@@ -32,14 +32,16 @@ test("actions load on demand when opening menu and reuse cached capabilities in 
   expect(requests).toHaveLength(0);
   await trigger.click();
   await expect.poll(() => requests.length).toBe(1);
-  const contents = await page.getByRole("dialog", {name: "Message actions", exact: true}).evaluate(node => ({reply: node.textContent?.includes("Reply"), loading: node.textContent?.includes("Loading actions")}));
-  expect(contents).toEqual({reply: true, loading: false});
+  // The request is sent before its response renders, so wait for the menu to settle.
+  const menu = page.getByRole("dialog", {name: "Message actions", exact: true});
+  await expect(menu).toContainText("Reply");
+  await expect(menu).not.toContainText("Loading actions");
   await page.keyboard.press("Escape");
   // A cold request after this point would fail: subsequent opening must use cached data in memory.
   await page.route("**/messages/original/actions", route => route.fulfill({status: 503}));
   await trigger.click();
-  const cachedContents = await page.getByRole("dialog", {name: "Message actions", exact: true}).evaluate(node => ({reply: node.textContent?.includes("Reply"), loading: node.textContent?.includes("Loading actions")}));
-  expect(cachedContents).toEqual({reply: true, loading: false});
+  await expect(menu).toContainText("Reply");
+  await expect(menu).not.toContainText("Loading actions");
   await page.keyboard.press("Escape");
   expect(requests).toHaveLength(1);
 });
