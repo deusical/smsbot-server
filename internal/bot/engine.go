@@ -405,7 +405,7 @@ func (e *Engine) planAI(ctx context.Context, m transport.Incoming, p *store.Plan
 	p.Generation, _ = json.Marshal(g)
 	own := ownFile(m)
 	if own != nil {
-		reply := fileUnreadable(*own, selectedModel, cfg.Settings.AIPhotoMaxMB)
+		reply := fileUnreadable(*own, cfg.Settings.AIPhotoMaxMB)
 		if reply == "" && !e.filesSaved(m.ConversationID) {
 			reply = "I can only read files in conversations you archive. Turn that on in Settings, or reply to the file with !ask once it's saved."
 		}
@@ -424,7 +424,7 @@ func (e *Engine) planAI(ctx context.Context, m transport.Incoming, p *store.Plan
 			// A bare "!ask" on a quoted message responds to that message.
 			p.Input, input = quoted, quoted
 			if file != nil && own == nil {
-				if reply := fileUnreadable(*file, selectedModel, cfg.Settings.AIPhotoMaxMB); reply != "" {
+				if reply := fileUnreadable(*file, cfg.Settings.AIPhotoMaxMB); reply != "" {
 					p.Model = ""
 					p.Memory = false
 					p.Reply = reply
@@ -800,10 +800,6 @@ func (e *Engine) generateReply(ctx context.Context, j store.Job, p *store.Plan, 
 		err = e.Store.Complete(j.ID, "failed", "generation_unsupported")
 		return true, err
 	}
-	if p.File != nil && kindOf(p.File) == kindImage && !readsImages(m) {
-		err = e.Store.Complete(j.ID, "failed", "model_images_unsupported")
-		return true, err
-	}
 	reserve := m.OutputPrice*float64(g.Tokens) + m.InputPrice*float64(len(p.Input)+len(p.Instructions)+512)
 	if p.File != nil {
 		reserve += m.InputPrice * float64(fileTokens(p.File))
@@ -867,6 +863,11 @@ func (e *Engine) generateReply(ctx context.Context, j store.Job, p *store.Plan, 
 	if imageErr != nil {
 		// Say so in the chat rather than leaving the person waiting.
 		result, generr = Result{Text: fileFailureReply(imageErr), Model: p.Model}, nil
+	}
+	if generr != nil && image != nil && providerRefused(generr) {
+		// Files are sent without checking what the model reads; say so if refused.
+		zero := 0.0
+		result, generr = Result{Text: fileRefusalReply(generr), Model: p.Model, Cost: &zero}, nil
 	}
 	if generr != nil {
 		err = e.Store.Complete(j.ID, "failed", safeProviderCode(generr))

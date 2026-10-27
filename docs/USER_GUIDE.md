@@ -74,23 +74,25 @@ own messages can run commands too.
   AI gets the file with your question; the follow-ups get the text of the conversation,
   not the file again. One file is read per message. It needs a conversation you archive
   or let the dashboard open. What it can read:
-  - **Photos** (JPEG, PNG, GIF, WebP) with a model that reads images. A photo over
+  - **Photos** (JPEG, PNG, GIF, WebP). A photo over
     **Shrink photos over** (Settings, Limits; 5 MB by default) is scaled down to fit
     first, except WebP, which is sent only if it's under that size. Over 25 MB is refused.
-  - **PDFs** (up to 20 MB), with any OpenRouter model. OpenRouter extracts the text, and
-    reads scans too, which can add a small charge. A custom OpenAI-compatible endpoint
-    can't take PDFs.
+  - **PDFs** (up to 20 MB). OpenRouter extracts the text for any model, and reads scans
+    too, which can add a small charge. A custom OpenAI-compatible endpoint is sent the
+    PDF as a file, and again as an image part if it refuses that.
   - **Text and code**: `.txt`, `.md`, `.csv`, `.json`, `.xml`, `.html`, `.log`, source
     files, `.ics`, `.vcf`, `.srt` and similar (up to 2 MB), with any model.
   - **Word, Excel and PowerPoint** (`.docx`, `.xlsx`, `.pptx`) and OpenDocument
     (`.odt`, `.ods`, `.odp`) files, with any model. Only their text is read, not
     pictures, formatting or comments.
   - **Audio** (MP3, WAV, AAC, M4A, OGG, FLAC, AIFF) and **video** (MP4, MPEG, MOV, WebM),
-    up to 20 MB, with an OpenRouter model whose catalog lists audio or video input.
-  Only the first 60,000 characters of a file's text are sent. If the file or model isn't
-  supported, the file is too large, or it can't be fetched from your phone (it is tried
-  a few times), the bot replies with the reason and a short code in brackets. Refresh the
-  model list once so each model's abilities are recognized.
+    up to 20 MB, with a model that takes them.
+  Photos, PDFs, audio and video are sent whatever the model's listing says, so a model
+  that does read them isn't turned away. If the provider refuses one, the bot replies
+  that the model can't take that kind of file, with the provider's error code. Only the
+  first 60,000 characters of a file's text are sent. If the file is a type that can't be
+  read, is too large, or can't be fetched from your phone (it is tried a few times), the
+  bot replies with the reason and a short code in brackets.
 - `!new` clears the AI's memory for that chat. Conversations also expire after the
   memory window (24 hours by default).
 

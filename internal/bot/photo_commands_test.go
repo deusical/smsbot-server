@@ -112,14 +112,4 @@ func TestPhotoCommandsExplainWhatTheyCannotDo(t *testing.T) {
 	if p.Model != "" || p.File != nil || p.Reply == "" {
 		t.Fatalf("unsaved conversation: model=%q reply=%q", p.Model, p.Reply)
 	}
-	// And only from models that read images.
-	e, provider := photoSetup(t, false)
-	setModalities(t, e, "text")
-	p = threadAccept(t, e, withPhoto(t, e, threadPrompt("ask-text-model", "!ask what is this?", ""), "image/png", true))
-	if p.Model != "" || p.Reply != "This model can't read images; pick one that can for this command." {
-		t.Fatalf("text-only model: %q", p.Reply)
-	}
-	if err := e.Dispatch(context.Background()); err != nil || len(provider.images) != 0 {
-		t.Fatal("explanation went through the provider", err)
-	}
 }
