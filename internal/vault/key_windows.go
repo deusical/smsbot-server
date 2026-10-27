@@ -18,7 +18,7 @@ func protect(b []byte, decrypt bool) ([]byte, error) {
 	c.Stdin = bytes.NewBufferString(base64.StdEncoding.EncodeToString(b))
 	out, e := c.Output()
 	if e != nil {
-		return nil, errors.New("Windows key protection failed")
+		return nil, errors.New("windows key protection failed")
 	}
 	return base64.StdEncoding.DecodeString(string(out))
 }

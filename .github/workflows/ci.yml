@@ -86,6 +86,11 @@ jobs:
         timeout-minutes: 3
       - name: gofmt
         run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - name: staticcheck
+        run: go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...
+        timeout-minutes: 5
+        env:
+          GOTOOLCHAIN: go1.27.3
       - name: Audit Go dependencies
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
         timeout-minutes: 5
