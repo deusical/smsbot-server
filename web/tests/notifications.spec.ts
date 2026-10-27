@@ -74,7 +74,7 @@ test("a notification link opens its conversation", async ({ page }) => {
   await login(page);
   await page.goto("/?open=conversation&id=demo-chat");
   await expect(page.getByRole("heading", { name: "Conversations", exact: true })).toBeVisible();
-  await expect(page).toHaveURL(/\/$/);
+  await expect(page).toHaveURL(/\/conversations\/demo-chat$/);
 });
 
 test("on a phone, a long inbox and unbreakable names stay inside the screen", async ({ page }) => {

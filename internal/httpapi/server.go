@@ -56,7 +56,7 @@ func New(e *bot.Engine, c *collection.Service, origin string, fixture bool) *Ser
 	s.mux.HandleFunc("POST /api/v1/fixture/incoming", s.protected(s.incoming))
 	s.mux.HandleFunc("POST /api/v1/fixture/typing", s.protected(s.fixtureTyping))
 	sub, _ := fs.Sub(assets, "assets")
-	s.mux.Handle("/", http.FileServer(http.FS(sub)))
+	s.mux.Handle("/", dashboardHandler(sub))
 	return s
 }
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
