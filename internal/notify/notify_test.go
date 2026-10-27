@@ -224,7 +224,7 @@ func TestEndpointValidation(t *testing.T) {
 		"https://[::1]/x":                           false,
 		"https://localhost/x":                       false,
 		"https://router.local/x":                    false,
-		"https://acer.tailddfcef.ts.net:8443/api":   false,
+		"https://host.example.ts.net:8443/api":      false,
 		"https://user:pass@fcm.googleapis.com/x":    false,
 		"https://[::ffff:127.0.0.1]/x":              false,
 		"https://[::ffff:169.254.169.254]/x":        false,

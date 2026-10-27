@@ -327,7 +327,7 @@ participant checks, command freshness and Live/Pause semantics are unchanged.
 
 Conversation discovery and the inbox list are built from the phone's list pages
 alone (25 conversations a page). A list record carries the same identity fields as
-a single-conversation lookup; a field check on the Acer found name, group,
+a single-conversation lookup; a field check on a live account found name, group,
 read-only, type, sending number and participant identical for all 388
 conversations. The earlier design looked each listed conversation up again and
 kept the answers as in-memory "hints", which cost about 390 phone requests after
