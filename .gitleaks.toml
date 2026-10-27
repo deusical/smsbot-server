@@ -1,0 +1,8 @@
+# Uses gitleaks' default rules, allowing only known synthetic test values.
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Synthetic test fixtures"
+# base64 of "fixture-token" in the cookie update test
+regexes = ['''Zml4dHVyZS10b2tlbg==''']
