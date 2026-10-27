@@ -1,193 +1,125 @@
 # User guide
 
-The dashboard follows your system light or dark theme (toggle in the top bar) and uses a
-bottom tab bar on phones. Served over HTTPS it installs as a phone app. Theme, drafts,
-credentials and keys are never written to browser storage; your sign-in lives in an
-HttpOnly cookie. The sign-in page offers **Keep me signed in** (until you sign out).
+The dashboard follows your system's light or dark theme (switch it in the top bar) and
+uses a bottom tab bar on phones. Served over HTTPS, it installs as a phone app. On the
+sign-in page, **Keep me signed in** keeps you signed in until you sign out.
+
+<img src="images/mobile.png" alt="SmsBot on a phone" width="260">
 
 ## Top bar
 
-The **Live / Paused** switch ("Bot sending") controls all sending. Pausing cancels queued
-and waiting replies; it cannot retract a message already submitted. Every service start
-is paused. A "Demo data" tag marks the offline demo.
+The **Live / Paused** switch controls all sending. Pausing cancels queued replies but
+can't recall a message already sent. Every start of the service is paused.
 
 ## Home
 
-Plain-language status, a 24-hour request chart, counts (needs approval, uncertain sends,
-people with bot replies on, enabled commands), recent requests with inline **Approve** and
-**Cancel**, and links to people and commands.
+The current status, a 24-hour activity chart, anything waiting for your approval (with
+**Approve** and **Cancel**), recent requests, and shortcuts to people and commands.
 
 ## Conversations
 
 ![Conversations](images/conversations.png)
 
-A Messages-style view of your individual conversations. Groups are never used. The list
-updates as your phone reports new messages; opening or returning to the dashboard also
-checks your phone once, so it does not keep waking your phone while the tab is open.
+Your individual conversations, newest first, with pinned chats on top, unread dots,
+previews and typing indicators. The **Bot replies** switch on each row lets that person
+use commands.
 
-- **Order and markers.** Newest message first, pinned conversations on top, a time on each
-  row, an unread dot, and a last-message preview (with "You:" for messages you sent).
-  "typing…" appears while the other person is typing.
-- **Bot replies** switch per row enrolls that exact participant for commands.
-- **Open a thread** to read, search ("search as you type"), and load older messages by
-  scrolling up. A round button jumps back to the latest message.
-- **Send.** Enter sends, Shift+Enter adds a line (on touch keyboards Enter adds a line and
-  the send button sends). The box clears at once and a bubble shows **Sending**, then
-  **Sent**, **Delivered** and **Read** as Google reports them. Paste an image or drop files
-  onto the box to attach them, within your attachment limits. If a send is not confirmed
-  you get **Retry sending** (it can never send twice). If it definitely failed you can
-  **Edit and resend**. If the outcome is uncertain you are asked to check your phone; it is
-  never retried for you.
-- **Read receipts.** While this tab is open and focused and you are looking at the newest
-  message of an unread conversation, it is marked read on your phone, so the other person
-  may see a receipt if your phone sends them. Turn this off in **Settings > Messages &
-  privacy**. Sending is not required and pausing does not stop it.
-
-- **Message actions.** Hover a message and use the three-dot button beside it for Copy
-  text and Details. The menu opens next to the message without covering it, and the
-  message stays outlined while the menu is open. On phones, tap the message to open the
-  menu as a bottom sheet; the message scrolls clear of the sheet. Menus also work from
-  the keyboard. Escape closes the menu and returns focus to the message.
-- **RCS replies.** Eligible collected RCS messages offer Reply. A preview above the
-  composer shows the target; canceling it preserves your text. Replies can include
-  attachments. Quoted bubbles link to the retained original; missing originals are
-  labeled unavailable. Clear an active search before jumping to an original.
-- **RCS reactions.** Choose an emoji, use the expanded picker, or paste a Unicode
-  emoji. Choosing your existing emoji removes it; a different one changes it.
-  Reactions sit on the lower edge of the message as one compact pill (a number appears
-  only when several people chose the same emoji); yours is outlined. Hover a reaction
-  to see who chose it. A submitted change waits
-  for the phone to sync before another change can be made. An uncertain outcome is
-  never retried automatically. **Check request** only repeats the same idempotent
-  API request when its acknowledgement was lost; it cannot create another action.
-
-Action availability belongs to each message: an older SMS in an RCS conversation
-does not gain RCS actions. SMS/MMS and unknown messages currently offer Copy text
-and Details; native RCS actions never silently become SMS sends. Collection, pause,
-phone availability, and exact conversation identity still control sending.
-Observed phone edits continue to show **Edited**. Editing a sent message from this
-dashboard remains unavailable because the companion transport exposes no edit operation.
-
-Keyboard shortcuts: **Ctrl/Cmd+K** focuses conversation search (Esc clears), **Alt+Up** and
-**Alt+Down** switch conversation, **Ctrl/Cmd+S** saves pending settings changes.
+- **Sending.** Enter sends; Shift+Enter adds a line. Paste or drop files to attach them.
+  A message shows **Sending**, then **Sent**, **Delivered** and **Read**. If the server
+  didn't confirm it, **Retry sending** is safe and never sends twice. If the outcome is
+  uncertain, you're asked to check your phone instead.
+- **Message menu.** Hover a message and click its ⋯ button, or tap it on a phone, for
+  **Copy text**, **Details** and, on RCS messages, **Reply** and reactions. If Reply
+  isn't available, the menu says why.
+- **Reading.** Search within a conversation, scroll up for older messages, and use the
+  round button to jump back to the latest. Opening an unread conversation marks it read
+  on your phone; turn that off in **Settings > Messages & privacy**.
+- **Shortcuts.** **Ctrl/Cmd+K** searches conversations, **Alt+Up/Down** switches
+  conversation, and **Ctrl/Cmd+S** saves settings.
 
 ## Commands
 
-A studio with a searchable list (each with an enable switch, plus the built-ins `!ping`,
-`!help`, `!status`, `!new`, `!more`) and an editor: name, description, fixed text or AI,
-approval, memory, model or profile, optional generation overrides, allowed conversations
-and an offline **Try it** preview. **New** offers Blank, Quick reply, AI assistant and
-Translator. Templates and duplicates start disabled; AI templates require approval and
-leave memory off. Model profiles have their own tab.
+![Commands](images/commands.png)
 
-Fixed replies can use `{input}`. AI commands send the input and any context you opted into
-to the provider selected by the model. Approvals and queued plans expire after two
-minutes. Requests are counted in rolling-hour and daily limits (manual messages count);
-quiet hours withhold requests instead of deferring them. With **Commands from your phone**
-on (Settings > Limits & quiet hours), commands you send yourself in a conversation with
-bot replies on run too, whether typed on your phone or in Conversations, and the reply
-goes to that conversation. The daily spend control is a
-conservative reported-spend threshold, not a billing guarantee; unknown pricing blocks
-further AI use once it is on.
+Commands are messages starting with `!`, sent by someone with bot replies on. The
+built-ins are `!ping`, `!help`, `!status`, `!new` and `!more`. You can add your own:
 
-### Continuing an AI conversation
+- **Fixed** commands reply with set text, where `{input}` is replaced by whatever
+  follows the command.
+- **AI** commands send the input to a model you choose. They can require your approval
+  before replying, and can be limited to certain conversations.
 
-For the AI `ask` command, turn on **Remember the conversation** to keep encrypted
-AI threads across restarts. Each unquoted `!ask` starts fresh. Use the native Reply
-action on an AI answer to continue it; the follow-up does not need `!ask`.
-Replying to an older answer branches from that point, excluding later discussion.
-Ordinary chat, copied quotations and replies to manual/fixed replies do not invoke AI.
-The legacy `!deepseek` alias follows the same rules as `!ask`.
+**New** offers templates (Quick reply, AI assistant, Translator); new commands start
+disabled. **Try it** previews a command offline. Bot replies are limited per hour and per
+day, and AI spending per day; your own messages never count toward these limits. Quiet
+hours drop requests instead of delaying them. With **Commands from your phone** on, your
+own messages can run commands too.
 
-To ask about a particular message, use the native Reply action on it and write
-`!ask` and your question, such as `!ask what does this mean`. The AI sees that one
-quoted message's text (up to 2,000 characters) with your question, and nothing
-else from the chat. A reply of just `!ask` asks the AI to respond to that message.
-This works with or without **Remember the conversation**.
+### Asking AI with `!ask`
 
-Follow-ups require reliable native reply metadata (currently RCS). Without it,
-send a new `!ask`. Text-only, freshness, enrollment, pause, quiet-hours, approval
-and spending rules still apply. Owner follow-ups require Commands from your phone.
-Turning memory off keeps new asks stateless. Other AI commands keep their existing
-rolling-memory behavior.
+- `!ask question` starts a new conversation with the AI.
+- **Continue it** by using your phone's Reply on the AI's answer; you don't need `!ask`
+  again. Replying to an older answer continues from that point. This needs **Remember
+  the conversation** on for the command.
+- **Ask about a message** by replying to it with `!ask question`. The AI sees that one
+  message (up to 2,000 characters) and nothing else from the chat. Reply with just
+  `!ask` to have the AI respond to the message.
+- `!new` clears the AI's memory for that chat. Conversations also expire after the
+  memory window (24 hours by default).
 
-Threads expire after the configured memory window without a successful answer
-(default 24 hours), with an absolute cap from creation equal to bot retention
-(default seven days). The model receives the newest complete ancestor exchanges
-that fit a bounded context budget; it does not have unlimited recall. Changing
-models preserves an active thread's transcript. `!new` clears AI context for the
-chat and invalidates unsent thread requests, without deleting archived messages.
-Deleted answers no longer trigger plain follow-ups. Thread context does not
-require full archive collection and is excluded from filtered backups/exports.
+Replies need RCS. On SMS, send a new `!ask` with everything in it.
 
 ## Activity
 
-Filters (all, needs approval, in progress, sent, problems) and search. Rows expand to show
-model, usage and cost. Approve and cancel act inline. Uncertain submissions are explained
-and have no retry. Totals describe the loaded recent requests only.
+Every request, filterable by state and searchable. Expand a row to see the model, usage
+and cost, and approve or cancel from here.
 
 ## Archive
 
 ![Archive](images/archive.png)
 
-The archive keeps an encrypted local copy of conversations you enable under **Settings >
-Messages & privacy**, independent of bot replies and of Live/Pause, and it continues with
-the tab closed.
+An encrypted local copy of the conversations you turn on under **Settings > Messages &
+privacy**. It keeps running when the dashboard is closed and is separate from Live /
+Paused.
 
-- **Overview.** Storage used, saved messages, original files and conversations tracked.
-- **Conversation history.** Pick a conversation and choose **Archive conversation**: it
-  reads all available history, fills gaps, reconciles edits and downloads original files
-  in the background. Completed imports are not re-scanned automatically; archive again
-  to re-scan. Advanced options limit a new import to a start date. Recent checks,
-  viewed-section checks and file downloads run separately.
-- **Automatic history repair** lists updates that could not be saved and retries them;
-  it never claims completeness.
-- **Retention** (days, 0 keeps everything), **original file archive** (limits and
-  quota) and **message history export** (encrypted backup or readable export).
+- **Archive conversation** reads all available history, fills gaps and downloads the
+  original files. Run it again to re-check.
+- **Retention**, **original file archive** limits and **exports** (encrypted backup or a
+  readable TAR of JSON and files) are set here.
 
-Available history may have gaps, and absence from Google's pages never deletes saved
-messages. Importing and viewing history never run old commands.
+Google doesn't always provide complete history, and importing history never runs old
+commands.
 
 ## Settings
 
 | Section | What it holds |
 |---|---|
-| AI models | Default model (star favorites in the picker), per-model tuning, catalog refresh |
-| Providers | OpenRouter key and an OpenAI-compatible URL and key (write-only) |
-| Limits & quiet hours | Hourly and daily limits on bot replies (your own messages never count), spend threshold, quiet hours, reply length, commands from your phone |
-| Messages & privacy | Collection, scope, older history, automatic replies, read receipts, attachment limits, retention, memory window |
-| Notifications | Turn notifications on for this device and set what each device is notified about |
-| Devices | Phone connection details, **Sign out everywhere** |
-| Import & export | Recipes: share commands, profiles and settings as a file (never keys) |
+| AI models | Default model, favorites, per-model tuning |
+| Providers | OpenRouter key, or any OpenAI-compatible URL and key |
+| Limits & quiet hours | Bot reply limits, AI spending limit, quiet hours, reply length, commands from your phone |
+| Messages & privacy | Which conversations are archived, read receipts, attachment limits, retention, AI memory window |
+| Notifications | Per-device notifications |
+| Devices | Phone connection, **Sign out everywhere** |
+| Import & export | Share commands, profiles and settings as a file (never keys) |
 
-Commands, profiles, settings and inbox preferences share one draft that survives page
-changes. A save bar appears when something differs from the saved state; **Save changes**
-(or Ctrl/Cmd+S) commits it and **Discard** restores the saved state. Provider keys save
-immediately from their own forms. Importing a recipe replaces your configuration with
-every command disabled; review before enabling.
+Changes collect in a save bar; **Save changes** (or Ctrl/Cmd+S) applies them and
+**Discard** undoes them. Imported settings arrive with every command disabled.
 
 ### Notifications
 
-Open **Settings > Notifications** on each device that should be notified, such as your
-computer or a spare phone, and choose **Turn on notifications**. They arrive even when
-SmsBot is closed. Each device has its own settings, which save as you change them:
+On each device you want notified, open **Settings > Notifications** and choose **Turn
+on notifications**. Each device has its own settings:
 
-- **Message notifications:** every incoming message, only conversations with bot
-  replies on, only conversations you choose, or none. Mute conversations you never want
-  to hear about, and turn off **Show message text** to see only who wrote.
-- **Alerts:** a reply waiting for approval, a failed or uncertain reply, and the phone
-  being unreachable for two minutes (and back).
+- **Messages:** all, only conversations with bot replies on, only chosen conversations,
+  or none. You can mute conversations and hide message text.
+- **Alerts:** a reply waiting for approval, a failed reply, and the phone being offline
+  for two minutes.
 
-Messages older than ten minutes when SmsBot sees them, such as history caught up after
-an outage, do not notify. Tapping a notification opens its conversation or Activity.
-**Other devices** lists every device that gets notifications; edit or remove any of
-them from here. On iPhone and iPad, add SmsBot to the Home Screen first.
+Messages older than ten minutes, such as history caught up after an outage, don't
+notify. On iPhone, add SmsBot to the Home Screen first.
 
-## Files and attachments
+## Files
 
-With collection on, **Attach files** (or paste/drop) sends images, video, audio or
-documents with an optional caption. Limits live under **Messages & privacy > Attachment
-limits**; 0 means unlimited for that limit, but Google, carriers, memory and storage
-still apply. Files are owner-only. Images, audio and video preview inline; anything
-else downloads. A message that has an attachment never runs a command, even if its
-caption looks like one.
+Attach images, video, audio or documents with an optional caption. Images, audio and
+video preview inline; other files download. Limits are under **Messages & privacy >
+Attachment limits**. A message with an attachment never runs a command.

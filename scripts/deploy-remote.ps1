@@ -1,6 +1,6 @@
 # Build a release from merged main and install it on a Linux host over SSH
 # (for example a machine on your Tailscale network running the user systemd unit).
-# See docs/HOSTING.md, "Deploying to a remote host". Nothing secret is passed on a
+# See docs/GETTING_STARTED.md, "Updating a remote host". Nothing secret is passed on a
 # command line: SSH uses your existing authentication, and the vault key stays on the host.
 #   .\scripts\deploy-remote.ps1 -Target user@host -OriginHost host.tailnet.ts.net:8443
 param(

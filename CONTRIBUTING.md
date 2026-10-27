@@ -1,86 +1,58 @@
 # Contributing
 
-SmsBot Server is an experimental personal project. Issues and focused pull requests are
-welcome; response times are best effort. Please read the [README](README.md),
-[Known limitations](docs/LIMITATIONS.md) and
-[architecture](docs/dev/ARCHITECTURE.md) first. Report security problems privately, as
-described in [Security](docs/SECURITY.md), not in a public issue.
+SmsBot is an experimental personal project. Issues and focused pull requests are
+welcome; responses are best effort. Read the [README](README.md),
+[Security and limitations](docs/SECURITY.md) and [Architecture](docs/ARCHITECTURE.md)
+first. Report security problems privately, as described in
+[Security](docs/SECURITY.md#reporting-a-vulnerability), not in a public issue.
 
 ## Ground rules
 
-- **Never commit real data.** Credentials, cookies, real participants and real message
-  content stay out of source, tests, screenshots, logs and PRs. Tests use synthetic
-  fixtures only and never contact Google, carriers or AI providers.
-- **Keep the safety invariants.** Exact enrolled-participant checks, group exclusion,
-  freshness checks, pause, and immutable plans. Persist outbound intent before
-  submission, and never retry an uncertain send automatically. Do not log credentials,
-  message bodies, contacts or raw upstream errors.
-- **Keep the API stable.** Additions must be backward compatible and documented in
+- **Never commit real data.** Credentials, cookies, real people and real messages stay
+  out of code, tests, screenshots, logs and PRs. Tests use synthetic data only and never
+  contact Google, carriers or AI providers.
+- **Keep the safety rules** listed in [Architecture](docs/ARCHITECTURE.md#safety-rules).
+- **Keep the API compatible.** Additions must be backward compatible and described in
   [api/openapi.yaml](api/openapi.yaml).
-- **Include the full change.** Implementation, synthetic tests, migrations and the docs
-  that describe the behavior.
-- **Do not import `golang.org/x/crypto/openpgp`** or its subpackages; the upstream
-  advisory has no fixed release.
-- Use focused branches and small PRs. They are squash-merged once CI passes.
+- **Send the whole change:** code, tests, migrations and any docs it affects.
+- **Don't import `golang.org/x/crypto/openpgp`**; its advisory has no fixed release.
+- Keep pull requests small and focused. They're squash-merged once CI passes.
 
 ## Build and test
 
-You need Go 1.27.3 and Node.js 24.15 or newer in the 24.x series.
-
-On Windows:
-
-```powershell
-.\scripts\build.ps1          # npm ci, dashboard build, frontend and Go tests, vet, binary
-```
-
-On Linux or macOS:
+On Windows, `.\scripts\build.ps1` installs dependencies, builds the dashboard and the
+service, and runs the frontend and Go tests and `go vet`. On Linux or macOS:
 
 ```sh
 (cd web && npm ci && npm run build && npm run test:unit)
-node scripts/sync-web-assets.mjs    # copy web/dist into the embedded assets
-go test ./... && go vet ./... && go build ./cmd/smsbot
+node scripts/sync-web-assets.mjs    # embed the dashboard in the binary
+go test ./... && go vet ./... && go build -o bin/smsbot ./cmd/smsbot
 ```
 
-Browser tests run against an isolated fixture service started from the built binary,
-so rebuild the binary first, then from `web/`:
+Browser tests run against an isolated offline service started from `bin/`, so rebuild the
+binary first. Then, from `web/`:
 
 ```sh
 npx playwright install chromium     # once
 npm test
 ```
 
-Run `gofmt` on Go changes. When Go or npm runtime dependencies change, run
+From `web/`, `npm run test:unit:watch` reruns unit tests while you edit. Put unit tests
+next to their source as `*.test.ts(x)`; put full flows, scrolling and layout checks in
+Playwright under `web/tests/`; and put backend safety guarantees in Go tests.
+
+Run `gofmt` on Go changes. When dependencies change, run
 `python scripts/gen-third-party-notices.py` (after `npm ci` in `web/`) and commit the
-updated `THIRD_PARTY_NOTICES.md`.
+updated `THIRD_PARTY_NOTICES.md`. `scripts\security-check.ps1` runs `govulncheck` and
+`npm audit`.
 
-## Frontend tests
+## Testing with a real account
 
-From `web/`:
-
-```sh
-npm run test:unit                         # one Vitest run; no Go server or browser needed
-npm run test:unit:watch                   # rerun affected tests while editing
-npm run test:unit -- src/lib/pendingSends.test.ts   # one file
-npm run build                             # typecheck application and tests, build dashboard
-npm test                                  # Playwright browser suite
-```
-
-Put unit and component tests beside the source as `*.test.ts` or `*.test.tsx`. Vitest
-uses jsdom, explicit imports from `vitest`, React Testing Library, user-event and
-jest-dom matchers. The shared setup unmounts components, restores real timers and blocks
-unexpected fetches, so use synthetic responses or module mocks. Keep complete service
-flows, scrolling, virtualization, positioning and real-browser focus behavior in
-Playwright under `web/tests/`, and backend safety guarantees in Go tests. jsdom does not
-verify visual layout. See [web/README.md](web/README.md) for the source layout.
-
-## Live testing
-
-Anything that touches a real Google account needs owner-controlled pairing, a
-designated test conversation, and every competing bot paused. Say clearly in your PR
-what was and was not verified live; leave unverified acceptance criteria as pending.
+Use your own paired account, one test conversation, and pause any other bot that
+answers there. Say in your PR what you checked on a real phone and what you didn't.
 
 ## Continuous integration
 
-CI runs build, backend (race tests, vet, gofmt, vulnerability audit) and the full browser
-suite. Runs are skipped when a change touches only Markdown, `docs/`, `LICENSE`,
-`.gitignore` or `.gitattributes`. See [CI notes](docs/dev/CI_OPTIMIZATION.md).
+CI builds everything and runs the race-enabled Go tests, `go vet`, `gofmt`, a
+vulnerability audit and the full browser suite. Changes that touch only Markdown or
+`docs/` skip CI.
