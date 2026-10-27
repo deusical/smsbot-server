@@ -2,6 +2,7 @@ package bot
 
 import (
 	"context"
+	"fmt"
 	"github.com/deusical/smsbot-server/internal/archive"
 	"github.com/deusical/smsbot-server/internal/collection"
 	"github.com/deusical/smsbot-server/internal/history"
@@ -253,4 +254,31 @@ func TestKnownRejectionIsFailedAndNeverRetried(t *testing.T) {
 func useTransport(e *Engine, t transport.Transport) {
 	e.Transport = t
 	e.Collection.Transport = t
+}
+
+func TestBuiltinCommandsReplyAndRejectInput(t *testing.T) {
+	e, _ := setup(t)
+	arm(t, e)
+	configureAI(t, e, false, false)
+	for i, tc := range []struct{ text, reply string }{
+		{"!ping", "pong"},
+		{"!help", "Commands: !ping, !help, !status, !new, !ask"},
+		{"!status", "Bot active. Default model: fixture/model"},
+		{"!new", "Conversation memory cleared."},
+		{"!more", "Paired replies are sent in full, subject to the configured character limit."},
+	} {
+		m := incoming()
+		m.ID, m.Text = fmt.Sprintf("builtin-%d", i), tc.text
+		if ok, err := e.Accept(context.Background(), m); err != nil || !ok {
+			t.Fatalf("%s accepted=%t err=%v", tc.text, ok, err)
+		}
+		_, p, err := e.Store.JobPlan(store.Hash(m.ConversationID + "\x00" + m.ID))
+		if err != nil || p.Reply != tc.reply || p.Model != "" {
+			t.Fatalf("%s reply=%q model=%q err=%v", tc.text, p.Reply, p.Model, err)
+		}
+		m.ID, m.Text = fmt.Sprintf("builtin-input-%d", i), tc.text+" extra"
+		if ok, err := e.Accept(context.Background(), m); err != nil || ok {
+			t.Fatalf("%s with input accepted=%t err=%v", tc.text, ok, err)
+		}
+	}
 }
