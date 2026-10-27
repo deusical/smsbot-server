@@ -266,27 +266,16 @@ func (e *Engine) waitForFile(ctx context.Context, conv, wire string) (message, a
 	return "", "", errors.New("image_not_saved")
 }
 
-// providerTakesFiles reports whether the model's provider accepts PDFs, audio
-// and video. OpenRouter does; an arbitrary OpenAI-compatible endpoint has no
-// standard way to.
-func providerTakesFiles(m Model) bool {
-	return m.Provider != compatibleProviderID
-}
-
-func hears(m Model, modality string) bool {
-	return contains(m.InputModalities, modality)
-}
-
-// fileUnreadable explains why a file can't go to the model, or returns "" when
-// it can. A photo over limitMB is shrunk later, except a WebP, which can't be.
-func fileUnreadable(f store.FileRef, m Model, limitMB int) string {
+// fileUnreadable explains why a file can't be sent at all, or returns "" when
+// it can. What the model or provider will accept is not judged here: a file is
+// tried, and the chat is told if the provider refuses it. A photo over limitMB
+// is shrunk later, except a WebP, which can't be.
+func fileUnreadable(f store.FileRef, limitMB int) string {
 	kind, mime := classify(f.MIME, f.Name)
 	tooBig := func(mb int64) bool { return f.Size > mb<<20 }
 	switch kind {
 	case kindImage:
 		switch {
-		case !readsImages(m):
-			return "This model can't read images; pick one that can for this command."
 		case !contains(imageTypes, mime):
 			return "I can only read JPEG, PNG, GIF and WebP photos."
 		case tooBig(maxPhotoMB):
@@ -296,17 +285,11 @@ func fileUnreadable(f store.FileRef, m Model, limitMB int) string {
 		}
 	case kindPDF:
 		switch {
-		case !providerTakesFiles(m):
-			return "This model's provider can't read PDFs; pick an OpenRouter model for this command."
 		case tooBig(maxBinaryMB):
 			return fmt.Sprintf("That PDF is over %d MB, which is the most I can send.", maxBinaryMB)
 		}
 	case kindAudio:
 		switch {
-		case !hears(m, "audio"):
-			return "This model can't listen to audio; pick one that can for this command."
-		case !providerTakesFiles(m):
-			return "This model's provider can't take audio; pick an OpenRouter model for this command."
 		case audioFormat(mime) == "":
 			return "I can only listen to MP3, WAV, AAC, M4A, OGG, FLAC and AIFF audio."
 		case tooBig(maxBinaryMB):
@@ -314,10 +297,6 @@ func fileUnreadable(f store.FileRef, m Model, limitMB int) string {
 		}
 	case kindVideo:
 		switch {
-		case !hears(m, "video"):
-			return "This model can't watch video; pick one that can for this command."
-		case !providerTakesFiles(m):
-			return "This model's provider can't take video; pick an OpenRouter model for this command."
 		case videoType(mime) == "":
 			return "I can only watch MP4, MPEG, MOV and WebM video."
 		case tooBig(maxBinaryMB):
@@ -379,6 +358,18 @@ func transientFileError(err error) bool {
 		return true
 	}
 	return false
+}
+
+// fileRefusalReply is what the chat is told when the provider refuses a request
+// that carried a file, which usually means the model can't read that kind.
+func fileRefusalReply(err error) string {
+	return "The AI provider wouldn't take that file with this model. Try a model that reads that kind of file. (" + safeProviderCode(err) + ")"
+}
+
+// providerRefused reports an HTTP 4xx answer from the provider, as opposed to
+// the provider being down or the connection failing.
+func providerRefused(err error) bool {
+	return err != nil && strings.HasPrefix(err.Error(), "provider_http_4") && err.Error() != "provider_http_429"
 }
 
 var fileCodePattern = regexp.MustCompile(`^[a-z_]{1,40}$`)

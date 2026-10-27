@@ -43,12 +43,9 @@ type Attachment struct {
 	Name string
 	Data []byte
 	Text string
-}
-
-// readsImages reports whether a model may accept image input. A model whose
-// catalog entry lists no input modalities is not known to be text-only.
-func readsImages(m Model) bool {
-	return len(m.InputModalities) == 0 || contains(m.InputModalities, "image")
+	// AsImage sends a PDF as an image part, which some endpoints that have no
+	// file part accept.
+	AsImage bool
 }
 
 // chatMessages builds the Chat Completions messages shared by both providers.
@@ -75,16 +72,18 @@ func chatMessages(plan store.Plan, g Generation, history []store.Turn, file *Att
 	}
 	encoded := base64.StdEncoding.EncodeToString(file.Data)
 	var part map[string]any
-	switch file.Kind {
-	case kindPDF:
+	switch {
+	case file.AsImage:
+		part = map[string]any{"type": "image_url", "image_url": map[string]any{"url": "data:" + file.MIME + ";base64," + encoded}}
+	case file.Kind == kindPDF:
 		name := file.Name
 		if !strings.HasSuffix(strings.ToLower(name), ".pdf") {
 			name += ".pdf"
 		}
 		part = map[string]any{"type": "file", "file": map[string]any{"filename": name, "file_data": "data:application/pdf;base64," + encoded}}
-	case kindAudio:
+	case file.Kind == kindAudio:
 		part = map[string]any{"type": "input_audio", "input_audio": map[string]any{"data": encoded, "format": audioFormat(file.MIME)}}
-	case kindVideo:
+	case file.Kind == kindVideo:
 		part = map[string]any{"type": "video_url", "video_url": map[string]any{"url": "data:" + file.MIME + ";base64," + encoded}}
 	default:
 		part = map[string]any{"type": "image_url", "image_url": map[string]any{"url": "data:" + file.MIME + ";base64," + encoded}}

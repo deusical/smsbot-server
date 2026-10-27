@@ -104,7 +104,6 @@ func TestAskOnAPhotoTheModelCannotRead(t *testing.T) {
 		modalities []string
 		reply      string
 	}{
-		{"text_only_model", "image/png", len(syntheticPNG), []string{"text"}, "This model can't read images; pick one that can for this command."},
 		{"unsupported_format", "image/heic", len(syntheticPNG), nil, "I can only read JPEG, PNG, GIF and WebP photos."},
 		{"too_large", "image/png", maxPhotoMB<<20 + 1, nil, "That photo is too large for the AI; the limit is 25 MB."},
 		{"webp_over_setting", "image/webp", defaultPhotoMB<<20 + 1, nil, "That WebP photo is over 5 MB and can't be shrunk; the limit is set in Settings."},
@@ -227,13 +226,13 @@ func TestCatalogsRecordImageInput(t *testing.T) {
 		}
 		reads := map[string]bool{}
 		for _, m := range models {
-			reads[m.RemoteID] = readsImages(m)
+			reads[m.RemoteID] = contains(m.InputModalities, "image")
 		}
 		if !reads["vendor/vision"] || reads["vendor/text"] {
 			t.Fatalf("%s: image input not recorded: %v", name, reads)
 		}
-		if _, listed := reads["vendor/unknown"]; listed && !reads["vendor/unknown"] {
-			t.Fatalf("%s: a model without modalities was treated as text-only", name)
+		if reads["vendor/unknown"] {
+			t.Fatalf("%s: a model without modalities was recorded as reading images", name)
 		}
 	}
 }

@@ -80,7 +80,8 @@ sends twice.
   the dashboard. `internal/bot/attachments.go` decides how each kind is read: photos are
   shrunk, text and office documents (`documents.go`, standard-library zip and XML with
   a cap on what is unpacked) become prompt text for any model, and PDFs, audio and video
-  go to OpenRouter as they are, gated on the model's catalog modalities.
+  go to the provider as they are. The model's catalog modalities are not used to refuse a
+  file; a provider that rejects it (HTTP 4xx) is reported in the chat.
 - **Archive sync:** each workflow (import, recent check, viewed section) keeps its own
   checkpoint, and `internal/history/plan.go` decides what runs next.
 - **Database access:** queries live in `internal/store` as named operations.

@@ -114,6 +114,13 @@ func (p *OpenAICompatible) Generate(ctx context.Context, key string, plan store.
 		}
 	}
 	b, err := p.request(ctx, "/chat/completions", key, body)
+	if err != nil && image != nil && image.Kind == kindPDF && providerRefused(err) {
+		// Not every endpoint has a file part. Some take a PDF as an image part.
+		asImage := *image
+		asImage.AsImage = true
+		body["messages"] = chatMessages(plan, generation, history, &asImage)
+		b, err = p.request(ctx, "/chat/completions", key, body)
+	}
 	if err != nil {
 		return Result{}, err
 	}

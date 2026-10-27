@@ -5,6 +5,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -185,36 +188,24 @@ func TestEachKindIsSentTheWayProvidersExpectIt(t *testing.T) {
 	}
 }
 
-func TestFilesAreCheckedAgainstModelAndProvider(t *testing.T) {
-	openrouter := Model{Provider: "openrouter", InputModalities: []string{"text", "image", "audio", "video", "file"}}
-	compatible := Model{Provider: compatibleProviderID, InputModalities: []string{"text", "image", "audio", "video"}}
-	textOnly := Model{Provider: "openrouter", InputModalities: []string{"text"}}
+func TestOnlyFilesThatCannotBeSentAreRefused(t *testing.T) {
 	for _, tc := range []struct {
-		name  string
-		file  store.FileRef
-		model Model
-		want  string // a fragment of the explanation, or "" when readable
+		name string
+		file store.FileRef
+		want string // a fragment of the explanation, or "" when it is tried
 	}{
-		{"pdf", store.FileRef{MIME: "application/pdf", Size: 1 << 20}, openrouter, ""},
-		{"pdf to a text-only model", store.FileRef{MIME: "application/pdf"}, textOnly, ""},
-		{"pdf on a compatible endpoint", store.FileRef{MIME: "application/pdf"}, compatible, "can't read PDFs"},
-		{"huge pdf", store.FileRef{MIME: "application/pdf", Size: 21 << 20}, openrouter, "over 20 MB"},
-		{"text on a compatible endpoint", store.FileRef{MIME: "text/plain", Size: 1000}, compatible, ""},
-		{"docx to a text-only model", store.FileRef{Name: "a.docx", Size: 1000}, textOnly, ""},
-		{"huge text", store.FileRef{MIME: "text/plain", Size: 3 << 20}, openrouter, "over 2 MB"},
-		{"audio", store.FileRef{MIME: "audio/mpeg"}, openrouter, ""},
-		{"audio to a deaf model", store.FileRef{MIME: "audio/mpeg"}, textOnly, "can't listen"},
-		{"audio with no known modalities", store.FileRef{MIME: "audio/mpeg"}, Model{Provider: "openrouter"}, "can't listen"},
-		{"amr voice note", store.FileRef{MIME: "audio/amr"}, openrouter, "MP3, WAV"},
-		{"audio on a compatible endpoint", store.FileRef{MIME: "audio/mpeg"}, compatible, "can't take audio"},
-		{"video", store.FileRef{MIME: "video/mp4"}, openrouter, ""},
-		{"video to a blind model", store.FileRef{MIME: "video/mp4"}, textOnly, "can't watch"},
-		{"3gp video", store.FileRef{MIME: "video/3gpp"}, openrouter, "MP4, MPEG"},
-		{"a zip", store.FileRef{MIME: "application/zip"}, openrouter, "can't read that kind"},
-		{"a photo", store.FileRef{MIME: "image/png"}, openrouter, ""},
-		{"a photo to a text-only model", store.FileRef{MIME: "image/png"}, textOnly, "can't read images"},
+		{"pdf", store.FileRef{MIME: "application/pdf", Size: 1 << 20}, ""},
+		{"huge pdf", store.FileRef{MIME: "application/pdf", Size: 21 << 20}, "over 20 MB"},
+		{"docx", store.FileRef{Name: "a.docx", Size: 1000}, ""},
+		{"huge text", store.FileRef{MIME: "text/plain", Size: 3 << 20}, "over 2 MB"},
+		{"audio", store.FileRef{MIME: "audio/mpeg"}, ""},
+		{"amr voice note", store.FileRef{MIME: "audio/amr"}, "MP3, WAV"},
+		{"video", store.FileRef{MIME: "video/mp4"}, ""},
+		{"3gp video", store.FileRef{MIME: "video/3gpp"}, "MP4, MPEG"},
+		{"a zip", store.FileRef{MIME: "application/zip"}, "can't read that kind"},
+		{"a photo", store.FileRef{MIME: "image/png"}, ""},
 	} {
-		got := fileUnreadable(tc.file, tc.model, 5)
+		got := fileUnreadable(tc.file, 5)
 		if (tc.want == "") != (got == "") || !strings.Contains(got, tc.want) {
 			t.Errorf("%s: %q, want %q", tc.name, got, tc.want)
 		}
@@ -301,7 +292,6 @@ func TestAnUnreadableFileIsExplained(t *testing.T) {
 		want       string
 	}{
 		{"app.apk", "application/vnd.android.package-archive", []byte("PK"), []string{"text"}, "can't read that kind"},
-		{"voice.mp3", "audio/mpeg", []byte("ID3"), []string{"text"}, "can't listen"},
 		{"fake.pdf", "application/pdf", []byte("not really a pdf"), []string{"text"}, "(file_unreadable)"},
 		{"blob.txt", "text/plain", []byte("ab\x00cd"), []string{"text"}, "(file_unreadable)"},
 		{"empty.docx", "", zipOf(t, map[string]string{"word/document.xml": `<w:document ` + wordNS + `/>`}), []string{"text"}, "(file_empty)"},
@@ -346,5 +336,96 @@ func TestLongTextIsCutOff(t *testing.T) {
 	got := provider.images[0].Text
 	if n := len([]rune(got)); n < fileTextChars || n > fileTextChars+100 || !strings.HasSuffix(got, "the rest was cut off.]") {
 		t.Fatalf("%d characters, ends %q", n, got[len(got)-40:])
+	}
+}
+
+type refusingProvider struct{ transcriptProvider }
+
+func (p *refusingProvider) Generate(ctx context.Context, key string, plan store.Plan, h []store.Turn, m Model, file *Attachment) (Result, error) {
+	p.images = append(p.images, file)
+	return Result{}, errors.New("provider_http_400")
+}
+
+func TestAFileTheProviderRefusesIsReportedInTheChat(t *testing.T) {
+	e, fixture := setup(t)
+	enableInbox(t, e)
+	arm(t, e)
+	configureAI(t, e, false, false)
+	// Even a model the catalog says reads only text is given the file to try.
+	setModalities(t, e, "text")
+	provider := &refusingProvider{}
+	e.Provider = provider
+	saveFile(t, e, "pdf-wire", "paper.pdf", "application/pdf", []byte("%PDF-1.4 synthetic"))
+	if ok, err := e.Accept(context.Background(), threadPrompt("ask-pdf", "!ask summarize", "pdf-wire")); err != nil || !ok {
+		t.Fatalf("accept %t %v", ok, err)
+	}
+	if err := e.Dispatch(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(provider.images) != 1 || provider.images[0] == nil || stateOf(t, e, store.Hash("demo-chat\x00ask-pdf")) != "submitted" || !sentContains(fixture, "(provider_http_400)") {
+		t.Fatalf("sent %v", fixture.Sent)
+	}
+	// A refusal with nothing attached is still a plain failure.
+	if ok, err := e.Accept(context.Background(), threadPrompt("ask-plain", "!ask hello", "")); err != nil || !ok {
+		t.Fatalf("accept %t %v", ok, err)
+	}
+	if err := e.Dispatch(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if stateOf(t, e, store.Hash("demo-chat\x00ask-plain")) != "failed" {
+		t.Fatal("a refusal with no file was turned into a reply")
+	}
+}
+
+func TestOnlyARefusalIsTakenForAFileProblem(t *testing.T) {
+	for code, want := range map[string]bool{"provider_http_400": true, "provider_http_413": true, "provider_http_429": false, "provider_http_500": false, "provider_connection_failed": false} {
+		if got := providerRefused(errors.New(code)); got != want {
+			t.Errorf("%s: %t", code, got)
+		}
+	}
+}
+
+func TestCompatibleEndpointTriesAPdfAsAFileThenAsAnImage(t *testing.T) {
+	var kinds []string
+	accept := ""
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Messages []struct {
+				Content any `json:"content"`
+			} `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		parts, _ := body.Messages[len(body.Messages)-1].Content.([]any)
+		kind := ""
+		if len(parts) == 2 {
+			kind = parts[1].(map[string]any)["type"].(string)
+		}
+		kinds = append(kinds, kind)
+		if kind != accept {
+			http.Error(w, "unsupported", http.StatusBadRequest)
+			return
+		}
+		w.Write([]byte(`{"model":"m","choices":[{"message":{"content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`))
+	}))
+	defer server.Close()
+	p := NewOpenAICompatible(server.URL, "SYNTHETIC_KEY")
+	generation, _ := json.Marshal(DefaultGeneration())
+	plan := store.Plan{Input: "summarize", Generation: generation}
+	pdf := &Attachment{Kind: kindPDF, MIME: "application/pdf", Name: "a.pdf", Data: []byte("%PDF-1")}
+	model := Model{ID: "compatible:m", Provider: compatibleProviderID, RemoteID: "m"}
+
+	accept = "image_url"
+	if res, err := p.Generate(context.Background(), "SYNTHETIC_KEY", plan, nil, model, pdf); err != nil || res.Text != "ok" || strings.Join(kinds, ",") != "file,image_url" {
+		t.Fatalf("fallback: %v %v %v", res, err, kinds)
+	}
+	kinds, accept = nil, "file"
+	if _, err := p.Generate(context.Background(), "SYNTHETIC_KEY", plan, nil, model, pdf); err != nil || strings.Join(kinds, ",") != "file" {
+		t.Fatalf("file part: %v %v", err, kinds)
+	}
+	kinds, accept = nil, "never"
+	if _, err := p.Generate(context.Background(), "SYNTHETIC_KEY", plan, nil, model, pdf); err == nil || err.Error() != "provider_http_400" || strings.Join(kinds, ",") != "file,image_url" {
+		t.Fatalf("refused both: %v %v", err, kinds)
 	}
 }

@@ -1573,7 +1573,7 @@ components:
         pricing_known: *id001
         input_modalities:
           type: array
-          description: What the provider's catalog says the model reads, such as text, image, audio and video. Absent when the catalog doesn't say; photos quoted with an AI command are then still sent to it, but audio and video are not.
+          description: What the provider's catalog says the model reads, such as text, image, audio and video. Informational only: files are sent to a model whatever it lists, and the chat is told if the provider refuses one.
           items:
             type: string
     CompatibleProviderStatus:
