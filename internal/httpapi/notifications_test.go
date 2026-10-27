@@ -37,7 +37,7 @@ func TestNotificationDevicesHaveTheirOwnSettings(t *testing.T) {
 	if desktop.ID == phone.ID || desktop.Prefs.Messages != "all" || !desktop.Prefs.ShowText {
 		t.Fatalf("defaults: %+v %+v", desktop, phone)
 	}
-	for _, bad := range []string{"http://fcm.googleapis.com/x", "https://127.0.0.1/x", "https://acer.tailddfcef.ts.net:8443/x"} {
+	for _, bad := range []string{"http://fcm.googleapis.com/x", "https://127.0.0.1/x", "https://host.example.ts.net:8443/x"} {
 		if w := ownerRequest(s, "POST", "/api/v1/notifications/devices", `{"endpoint":"`+bad+`","keys":{"p256dh":"k","auth":"a"},"label":""}`); w.Code != 400 {
 			t.Fatal("accepted endpoint", bad, w.Code)
 		}
