@@ -69,8 +69,10 @@ own messages can run commands too.
   sees nothing else from the chat, and only messages the server has saved. Reply with
   just `!ask` to have the AI respond to the message.
 - **Ask about a photo** the same way: reply to it with `!ask what's in this?`, or just
-  `!ask`. The AI gets the photo with your question; the follow-ups get the text of the
-  conversation, not the photo again. This needs a model that reads images, a JPEG, PNG,
+  `!ask`. You can also send the photo with the command (`!ask what's in this?` plus the
+  photo), or reply to an AI answer with just a photo to continue that conversation. The
+  AI gets the photo with your question; the follow-ups get the text of the
+  conversation, not the photo again. Files that aren't photos still don't run commands. This needs a model that reads images, a JPEG, PNG,
   GIF or WebP photo, and a conversation you archive or let the dashboard open. A photo
   over **Shrink photos over** (Settings, Limits; 5 MB by default) is scaled down to fit
   first, except WebP, which is sent only if it's under that size. The bot replies when

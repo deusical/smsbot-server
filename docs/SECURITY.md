@@ -50,7 +50,8 @@ before you pair a real account.
 
 - **AI providers.** Only when an AI command runs: its input, plus any context you turned
   on, goes to the provider you configured. A photo goes too, but only when someone
-  replies to it with an AI command. Provider keys can be set but never read back.
+  replies to it with an AI command, or sends one with a command or as a reply to an
+  AI answer. Provider keys can be set but never read back.
 - **Notifications.** Off until you turn them on for a device. They go through that
   browser's push service (Google's, for Chrome) encrypted so that only the browser can
   read them. Turn off **Show message text** to send only the sender's name.

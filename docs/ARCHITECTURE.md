@@ -58,8 +58,9 @@ sends twice.
 
 - **Exact participants.** Only individual conversations, matched by participant ID.
   Groups are excluded.
-- **Fresh input only.** History, outgoing echoes and messages with files never run
-  commands.
+- **Fresh input only.** History and outgoing echoes never run commands. A message
+  runs one only if it is a command or a reply to an AI answer; a photo it carries
+  goes to the AI, and a message whose files include no photo never runs one.
 - **Record before sending, never retry the uncertain.** An unknown outcome is shown to
   you and is never retried automatically.
 - **Pause wins.** Every start is paused, and pausing cancels queued work.
