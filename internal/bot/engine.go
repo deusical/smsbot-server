@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/deusical/smsbot-server/internal/collection"
 	"github.com/deusical/smsbot-server/internal/media"
 	"github.com/deusical/smsbot-server/internal/store"
@@ -404,7 +405,7 @@ func (e *Engine) planAI(m transport.Incoming, p *store.Plan, cfg Configuration, 
 			// A bare "!ask" on a quoted message responds to that message.
 			p.Input, input = quoted, quoted
 			if photo != nil {
-				if reply := photoUnreadable(*photo, selectedModel); reply != "" {
+				if reply := photoUnreadable(*photo, selectedModel, cfg.Settings.AIPhotoMaxMB); reply != "" {
 					p.Model = ""
 					p.Memory = false
 					p.Reply = reply
@@ -494,11 +495,15 @@ func (e *Engine) quotedInput(m transport.Incoming, input string) (string, *quote
 	return quote + "Question: " + input, photo, true
 }
 
-// imageLimit caps a quoted photo sent to the AI provider. imageTokens is the
-// allowance reserved for it in the context and spending estimates.
+// A quoted photo is read up to maxPhotoMB. One over the owner's setting
+// (defaultPhotoMB unless changed) is scaled to at most imageMaxSide pixels
+// first. imageTokens is the allowance reserved for it in the context and
+// spending estimates.
 const (
-	imageLimit  = 5 << 20
-	imageTokens = 2000
+	defaultPhotoMB = 5
+	maxPhotoMB     = 25
+	imageMaxSide   = 2048
+	imageTokens    = 2000
 )
 
 // imageTypes are the photo formats every Chat Completions provider accepts.
@@ -524,32 +529,48 @@ func (e *Engine) quotedPhoto(conv, message string) (*quotedPhoto, error) {
 }
 
 // photoUnreadable explains why a quoted photo can't go to the model, or
-// returns "" when it can.
-func photoUnreadable(photo quotedPhoto, m Model) string {
+// returns "" when it can. A photo over limitMB is shrunk later, except a WebP,
+// which can't be.
+func photoUnreadable(photo quotedPhoto, m Model, limitMB int) string {
 	switch {
 	case !readsImages(m):
 		return "This model can't read images; pick one that can for this command."
 	case !contains(imageTypes, photo.MIME):
 		return "I can only read JPEG, PNG, GIF and WebP photos."
-	case photo.Size > imageLimit:
-		return "That photo is too large for the AI; the limit is 5 MB."
+	case photo.Size > maxPhotoMB<<20:
+		return fmt.Sprintf("That photo is too large for the AI; the limit is %d MB.", maxPhotoMB)
+	case photo.MIME == "image/webp" && photo.Size > int64(limitMB)<<20:
+		return fmt.Sprintf("That WebP photo is over %d MB and can't be shrunk; the limit is set in Settings.", limitMB)
 	}
 	return ""
 }
 
-// loadImage reads a planned photo for one generation. Caller doesn't hold
-// the control lock: the photo may be downloaded from the phone.
-func (e *Engine) loadImage(ctx context.Context, conv string, ref *store.ImageRef) (*Image, error) {
+// loadImage reads a planned photo for one generation, shrinking it when it is
+// over limitMB. Caller doesn't hold the control lock: the photo may be
+// downloaded from the phone.
+func (e *Engine) loadImage(ctx context.Context, conv string, ref *store.ImageRef, limitMB int) (*Image, error) {
 	if ref == nil {
 		return nil, nil
 	}
-	data, err := e.Collection.QuotedFile(ctx, conv, ref.Message, ref.Attachment, imageLimit)
+	data, err := e.Collection.QuotedFile(ctx, conv, ref.Message, ref.Attachment, maxPhotoMB<<20)
 	if err != nil {
 		return nil, err
 	}
 	mime := http.DetectContentType(data)
 	if !contains(imageTypes, mime) {
 		return nil, errors.New("image_unsupported")
+	}
+	if limit := int64(limitMB) << 20; int64(len(data)) > limit {
+		if mime == "image/webp" {
+			return nil, errors.New("image_too_large")
+		}
+		if data, err = media.Shrink(data, imageMaxSide); err != nil {
+			return nil, err
+		}
+		mime = "image/jpeg"
+		if int64(len(data)) > limit {
+			return nil, errors.New("image_too_large")
+		}
 	}
 	return &Image{MIME: mime, Data: data}, nil
 }
@@ -784,7 +805,7 @@ func (e *Engine) generateReply(ctx context.Context, j store.Job, p *store.Plan, 
 	e.pending[j.ID] = cancel
 	e.mu.Unlock()
 	var result Result
-	image, imageErr := e.loadImage(genctx, j.ConversationID, p.Image)
+	image, imageErr := e.loadImage(genctx, j.ConversationID, p.Image, cfg.Settings.AIPhotoMaxMB)
 	var generr error
 	if imageErr != nil {
 		zero := 0.0

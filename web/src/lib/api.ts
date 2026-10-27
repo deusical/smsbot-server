@@ -160,6 +160,7 @@ export type Settings = {
   memory_hours: number;
   retention_days: number;
   max_chars: number;
+  ai_photo_max_mb?: number;
   favorites: string[];
   model_generation: Record<string, Generation>;
   owner_commands?: boolean;

@@ -475,3 +475,23 @@ for (const viewport of [
     }
   });
 }
+test("the photo size limit shows its default, saves, and refuses values outside 1 to 25", async ({
+  page,
+}) => {
+  const config = await setup(page);
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("button", { name: "Limits & quiet hours" }).click();
+  const limit = page.getByLabel("Shrink photos over");
+  // Saved settings from before this existed have no value; 5 is what applies.
+  await expect(limit).toHaveValue("5");
+  await limit.fill("40");
+  await page.getByRole("button", { name: "Save changes" }).click();
+  await expect(
+    page.getByText("Photo size limit must be between 1 and 25 MB."),
+  ).toBeVisible();
+  expect(config().settings.ai_photo_max_mb).toBeUndefined();
+  await limit.fill("12");
+  await page.getByRole("button", { name: "Save changes" }).click();
+  await expect(page.getByRole("status")).toContainText("Changes saved");
+  expect(config().settings.ai_photo_max_mb).toBe(12);
+});

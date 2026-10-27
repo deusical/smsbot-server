@@ -380,8 +380,10 @@ function NumberField({
   label,
   hint,
   min = 1,
+  max,
   step = 1,
   unit,
+  fallback = 0,
 }: {
   workspace: Workspace;
   field:
@@ -390,20 +392,25 @@ function NumberField({
     | "daily_budget"
     | "memory_hours"
     | "retention_days"
-    | "max_chars";
+    | "max_chars"
+    | "ai_photo_max_mb";
   label: string;
   hint?: string;
   min?: number;
+  max?: number;
   step?: number;
   unit?: string;
+  // Shown when the saved settings don't have the field yet.
+  fallback?: number;
 }) {
   return (
     <Field label={label} hint={hint} unit={unit}>
       <input
         type="number"
         min={min}
+        max={max}
         step={step}
-        value={workspace.config!.settings[field]}
+        value={workspace.config!.settings[field] ?? fallback}
         onChange={(e) => setSetting(workspace, field, Number(e.target.value))}
       />
     </Field>
@@ -443,6 +450,15 @@ function LimitsSection({ workspace }: SectionProps) {
             min={0}
             step={0.01}
             hint="Uses provider-reported costs. 0 turns it off."
+          />
+          <NumberField
+            workspace={workspace}
+            field="ai_photo_max_mb"
+            label="Shrink photos over"
+            unit="MB"
+            max={25}
+            fallback={5}
+            hint="Bigger photos are scaled down before an AI command sees them. Over 25 MB is refused."
           />
         </div>
       </Group>
