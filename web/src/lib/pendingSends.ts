@@ -8,6 +8,8 @@ import { api, type Job } from "./api";
 export type Pending = {
  replyTo?: string;
  quote?: import("./api").Quote;
+  /** For a group: who the owner saw in it. A retry keeps the recipients it was first meant for. */
+  roster?: string;
   // Idempotency key. Retrying a lost response always reuses it.
   key: string;
   text: string;

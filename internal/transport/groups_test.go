@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -19,7 +20,7 @@ func group(id string, people ...string) *gmproto.Conversation {
 func TestAGroupHasAFixedIdentityAndANamedRoster(t *testing.T) {
 	c := group("g1", "b", "a", "c")
 	listed := listConversation(c)
-	if !listed.Group || listed.ParticipantID != "group:g1" || listed.Writable || !listed.Collectable() || listed.Label != "Group conversation" {
+	if !listed.Group || listed.ParticipantID != "group:g1" || !listed.Writable || !listed.Collectable() || listed.Label != "Group conversation" {
 		t.Fatalf("group projection: %+v", listed)
 	}
 	if len(listed.Members) != 3 || listed.Members[0].ID != "a" || listed.Members[0].Name != "Name a" || listed.Roster != GroupRoster([]string{"c", "a", "b"}) {
@@ -57,16 +58,63 @@ func TestGroupsThatCannotBeReadAreNotSelectable(t *testing.T) {
 	}
 }
 
-func TestAGroupIsReadableButNotYetSendable(t *testing.T) {
+func TestAGroupIsSendableButNothingElseActsInIt(t *testing.T) {
 	c := group("g1", "a", "b")
+	// Typing, read marking and reactions stay with individual conversations.
 	if !readable(c) || eligible(c) {
 		t.Fatalf("readable=%t eligible=%t", readable(c), eligible(c))
 	}
-	// A group changing under the bot's feet must not pause everything.
+}
+
+func TestPeopleJoiningAGroupKeepTheSendBaselineAndPauseNothing(t *testing.T) {
+	c := group("g1", "a", "b")
 	g := NewGoogle(nil, "")
 	g.cacheDetail(c)
 	if g.rememberConversationEvent(group("g1", "a", "b", "c")) {
 		t.Fatal("a member joining paused the bot")
+	}
+	// The baseline a send compares against is still the group as verified.
+	if roster(g.conversations["g1"]) != roster(c) {
+		t.Fatal("an event moved the send baseline")
+	}
+	// A verified lookup replaces it.
+	g.cacheDetail(group("g1", "a", "b", "c"))
+	if roster(g.conversations["g1"]) == roster(c) {
+		t.Fatal("a lookup did not refresh the baseline")
+	}
+}
+
+func TestASendToAGroupNeedsTheRosterTheOwnerSaw(t *testing.T) {
+	ctx := context.Background()
+	if _, given := expectedRoster(ctx); given {
+		t.Fatal("a roster out of nowhere")
+	}
+	if got, given := expectedRoster(WithRoster(ctx, "r")); !given || got != "r" {
+		t.Fatalf("roster %q %t", got, given)
+	}
+	// The offline group refuses a send without it, with the wrong one, or after people changed.
+	f := NewFixture()
+	roster := f.demoGroup().Roster
+	for name, tc := range map[string]struct {
+		ctx context.Context
+		ok  bool
+	}{
+		"none":    {ctx, false},
+		"empty":   {WithRoster(ctx, ""), false},
+		"wrong":   {WithRoster(ctx, "group:other"), false},
+		"correct": {WithRoster(ctx, roster), true},
+	} {
+		_, err := f.Send(tc.ctx, "demo-group", "txn-"+name, "hi")
+		if (err == nil) != tc.ok {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	f.SetGroupMembers("demo-member-a", "demo-member-b", "demo-member-c")
+	if _, err := f.Send(WithRoster(ctx, roster), "demo-group", "txn-late", "hi"); err == nil {
+		t.Fatal("a send went to people the owner never saw")
+	}
+	if f.demoGroup().Roster == roster {
+		t.Fatal("the roster did not change when people joined")
 	}
 }
 

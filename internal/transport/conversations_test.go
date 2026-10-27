@@ -26,8 +26,8 @@ func TestListConversationProjectsListRecord(t *testing.T) {
 	}
 	group := individual("group-1")
 	group.IsGroupChat = true
-	if g := listConversation(group); g.Writable || !g.Group || g.Label != "Group conversation" {
-		t.Fatalf("group listed as writable: %+v", g)
+	if g := listConversation(group); !g.Writable || !g.Group || g.Label != "Group conversation" {
+		t.Fatalf("group not listed as sendable: %+v", g)
 	}
 	readOnly := individual("ro-1")
 	readOnly.ReadOnly = true

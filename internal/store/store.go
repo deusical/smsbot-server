@@ -39,7 +39,10 @@ type Plan struct {
 	// File is the attachment the AI command carries or quoted. Only the
 	// reference is planned; the bytes are read just before generation and never
 	// stored in the plan. The JSON name predates files other than photos.
-	File            *FileRef        `json:"image,omitempty"`
+	File *FileRef `json:"image,omitempty"`
+	// Roster is exactly who was in the group when the owner sent to it. The
+	// send goes only if the group still has those people.
+	Roster          string          `json:"roster,omitempty"`
 	ReplyTarget     string          `json:"reply_target,omitempty"`
 	ReplyWireTarget string          `json:"reply_wire_target,omitempty"`
 	Mutation        *MutationIntent `json:"mutation,omitempty"`

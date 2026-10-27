@@ -55,6 +55,7 @@ func New(e *bot.Engine, c *collection.Service, origin string, fixture bool) *Ser
 	s.mux.HandleFunc("GET /api/v1/activity", s.protected(s.activity))
 	s.mux.HandleFunc("POST /api/v1/fixture/incoming", s.protected(s.incoming))
 	s.mux.HandleFunc("POST /api/v1/fixture/typing", s.protected(s.fixtureTyping))
+	s.mux.HandleFunc("POST /api/v1/fixture/group-members", s.protected(s.fixtureGroupMembers))
 	sub, _ := fs.Sub(assets, "assets")
 	s.mux.Handle("/", dashboardHandler(sub))
 	return s
@@ -366,5 +367,23 @@ func (s *Server) fixtureTyping(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	fixture.SetTyping(v.ConversationID, v.Typing)
+	s.json(w, 200, map[string]bool{"ok": true})
+}
+
+// fixtureGroupMembers changes who is in the demo group, to exercise a group
+// changing between viewing it and sending to it.
+func (s *Server) fixtureGroupMembers(w http.ResponseWriter, r *http.Request) {
+	fixture, ok := s.Transport.(*transport.Fixture)
+	if !s.Fixture || !ok {
+		s.bad(w, 404, "not_found")
+		return
+	}
+	var v struct {
+		Members []string `json:"members"`
+	}
+	if !s.decode(w, r, &v) || len(v.Members) == 0 || len(v.Members) > 20 {
+		return
+	}
+	fixture.SetGroupMembers(v.Members...)
 	s.json(w, 200, map[string]bool{"ok": true})
 }

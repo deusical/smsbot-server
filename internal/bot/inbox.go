@@ -61,6 +61,13 @@ func (e *Engine) ComposeInbox(ctx context.Context, conv, text, requestID string)
 }
 
 func (e *Engine) ComposeInboxFiles(ctx context.Context, conv, text, requestID string, uploads []media.Upload, replyTargets ...string) (string, error) {
+	return e.ComposeInboxTo(ctx, conv, "", text, requestID, uploads, replyTargets...)
+}
+
+// ComposeInboxTo is ComposeInboxFiles to a conversation whose people the owner
+// has seen. For a group, roster is exactly who was in it: the message is queued
+// only if the group has those people now, and goes only if it still does.
+func (e *Engine) ComposeInboxTo(ctx context.Context, conv, roster, text, requestID string, uploads []media.Upload, replyTargets ...string) (string, error) {
 	replyTarget := ""
 	if len(replyTargets) > 0 {
 		replyTarget = replyTargets[0]
@@ -112,6 +119,9 @@ func (e *Engine) ComposeInboxFiles(ctx context.Context, conv, text, requestID st
 	if a, archiveErr := e.Store.Archive(conv); archiveErr == nil && a.Conversation.ParticipantID != c.ParticipantID {
 		return "", errors.New("archive_identity_changed")
 	}
+	if c.Group && (roster == "" || roster != c.Roster) {
+		return "", errors.New("group_changed")
+	}
 
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -154,7 +164,7 @@ func (e *Engine) ComposeInboxFiles(ctx context.Context, conv, text, requestID st
 		}
 		wireTarget = v.UpstreamID
 	}
-	_, err = e.Store.Enqueue(id, conv, "manual", store.Plan{ReplyTarget: replyTarget, ReplyWireTarget: wireTarget, Participant: c.ParticipantID, Reply: text, MaxChars: cfg.Settings.MaxChars, Manual: true, InboxOwnerOnly: true, Attachments: files})
+	_, err = e.Store.Enqueue(id, conv, "manual", store.Plan{ReplyTarget: replyTarget, ReplyWireTarget: wireTarget, Participant: c.ParticipantID, Roster: c.Roster, Reply: text, MaxChars: cfg.Settings.MaxChars, Manual: true, InboxOwnerOnly: true, Attachments: files})
 	return id, err
 }
 

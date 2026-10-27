@@ -49,6 +49,8 @@ function dayLabel(iso: string) {
 }
 // Consecutive messages from the same sender read as one run: tighter spacing,
 // with the small inner corner continuing down the run.
+/** The people in a group, by name, for the header. */
+const memberNames = (c: Conversation) => (c.members ?? []).map((p) => p.name || "Someone").join(", ");
 /** Who sent an incoming message, for conversations with several people. */
 const senderName = (c: Conversation, m: Message) =>
   c.group && m.direction === "incoming"
@@ -99,13 +101,20 @@ export function ConversationHistory({ conversation, state, busy, act, inbox, enr
   useLayoutEffect(() => viewport.followSend(pending.length), [pending.length]);
 
   const archiveReadOnly = !conversation.enrolled && base.startsWith("/inbox") && !inbox?.enabled;
+  // For a group: who the owner has seen in it. When the people change, the
+  // change has to be looked at before the next send.
+  const [seenRoster, setSeenRoster] = useState(conversation.roster ?? "");
+  useEffect(() => setSeenRoster(conversation.roster ?? ""), [conversation.id]);
+  const groupChanged = conversation.group && (conversation.roster ?? "") !== seenRoster;
   const blocked = !state
     ? "Connecting…"
     : state.paused
       ? "paused"
       : !state.transport_ready
         ? "Your phone isn’t connected, so messages can’t be sent right now."
-        : !conversation.writable
+        : groupChanged
+          ? "The people in this group changed. Check who is in it before sending."
+          : !conversation.writable
           ? "This conversation can’t receive replies."
           : archiveReadOnly
             ? "Sending is disabled for this conversation."
@@ -117,6 +126,7 @@ export function ConversationHistory({ conversation, state, busy, act, inbox, enr
   const fileLimits = inbox?.attachment_limits ?? defaultAttachmentLimits;
   const composer = useComposer({
     conversation,
+    roster: seenRoster,
     inbox,
     canSend,
     textarea,
@@ -249,7 +259,7 @@ export function ConversationHistory({ conversation, state, busy, act, inbox, enr
             ) : (
               <>
                 {conversation.group
-                  ? `Group, ${conversation.members?.length ?? 0} people`
+                  ? `Group, ${conversation.members?.length ?? 0} people${memberNames(conversation) ? `: ${memberNames(conversation)}` : ""}`
                   : conversation.protocol}
                 {conversation.enrolled ? ", bot replies on" : ""}
               </>
@@ -272,6 +282,14 @@ export function ConversationHistory({ conversation, state, busy, act, inbox, enr
           {enrollControl}
         </div>
       </header>
+      {groupChanged && (
+        <div className="group-changed" role="alert">
+          <span>The people in this group changed. It now has {memberNames(conversation) || "no one else"}.</span>
+          <button type="button" onClick={() => setSeenRoster(conversation.roster ?? "")}>
+            Send to these people
+          </button>
+        </div>
+      )}
       {searchOpen && (
         <label className="search thread-search">
           <Icon name="search" size={16} />
