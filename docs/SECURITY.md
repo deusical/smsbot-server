@@ -39,8 +39,8 @@ before you pair a real account.
 ## What can trigger a reply
 
 - Only individual conversations you enrolled, matched by participant ID, never by name.
-  Groups are saved and shown only when you allow them, and are never used by the bot or
-  sent to yet.
+  Groups are saved and shown only when you allow them, and the bot never acts in one yet.
+  You can send to a group from the dashboard, only to the exact people you were shown.
 - Only fresh text messages. History, old messages, messages with attachments and the
   bot's own replies never run commands.
 - Every start is paused. Pausing cancels queued replies but can't recall one already
@@ -72,8 +72,8 @@ before you pair a real account.
   missing from Google's pages is never treated as deleted.
 - **Cookies can expire.** Google sometimes rejects the saved session. Update the cookies
   as described in [Getting started](GETTING_STARTED.md#when-google-rejects-the-cookies).
-- **One owner.** No multi-user support. The bot and sending use individual chats only;
-  group conversations can be read and archived.
+- **One owner.** No multi-user support. The bot uses individual chats only; group
+  conversations can be read, archived and sent to by you.
 - **Attachments are held in memory** while they're processed, so very large files are
   limited by the host's memory.
 

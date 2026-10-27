@@ -906,6 +906,9 @@ paths:
                   type: string
                   maxLength: 128
                   description: Optional local message ID to quote. Resolved to an encrypted upstream identity on the server; never a raw upstream ID.
+                roster:
+                  type: string
+                  description: Required to send to a group. The conversation's `roster` as the owner saw it. The request is refused with `group_changed` (409) if the group has different people now, and a queued send is cancelled with `identity_changed` if they change before it goes.
   /inbox/conversations/{id}/messages/{message}/actions:
     parameters:
     - {name: id, in: path, required: true, schema: {type: string}}

@@ -168,15 +168,17 @@ func (s *Server) inboxCompose(w http.ResponseWriter, r *http.Request) {
 		Text        string         `json:"text"`
 		RequestID   string         `json:"request_id"`
 		ReplyTo     string         `json:"reply_to"`
+		// Roster is who the owner saw in a group; required to send to one.
+		Roster string `json:"roster"`
 	}
 	if !s.decode(w, r, &v) {
 		return
 	}
-	id, err := s.Engine.ComposeInboxFiles(r.Context(), r.PathValue("id"), v.Text, v.RequestID, v.Attachments, v.ReplyTo)
+	id, err := s.Engine.ComposeInboxTo(r.Context(), r.PathValue("id"), v.Roster, v.Text, v.RequestID, v.Attachments, v.ReplyTo)
 	if err != nil {
 		code := "compose_unavailable"
 		switch err.Error() {
-		case "attachment_size_limit", "too_many_attachments", "attachments_unavailable", "request_id_reused_with_different_message", "bot_unavailable", "inbox_access_disabled", "invalid_message_or_request_id", "request_limit_reached", "archive_identity_changed":
+		case "attachment_size_limit", "too_many_attachments", "attachments_unavailable", "request_id_reused_with_different_message", "bot_unavailable", "inbox_access_disabled", "invalid_message_or_request_id", "request_limit_reached", "archive_identity_changed", "group_changed":
 			code = err.Error()
 		}
 		s.bad(w, 409, code)

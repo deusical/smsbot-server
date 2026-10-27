@@ -59,8 +59,10 @@ sends twice.
 - **Exact participants.** The bot and sending use only individual conversations, matched
   by participant ID. A group can be read and archived, under a fixed identity of its own
   (`group:` and its conversation ID) so membership changes don't interrupt it; its
-  `roster` names exactly who is in it, for the checks that will act for a group.
-  Nothing sends to a group or runs commands in one yet.
+  `roster` names exactly who is in it. The owner can send to a group, but only as the
+  roster they were shown: the request, the queued plan, the pre-send check and the
+  transport's own lookup all compare it, and a change cancels the send. Nothing runs
+  commands in a group yet.
 - **Fresh input only.** History and outgoing echoes never run commands. A message
   runs one only if it is a command or a reply to an AI answer; a file it carries
   goes to the AI. A file alone, not replying to an AI answer, never runs one.

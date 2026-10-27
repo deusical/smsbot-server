@@ -38,7 +38,13 @@ func (g *Google) sendParts(ctx context.Context, id, txn, text string, files []me
 	known := g.conversations[id]
 	settings := g.settings
 	g.mu.Unlock()
-	if !eligible(c) || known == nil || peer(c) != peer(known) || c.GetDefaultOutgoingID() != known.GetDefaultOutgoingID() {
+	// A group is sent to only as the people in it were when last verified: the
+	// baseline is kept, not updated, by a roster change seen in an event.
+	if !readable(c) || known == nil || peer(c) != peer(known) || roster(c) != roster(known) || c.GetDefaultOutgoingID() != known.GetDefaultOutgoingID() {
+		return Receipt{}, ErrNotSubmitted
+	}
+	// Whoever is in a group now must be who the sender was shown.
+	if want, given := expectedRoster(ctx); c.GetIsGroupChat() && (!given || want == "" || roster(c) != want) {
 		return Receipt{}, ErrNotSubmitted
 	}
 	sim := c.GetSimCard().GetSIMData().GetSIMPayload()

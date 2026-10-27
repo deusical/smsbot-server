@@ -34,12 +34,15 @@ const quotePreview = (m: Message) => ({
  */
 export function useComposer({
   conversation,
+  roster,
   inbox,
   canSend,
   readInbox,
   textarea,
 }: {
   conversation: Conversation;
+  /** For a group: the roster the owner has seen and agreed to send to. */
+  roster?: string;
   inbox?: InboxSettings | null;
   canSend: boolean;
   /** Current collection permission, read just before choosing the send route. */
@@ -98,6 +101,7 @@ export function useComposer({
       replyTo: i === 0 ? replyTarget?.id : undefined,
       quote: i === 0 && replyTarget ? quotePreview(replyTarget) : undefined,
       files: part.files,
+      roster: conversation.group ? roster : undefined,
       at: new Date(start + i).toISOString(),
       route: null,
       phase: "posting",
@@ -165,6 +169,7 @@ function refusal(code: string): string {
     attachment_size_limit: "the attachments are too large",
     too_many_attachments: "there are too many attachments",
     request_limit_reached: "the hourly or daily limit was reached",
+    group_changed: "the people in this group changed. Check who is in it, then send again",
   };
   return `Not sent: ${why[code] ?? code.replaceAll("_", " ")}. You can retry once that changes.`;
 }
@@ -192,7 +197,7 @@ async function postPending(
       `${composeBase}/compose`,
       "POST",
       useInbox
-        ? { text: item.text, request_id: key, attachments, ...(item.replyTo ? { reply_to: item.replyTo } : {}) }
+        ? { text: item.text, request_id: key, attachments, ...(item.replyTo ? { reply_to: item.replyTo } : {}), ...(item.roster ? { roster: item.roster } : {}) }
         : { text: item.text },
     );
     patchPending(conversation.id, key, { phase: "queued", job: result?.id, queuedAt: Date.now() });

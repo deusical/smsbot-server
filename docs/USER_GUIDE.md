@@ -39,8 +39,12 @@ use commands.
 - **Group chats.** Turn on **Include group chats** in **Settings > Messages & privacy**
   (or pick a group by name under **Only selected**) and groups are saved like any other
   conversation, with the sender's name above each message. A group is identified by the
-  conversation itself, so people joining or leaving doesn't interrupt saving it. Sending
-  to a group and bot replies in groups aren't available yet.
+  conversation itself, so people joining or leaving doesn't interrupt saving it.
+  You can send to a group like any chat; the header lists who is in it. If the people in
+  the group change while you have it open, a notice shows who it has now and sending
+  waits until you choose **Send to these people**. A message is never sent to people you
+  hadn't seen in the group: if they change before it goes, it is cancelled. Replies to a
+  specific message, reactions and bot replies in groups aren't available yet.
 - **Shortcuts.** **Ctrl/Cmd+K** searches conversations, **Alt+Up/Down** switches
   conversation, and **Ctrl/Cmd+S** saves settings.
 

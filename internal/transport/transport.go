@@ -104,12 +104,39 @@ type Fixture struct {
 	activity uint64
 	typing   map[string]time.Time
 	Read     map[string]int
+	// groupMembers are who is in the demo group; nil means the default pair.
+	groupMembers []string
 }
 
+var defaultGroupMembers = []string{"demo-member-a", "demo-member-b"}
+
+// SetGroupMembers changes who is in the demo group, as people joining or
+// leaving would on a phone.
+func (f *Fixture) SetGroupMembers(ids ...string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.groupMembers = append([]string(nil), ids...)
+}
+
+func (f *Fixture) demoGroup() Conversation {
+	f.mu.Lock()
+	ids := f.groupMembers
+	f.mu.Unlock()
+	if ids == nil {
+		ids = defaultGroupMembers
+	}
+	members := make([]Member, len(ids))
+	names := map[string]string{"demo-member-a": "Alex", "demo-member-b": "Sam", "demo-member-c": "Jo"}
+	for i, id := range ids {
+		members[i] = Member{ID: id, Name: names[id]}
+	}
+	sort.Slice(members, func(i, j int) bool { return members[i].ID < members[j].ID })
+	return Conversation{ID: "demo-group", ParticipantID: "group:demo-group", Label: "Group example", Protocol: "RCS", Group: true, Writable: true, Members: members, Roster: GroupRoster(ids)}
+}
 func NewFixture() *Fixture     { return &Fixture{Online: true, Sent: map[string]string{}} }
 func (f *Fixture) Ready() bool { f.mu.Lock(); defer f.mu.Unlock(); return f.Online }
 func (f *Fixture) Conversations(context.Context) ([]Conversation, error) {
-	return []Conversation{{ID: "demo-chat", ParticipantID: "demo-peer", Label: "Demo conversation", Protocol: "RCS", Writable: true}, {ID: "demo-sms", ParticipantID: "demo-sms-peer", Label: "SMS example", Protocol: "SMS", Writable: true, Pinned: true}, {ID: "demo-group", ParticipantID: "group:demo-group", Label: "Group example", Protocol: "RCS", Group: true, Members: []Member{{ID: "demo-member-a", Name: "Alex"}, {ID: "demo-member-b", Name: "Sam"}}, Roster: GroupRoster([]string{"demo-member-a", "demo-member-b"})}}, nil
+	return []Conversation{{ID: "demo-chat", ParticipantID: "demo-peer", Label: "Demo conversation", Protocol: "RCS", Writable: true}, {ID: "demo-sms", ParticipantID: "demo-sms-peer", Label: "SMS example", Protocol: "SMS", Writable: true, Pinned: true}, f.demoGroup()}, nil
 }
 func (f *Fixture) Send(ctx context.Context, conv, txn, text string) (Receipt, error) {
 	f.mu.Lock()
@@ -125,6 +152,16 @@ func (f *Fixture) Send(ctx context.Context, conv, txn, text string) (Receipt, er
 	}
 	if f.Fail != "" {
 		return Receipt{}, ErrNotSubmitted
+	}
+	if conv == "demo-group" {
+		// As on the phone, a group is sent to only as the people the owner saw.
+		ids := f.groupMembers
+		if ids == nil {
+			ids = defaultGroupMembers
+		}
+		if want, given := expectedRoster(ctx); !given || want == "" || want != GroupRoster(ids) {
+			return Receipt{}, ErrNotSubmitted
+		}
 	}
 	f.Sent[txn] = text
 	return Receipt{State: "submitted", MessageID: txn}, nil
@@ -159,4 +196,17 @@ func (c Conversation) Same(o Conversation) bool { return reflect.DeepEqual(c, o)
 // conversation that can be sent to, or a group.
 func (c Conversation) Collectable() bool {
 	return c.ParticipantID != "" && (c.Writable || c.Group)
+}
+
+type rosterKey struct{}
+
+// WithRoster says exactly who must be in a group for a send to it to go: the
+// Roster the owner saw. A send to a group without it is refused.
+func WithRoster(ctx context.Context, roster string) context.Context {
+	return context.WithValue(ctx, rosterKey{}, roster)
+}
+
+func expectedRoster(ctx context.Context) (string, bool) {
+	r, ok := ctx.Value(rosterKey{}).(string)
+	return r, ok
 }

@@ -76,8 +76,9 @@ func readable(c *gmproto.Conversation) bool {
 	return c != nil && !c.GetReadOnly() && peer(c) != "" && c.GetDefaultOutgoingID() != ""
 }
 
-// eligible is a conversation the bot and the dashboard may send to. Groups are
-// readable but not yet sendable.
+// eligible is an individual conversation the bot may act in, and the one
+// typing, read marking and reactions apply to. A group can be sent to once its
+// roster is checked (see sendParts), but nothing else here acts for it.
 func eligible(c *gmproto.Conversation) bool {
 	return readable(c) && !c.GetIsGroupChat()
 }
@@ -131,7 +132,7 @@ func listConversation(c *gmproto.Conversation) Conversation {
 		Label:         label,
 		Protocol:      c.GetType().String(),
 		Group:         c.GetIsGroupChat(),
-		Writable:      eligible(c),
+		Writable:      readable(c),
 	}, c)
 }
 
@@ -178,7 +179,7 @@ func (g *Google) CachedConversation(id string) (Conversation, bool) {
 
 func detailConversation(id string, c *gmproto.Conversation) Conversation {
 	label := conversationLabel(c)
-	return withListState(Conversation{ID: id, ParticipantID: listedIdentity(c), Members: groupMembers(c), Roster: roster(c), Label: label, Protocol: c.GetType().String(), Group: c.GetIsGroupChat(), Writable: eligible(c)}, c)
+	return withListState(Conversation{ID: id, ParticipantID: listedIdentity(c), Members: groupMembers(c), Roster: roster(c), Label: label, Protocol: c.GetType().String(), Group: c.GetIsGroupChat(), Writable: readable(c)}, c)
 }
 
 func (g *Google) Conversations(ctx context.Context) ([]Conversation, error) {

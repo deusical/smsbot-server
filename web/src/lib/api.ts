@@ -25,6 +25,8 @@ export type Conversation = {
   group: boolean;
   /** The people in a group, other than you. */
   members?: { id: string; name?: string }[];
+  /** Names exactly who is in a group; sending to it checks this. */
+  roster?: string;
   writable: boolean;
   enrolled: boolean;
   last_message_at?: string;

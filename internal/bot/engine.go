@@ -156,17 +156,24 @@ func (e *Engine) Approve(id string) error {
 	}
 	return err
 }
-func (e *Engine) validConversation(ctx context.Context, conv, peer string) (bool, error) {
-	if _, ok := e.Transport.(transport.ConversationLookup); ok {
+
+// validConversation reports whether conv is still the conversation with peer
+// that can be sent to. A group is valid only where groups are allowed and has
+// exactly the people in roster; the bot's own commands pass allowGroup false.
+func (e *Engine) validConversation(ctx context.Context, conv, peer, roster string, allowGroup bool) (bool, error) {
+	ok := func(c transport.Conversation) bool {
+		return c.ParticipantID == peer && c.Writable && c.Roster == roster && (allowGroup || !c.Group)
+	}
+	if _, can := e.Transport.(transport.ConversationLookup); can {
 		c, err := e.lookupConversation(ctx, conv)
-		return err == nil && c.ParticipantID == peer && !c.Group && c.Writable, err
+		return err == nil && ok(c), err
 	}
 	list, err := e.Transport.Conversations(ctx)
 	if err != nil {
 		return false, err
 	}
 	for _, c := range list {
-		if c.ID == conv && c.ParticipantID == peer && !c.Group && c.Writable {
+		if c.ID == conv && ok(c) {
 			return true, nil
 		}
 	}
@@ -268,7 +275,7 @@ func (e *Engine) admit(ctx context.Context, m transport.Incoming, parent *store.
 	if err != nil || !inbox.AutomaticReplies {
 		return cfg, "", false, err
 	}
-	valid, err := e.validConversation(ctx, m.ConversationID, peer)
+	valid, err := e.validConversation(ctx, m.ConversationID, peer, "", false)
 	if err != nil || !valid || quiet(cfg.Settings, e.now()) {
 		return cfg, "", false, err
 	}
@@ -668,7 +675,7 @@ func (e *Engine) check(ctx context.Context, j store.Job, p store.Plan) (Configur
 			return cfg, "", err
 		}
 	}
-	valid, err := e.validConversation(ctx, j.ConversationID, p.Participant)
+	valid, err := e.validConversation(ctx, j.ConversationID, p.Participant, p.Roster, p.InboxOwnerOnly)
 	if err != nil {
 		return cfg, "", err
 	}
@@ -992,7 +999,7 @@ func (e *Engine) submit(ctx context.Context, j store.Job, p store.Plan, cfg Conf
 		return err
 	}
 	// The send is serialized with pause/enrollment; once invoked its outcome may be uncertain.
-	sendctx, cancelSend := context.WithTimeout(ctx, 30*time.Second)
+	sendctx, cancelSend := context.WithTimeout(transport.WithRoster(ctx, p.Roster), 30*time.Second)
 	var receipt transport.Receipt
 	var senderr error
 	if p.Thread != nil && p.Thread.ReplyWire != "" {
