@@ -50,7 +50,7 @@ func TestAnEnrolledMemberRunsCommandsInAGroupAndTheGroupSeesTheAnswer(t *testing
 	}
 }
 
-func TestOnlyEnrolledMembersAndNeverTheOwnerRunCommandsInAGroup(t *testing.T) {
+func TestOnlyEnrolledMembersAndNotTheOwnerWithoutTheSettingRunCommandsInAGroup(t *testing.T) {
 	e, f, _ := botGroup(t)
 	ctx := context.Background()
 	for name, m := range map[string]transport.Incoming{
@@ -70,6 +70,57 @@ func TestOnlyEnrolledMembersAndNeverTheOwnerRunCommandsInAGroup(t *testing.T) {
 	}
 	if err := e.Dispatch(ctx); err != nil || len(f.Sent) != 0 {
 		t.Fatalf("something was sent: %v %v", f.Sent, err)
+	}
+}
+
+func ownerGroupCommand(id, text string) transport.Incoming {
+	m := groupCommand(id, "me", text)
+	m.Outgoing, m.TransactionID, m.Status = true, "phone-"+id, "submitted"
+	return m
+}
+
+func TestTheOwnerRunsCommandsInAnyGroupTheyCanSendTo(t *testing.T) {
+	e, f, roster := botGroup(t)
+	ctx := context.Background()
+	allowOwnerCommands(t, e, false)
+	if ok, err := e.Accept(ctx, ownerGroupCommand("group-own-1", "!ping")); err != nil || ok {
+		t.Fatalf("answered with commands from the phone off: %t %v", ok, err)
+	}
+	allowOwnerCommands(t, e, true)
+	if ok, err := e.Accept(ctx, ownerGroupCommand("group-own-2", "!ping")); err != nil || !ok {
+		t.Fatalf("not answering the owner: %t %v", ok, err)
+	}
+	id := store.Hash("demo-group\x00group-own-2")
+	if _, p, _ := e.Store.JobPlan(id); p.Participant != store.OwnerMember || p.Roster != roster || !p.Owner || p.MemberOf() != store.OwnerMember {
+		t.Fatalf("plan: %+v", p)
+	}
+	if err := e.Dispatch(ctx); err != nil || len(f.Sent) != 1 || stateOf(t, e, id) != "submitted" {
+		t.Fatalf("sent %v %v", f.Sent, err)
+	}
+	// The bot's own answer comes back as an outgoing message and runs nothing.
+	if ok, err := e.Accept(ctx, ownerGroupCommand("group-own-echo", "pong")); err != nil || ok {
+		t.Fatalf("ran its own answer: %t %v", ok, err)
+	}
+	// Someone joins before the answer goes out: it is cancelled, not sent to them.
+	if ok, err := e.Accept(ctx, ownerGroupCommand("group-own-3", "!ping")); err != nil || !ok {
+		t.Fatalf("not queued: %t %v", ok, err)
+	}
+	f.SetGroupMembers("demo-member-a", "demo-member-b", "demo-member-c")
+	if err := e.Dispatch(ctx); err != nil || len(f.Sent) != 1 {
+		t.Fatalf("sent to the new people: %v %v", f.Sent, err)
+	}
+	if j, _, _ := e.Store.JobPlan(store.Hash("demo-group\x00group-own-3")); j.State != "cancelled" || j.Code != "identity_changed" {
+		t.Fatalf("job: %s %s", j.State, j.Code)
+	}
+	// A new command is answered to the group as it is now.
+	if ok, err := e.Accept(ctx, ownerGroupCommand("group-own-4", "!ping")); err != nil || !ok {
+		t.Fatalf("not answering after the change: %t %v", ok, err)
+	}
+	// Not a group, not a conversation, or not writable: nothing.
+	other := ownerGroupCommand("group-own-5", "!ping")
+	other.ConversationID = "no-such-chat"
+	if ok, err := e.Accept(ctx, other); ok {
+		t.Fatalf("answered an unknown conversation: %t %v", ok, err)
 	}
 }
 

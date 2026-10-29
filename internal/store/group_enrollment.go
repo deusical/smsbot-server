@@ -43,6 +43,11 @@ func (s *Store) GroupBot(conv string) (members []string, roster string, err erro
 	return members, roster, rows.Err()
 }
 
+// OwnerMember stands for the owner in a group's bot jobs. The owner is never in
+// a group's member list and needs no enrolling: their own commands from the
+// phone run in any group they can send to, under the people in it at the time.
+const OwnerMember = "owner:self"
+
 // ErrGroupChanged reports that the group's people differ from the roster
 // already approved, so the new roster has to be approved first.
 type groupError string

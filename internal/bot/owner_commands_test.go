@@ -62,10 +62,9 @@ func TestOwnerCommandRepliesInEnrolledConversation(t *testing.T) {
 	}
 }
 
-func TestOwnerCommandsStayInsideEnrolledConversations(t *testing.T) {
+func TestOwnerCommandsStayInsideEnrolledConversationsAndGroups(t *testing.T) {
 	for name, edit := range map[string]func(*transport.Incoming){
 		"unenrolled": func(m *transport.Incoming) { m.ConversationID = "demo-sms" },
-		"group":      func(m *transport.Incoming) { m.ConversationID = "demo-group" },
 		"stale":      func(m *transport.Incoming) { m.At = time.Now().Add(-3 * time.Minute) },
 		"historical": func(m *transport.Incoming) { m.Historical = true },
 	} {
