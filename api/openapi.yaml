@@ -1051,7 +1051,7 @@ paths:
       schema:
         type: string
     get:
-      description: Owner-only file content with current inbox consent and exact conversation identity checks. Remote media is fetched on demand. Never cached by the app. Range requests are supported. Active documents are always downloads.
+      description: Owner-only file content with current inbox consent and exact conversation identity checks. Remote media is fetched on demand. Never cached by the app. Range requests are supported. Active documents are always downloads. An inline request for a HEIC or HEIF photo is answered with a JPEG of it (415 image_unreadable if it can't be read); without `inline` the original is downloaded.
       security:
       - browserSession: []
       parameters:
