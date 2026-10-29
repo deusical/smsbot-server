@@ -23,6 +23,9 @@ const imageTypes = new Set([
   "image/gif",
   "image/webp",
   "image/bmp",
+  // Shown as a JPEG the server makes of it.
+  "image/heic",
+  "image/heif",
 ]);
 const videoTypes = new Set(["video/mp4", "video/webm", "video/ogg"]);
 const audioTypes = new Set([

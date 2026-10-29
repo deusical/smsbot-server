@@ -232,6 +232,13 @@ func (s *Server) inboxAttachment(w http.ResponseWriter, r *http.Request) {
 		info = infoValue
 		content = bytes.NewReader(data)
 	}
+	if r.URL.Query().Get("inline") == "1" && isHEICType(info.MIME) {
+		var err error
+		if content, info, err = previewHEIC(content, info); err != nil {
+			s.bad(w, 415, "image_unreadable")
+			return
+		}
+	}
 	disposition := "attachment"
 	if r.URL.Query().Get("inline") == "1" {
 		switch info.MIME {
