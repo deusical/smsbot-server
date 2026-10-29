@@ -255,3 +255,33 @@ func TestAnAIThreadInAGroupBelongsToWhoStartedIt(t *testing.T) {
 		t.Fatalf("another member read someone else's thread: %+v", other)
 	}
 }
+
+func TestTheOwnerContinuesAnAIThreadInAGroupByReplyingToTheAnswer(t *testing.T) {
+	e, _, _ := botGroup(t)
+	configureAI(t, e, true, false)
+	cfg, err := e.Configuration()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Settings.OwnerCommands = true
+	if err = e.SetConfiguration(cfg); err != nil {
+		t.Fatal(err)
+	}
+	provider := &transcriptProvider{}
+	e.Provider = provider
+	root := ownerGroupCommand("g-own-root", "!ask First question")
+	root.Interaction = &transport.MessageInteraction{UpstreamID: root.ID, Protocol: "RCS", Sender: "me"}
+	if p := threadAccept(t, e, root); p.Participant != store.OwnerMember || p.Thread == nil {
+		t.Fatalf("root plan: %+v", p)
+	}
+	if err = e.Dispatch(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	threadEcho(t, e, root, "g-own-answer")
+	follow := ownerGroupCommand("g-own-follow", "Make it shorter")
+	follow.Interaction = &transport.MessageInteraction{UpstreamID: follow.ID, Protocol: "RCS", ReplyTo: "g-own-answer", Sender: "me"}
+	p := threadAccept(t, e, follow)
+	if len(p.Context) != 2 || p.Context[0].Content != "First question" || p.Participant != store.OwnerMember {
+		t.Fatalf("the reply did not continue the thread: %+v", p)
+	}
+}
