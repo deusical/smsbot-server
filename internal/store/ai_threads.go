@@ -247,7 +247,9 @@ func (s *Store) RecordAIAnswer(conv, txn, wire string, now time.Time, hours, day
 		return err
 	}
 	// An individual conversation's thread belongs to the person enrolled in it.
-	// A group's belongs to whoever asked, who must still be enrolled there.
+	// A group's belongs to whoever asked. Every answer is linked, whoever asked and
+	// whether or not they are still enrolled: a reply is checked against the
+	// enrollment when it arrives, not here.
 	err = tx.QueryRow("SELECT participant FROM enrollment WHERE conversation=?", conv).Scan(&peer)
 	if errors.Is(err, sql.ErrNoRows) {
 		var data aiThread
@@ -256,10 +258,6 @@ func (s *Store) RecordAIAnswer(conv, txn, wire string, now time.Time, hours, day
 			return nil
 		}
 		if err = s.openAI("ai-thread:"+thread, raw, &data); err != nil {
-			return err
-		}
-		var enrolled int
-		if err = tx.QueryRow("SELECT count(*) FROM group_enrollment WHERE conversation=? AND participant=?", conv, data.Participant).Scan(&enrolled); err != nil || enrolled == 0 {
 			return err
 		}
 		peer = data.Participant
