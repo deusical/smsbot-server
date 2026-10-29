@@ -983,6 +983,7 @@ paths:
                 operation: {type: string, enum: [add, switch, remove]}
                 version: {type: string, description: Version returned by message actions}
                 request_id: {type: string, minLength: 16, maxLength: 100}
+                roster: {type: string, description: Required in a group. The conversation's `roster` as the owner saw it. A reaction in a group is seen by everyone in it, so it is refused with `group_changed` if the group has different people now, and cancelled if they change before it goes.}
       responses:
         '202':
           description: Original or newly queued action ID; not delivery confirmation
@@ -994,7 +995,7 @@ paths:
                   id: {type: string}
                   queued: {type: boolean}
         '401': {description: Owner authentication required}
-        '409': {description: 'invalid_reaction, reaction_conflict, reaction_unavailable or request_id_reused_with_different_action'}
+        '409': {description: 'invalid_reaction, reaction_conflict, reaction_unavailable, group_changed or request_id_reused_with_different_action'}
   /inbox/conversations/{id}/actions/{action}:
     parameters:
     - {name: id, in: path, required: true, schema: {type: string}}

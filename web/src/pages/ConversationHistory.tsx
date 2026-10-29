@@ -393,8 +393,9 @@ export function ConversationHistory({ conversation, state, busy, act, inbox, enr
                         message={m}
                         conversation={conversation.id}
                         label={conversation.label}
-                        writable={inboxAllows(inbox, conversation) && !archiveReadOnly}
-                        eligibilityKey={JSON.stringify([conversation.participant_id, conversation.protocol, state?.paused, state?.transport_ready, inbox?.revision])}
+                        writable={inboxAllows(inbox, conversation) && !archiveReadOnly && !groupChanged}
+                        roster={conversation.group ? seenRoster : undefined}
+                        eligibilityKey={JSON.stringify([conversation.participant_id, conversation.protocol, state?.paused, state?.transport_ready, inbox?.revision, conversation.group ? seenRoster : ""])}
                         onReply={(target) => {
                           composer.setReplyTarget(target);
                           textarea.current?.focus();
