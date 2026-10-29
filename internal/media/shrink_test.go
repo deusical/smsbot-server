@@ -8,6 +8,7 @@ import (
 	"image/jpeg"
 	"image/png"
 	"math/rand"
+	"os"
 	"testing"
 )
 
@@ -118,6 +119,37 @@ func TestShrinkCompositesTransparencyOnWhiteAndRefusesNonImages(t *testing.T) {
 	for _, data := range [][]byte{nil, []byte("not an image"), []byte("RIFF\x00\x00\x00\x00WEBPVP8 ")} {
 		if _, err := Shrink(data, 2048); err == nil {
 			t.Fatalf("accepted %q", data)
+		}
+	}
+}
+
+func TestAHEICPhotoIsReadAndReturnedAsAJPEG(t *testing.T) {
+	data, err := os.ReadFile("testdata/sample.heic")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !IsHEIC(data) || IsHEIC(encodeJPEG(t, image.NewRGBA(image.Rect(0, 0, 4, 4)))) || IsHEIC([]byte("short")) {
+		t.Fatal("HEIC not told apart from other files")
+	}
+	out, err := Shrink(data, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, h := decodeSize(t, out)
+	if w < 1 || h < 1 {
+		t.Fatalf("empty result %dx%d", w, h)
+	}
+	small, err := Shrink(data, 16)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sw, sh := decodeSize(t, small); sw > 16 || sh > 16 {
+		t.Fatalf("not reduced: %dx%d", sw, sh)
+	}
+	// Cut short or not a photo at all, it is refused, not read as garbage.
+	for name, bad := range map[string][]byte{"truncated": data[:len(data)/3], "header only": data[:16], "not a photo": append(append([]byte{}, data[:12]...), make([]byte, 64)...)} {
+		if _, err := Shrink(bad, 2048); err == nil || err.Error() != "image_unreadable" {
+			t.Errorf("%s: %v", name, err)
 		}
 	}
 }

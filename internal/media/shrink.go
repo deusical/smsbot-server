@@ -9,23 +9,49 @@ import (
 	_ "image/gif"
 	"image/jpeg"
 	_ "image/png"
+	"io"
+
+	"github.com/gen2brain/heic"
 )
+
+func init() {
+	// Decode with the built-in WebAssembly decoder only, never a libheif that
+	// happens to be installed on the host, so a photo reads the same everywhere.
+	heic.ForceWasmMode = true
+}
+
+// IsHEIC reports whether data is a HEIC or HEIF photo, as iPhones send them.
+func IsHEIC(data []byte) bool {
+	if len(data) < 12 || string(data[4:8]) != "ftyp" {
+		return false
+	}
+	switch string(data[8:12]) {
+	case "heic", "heix", "hevc", "hevx", "heim", "heis", "mif1", "msf1":
+		return true
+	}
+	return false
+}
 
 // maxPixels bounds the memory a decode may take: the header is read first, so a
 // small file claiming enormous dimensions is refused before it is decoded.
 const maxPixels = 64 << 20
 
-// Shrink decodes a JPEG, PNG or GIF photo and returns it as a JPEG whose sides
+// Shrink decodes a JPEG, PNG, GIF or HEIC photo and returns it as a JPEG whose sides
 // are at most maxSide pixels (it only ever reduces by whole-number factors, so
 // the result may be smaller). Transparency becomes white and a JPEG's rotation
 // tag is applied, since the re-encoded file no longer carries it. A GIF keeps
 // only its first frame.
 func Shrink(data []byte, maxSide int) ([]byte, error) {
-	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
+	decodeConfig, decode := image.DecodeConfig, image.Decode
+	if IsHEIC(data) {
+		decodeConfig = func(r io.Reader) (image.Config, string, error) { c, err := heic.DecodeConfig(r); return c, "heic", err }
+		decode = func(r io.Reader) (image.Image, string, error) { i, err := heic.Decode(r); return i, "heic", err }
+	}
+	cfg, _, err := decodeConfig(bytes.NewReader(data))
 	if err != nil || cfg.Width <= 0 || cfg.Height <= 0 || int64(cfg.Width)*int64(cfg.Height) > maxPixels || maxSide < 1 {
 		return nil, errors.New("image_unreadable")
 	}
-	src, _, err := image.Decode(bytes.NewReader(data))
+	src, _, err := decode(bytes.NewReader(data))
 	if err != nil {
 		return nil, errors.New("image_unreadable")
 	}

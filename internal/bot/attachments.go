@@ -51,6 +51,12 @@ const (
 // imageTypes are the photo formats every Chat Completions provider accepts.
 var imageTypes = []string{"image/jpeg", "image/png", "image/gif", "image/webp"}
 
+// heicTypes are the iPhone photo formats, which no provider takes: they are
+// converted to JPEG here.
+var heicTypes = []string{"image/heic", "image/heif"}
+
+const photoFormats = "JPEG, PNG, GIF, WebP and HEIC"
+
 const (
 	docxType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 	xlsxType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -68,7 +74,7 @@ var extTypes = map[string]string{
 	".mp3": "audio/mpeg", ".wav": "audio/wav", ".m4a": "audio/mp4", ".aac": "audio/aac",
 	".ogg": "audio/ogg", ".oga": "audio/ogg", ".flac": "audio/flac", ".aif": "audio/aiff", ".aiff": "audio/aiff",
 	".mp4": "video/mp4", ".mov": "video/quicktime", ".webm": "video/webm", ".mpeg": "video/mpeg", ".mpg": "video/mpeg",
-	".svg": "image/svg+xml",
+	".svg": "image/svg+xml", ".heic": "image/heic", ".heif": "image/heif",
 }
 
 var textExtensions = strings.Fields(`.txt .md .markdown .csv .tsv .json .xml .yaml .yml .toml .ini .cfg .conf .log
@@ -269,15 +275,15 @@ func (e *Engine) waitForFile(ctx context.Context, conv, wire string) (message, a
 // fileUnreadable explains why a file can't be sent at all, or returns "" when
 // it can. What the model or provider will accept is not judged here: a file is
 // tried, and the chat is told if the provider refuses it. A photo over limitMB
-// is shrunk later, except a WebP, which can't be.
+// is shrunk later, except a WebP, which can't be. A HEIC photo is converted.
 func fileUnreadable(f store.FileRef, limitMB int) string {
 	kind, mime := classify(f.MIME, f.Name)
 	tooBig := func(mb int64) bool { return f.Size > mb<<20 }
 	switch kind {
 	case kindImage:
 		switch {
-		case !contains(imageTypes, mime):
-			return "I can only read JPEG, PNG, GIF and WebP photos."
+		case !contains(imageTypes, mime) && !contains(heicTypes, mime):
+			return "I can only read " + photoFormats + " photos."
 		case tooBig(maxPhotoMB):
 			return fmt.Sprintf("That photo is too large for the AI; the limit is %d MB.", maxPhotoMB)
 		case mime == "image/webp" && tooBig(int64(limitMB)):
@@ -388,7 +394,7 @@ func fileFailureReply(err error) string {
 	case "attachment_size_limit", "image_too_large", "file_too_large":
 		why = "That file is too large for the AI. For a photo, you can raise Shrink photos over in Settings."
 	case "image_unsupported":
-		why = "I can only read JPEG, PNG, GIF and WebP photos."
+		why = "I can only read " + photoFormats + " photos."
 	case "image_unreadable":
 		why = "I couldn't read that photo."
 	case "file_unreadable":
@@ -451,10 +457,14 @@ func (e *Engine) loadFile(ctx context.Context, conv string, ref *store.FileRef, 
 	switch kind {
 	case kindImage:
 		mime = http.DetectContentType(data)
-		if !contains(imageTypes, mime) {
+		if media.IsHEIC(data) {
+			mime = "image/heic"
+		}
+		if !contains(imageTypes, mime) && mime != "image/heic" {
 			return nil, errors.New("image_unsupported")
 		}
-		if limit := int64(limitMB) << 20; int64(len(data)) > limit {
+		// A HEIC photo is always converted: no provider reads it as it is.
+		if limit := int64(limitMB) << 20; mime == "image/heic" || int64(len(data)) > limit {
 			if mime == "image/webp" {
 				return nil, errors.New("image_too_large")
 			}
