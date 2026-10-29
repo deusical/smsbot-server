@@ -40,7 +40,8 @@ before you pair a real account.
 
 - Only individual conversations you enrolled, matched by participant ID, never by name.
   Groups are saved and shown only when you allow them. You can send to a group from the
-  dashboard, only to the exact people you were shown. The bot acts in a group only for
+  dashboard, only to the exact people you were shown. Your own commands from the phone work in any group you can send to,
+  answering the people in it at that moment. For anyone else, the bot acts in a group only for
   members you enrolled, and only while the group has exactly the people you approved.
 - Only fresh text messages. History, old messages, messages with attachments and the
   bot's own replies never run commands.
@@ -74,7 +75,7 @@ before you pair a real account.
 - **Cookies can expire.** Google sometimes rejects the saved session. Update the cookies
   as described in [Getting started](GETTING_STARTED.md#when-google-rejects-the-cookies).
 - **One owner.** No multi-user support. In a group, the bot answers only members you
-  enrolled; it never answers your own messages there.
+  enrolled, plus your own commands from the phone when **Commands from your phone** is on.
 - **Attachments are held in memory** while they're processed, so very large files are
   limited by the host's memory.
 

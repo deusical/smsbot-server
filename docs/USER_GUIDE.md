@@ -46,8 +46,10 @@ use commands.
   hadn't seen in the group: if they change before it goes, it is cancelled. Replies to a
   specific message and reactions in groups aren't available yet.
 - **The bot in a group.** Open the group and use the **Bot** button in its header to
-  switch on the people who may run commands there. Only they can; other members,
-  and you, are ignored. Answers go to the whole group, and each person has their own AI
+  switch on the other people who may run commands there. Only they can; other members
+  are ignored. You can always use the bot in any group you can send to, with no
+  switch, as long as **Commands from your phone** is on: it answers to the people in
+  the group at that moment. Answers go to the whole group, and each person has their own AI
   conversation and memory. The choice is approved for the group as it is: if anyone joins
   or leaves, the bot goes quiet in that group (the button says **Bot paused: people
   changed**) until you look at who is there and choose **Approve these people**. People

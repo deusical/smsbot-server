@@ -151,6 +151,10 @@ func (e *Engine) ApproveGroup(conv, roster string, present []string) error {
 // roster the plan was made for.
 func (e *Engine) enrolledFor(conv string, p store.Plan) bool {
 	if p.GroupBotJob() {
+		if p.Owner && p.Participant == store.OwnerMember {
+			// The group's people are checked against the plan's roster separately.
+			return true
+		}
 		roster, ok := e.Store.GroupMemberEnrollment(conv, p.Participant)
 		return ok && roster == p.Roster
 	}
@@ -158,11 +162,14 @@ func (e *Engine) enrolledFor(conv string, p store.Plan) bool {
 }
 
 // validGroupMember reports whether member is in the group conv, which can be
-// sent to and has exactly the people in roster.
+// sent to and has exactly the people in roster. The owner is not in the list.
 func (e *Engine) validGroupMember(ctx context.Context, conv, member, roster string) (bool, error) {
 	c, err := e.lookupConversation(ctx, conv)
 	if err != nil || !c.Group || !c.Writable || roster == "" || c.Roster != roster {
 		return false, err
+	}
+	if member == store.OwnerMember {
+		return true, nil
 	}
 	for _, m := range c.Members {
 		if m.ID == member {
@@ -318,7 +325,7 @@ func (e *Engine) admit(ctx context.Context, m transport.Incoming, parent *store.
 	}
 	peer = m.ParticipantID
 	if m.Outgoing {
-		if peer, ok, err = e.ownerPeer(m, cfg, parent); err != nil || !ok {
+		if peer, roster, ok, err = e.ownerPeer(ctx, m, cfg, parent); err != nil || !ok {
 			return cfg, "", "", false, err
 		}
 	} else if approved, enrolled := e.Store.GroupMemberEnrollment(m.ConversationID, peer); enrolled {
@@ -346,17 +353,21 @@ func (e *Engine) admit(ctx context.Context, m transport.Incoming, parent *store.
 
 // ownerPeer handles a command the owner sent. The owner's own messages carry
 // the owner's participant, so the enrolled peer stands in for every identity
-// check that follows. The bot's own replies never run commands.
-func (e *Engine) ownerPeer(m transport.Incoming, cfg Configuration, parent *store.AIParent) (string, bool, error) {
+// check that follows. In a group the owner needs no enrolling: the reply is
+// planned for the people in the group right now, and is cancelled if they change
+// before it goes. The bot's own replies never run commands.
+func (e *Engine) ownerPeer(ctx context.Context, m transport.Incoming, cfg Configuration, parent *store.AIParent) (peer, roster string, ok bool, err error) {
 	if !cfg.Settings.OwnerCommands {
-		return "", false, nil
+		return "", "", false, nil
 	}
-	peer, ok := e.Store.EnrolledParticipant(m.ConversationID)
-	if !ok {
-		return "", false, nil
+	if peer, ok = e.Store.EnrolledParticipant(m.ConversationID); !ok {
+		c, err := e.lookupConversation(ctx, m.ConversationID)
+		if err != nil || !c.Group || !c.Writable || c.Roster == "" {
+			return "", "", false, err
+		}
+		peer, roster = store.OwnerMember, c.Roster
 	}
 	var ours bool
-	var err error
 	if parent != nil {
 		// A native reply is an explicit follow-up. A genuine owner message can
 		// repeat an earlier answer, so only exact provenance identifies an echo.
@@ -365,9 +376,9 @@ func (e *Engine) ownerPeer(m transport.Incoming, cfg Configuration, parent *stor
 		ours, err = e.Store.SentByBot(m.ConversationID, m.TransactionID, m.Text)
 	}
 	if err != nil || ours {
-		return "", false, err
+		return "", "", false, err
 	}
-	return peer, true, nil
+	return peer, roster, true, nil
 }
 
 // parseCommand splits "!name input". Text without "!" is a plain follow-up

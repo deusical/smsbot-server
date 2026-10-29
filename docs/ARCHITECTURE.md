@@ -66,7 +66,10 @@ sends twice.
   in a group only for members the owner enrolled (`group_enrollment`: conversation,
   member, approved roster) and only while the live roster is the approved one; a change
   silences it until the owner approves again, and each member has their own AI memory
-  and threads. The owner's own messages never run commands in a group.
+  and threads. The owner's own commands from the phone
+  (when allowed) run in any group they can send to, as the fixed participant
+  `owner:self`: the reply is planned for the roster at that moment and cancelled if it
+  changes before it goes.
 - **Fresh input only.** History and outgoing echoes never run commands. A message
   runs one only if it is a command or a reply to an AI answer; a file it carries
   goes to the AI. A file alone, not replying to an AI answer, never runs one.
