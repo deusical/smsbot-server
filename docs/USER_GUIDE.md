@@ -94,9 +94,11 @@ own messages can run commands too.
   AI gets the file with your question; the follow-ups get the text of the conversation,
   not the file again. One file is read per message. It needs a conversation you archive
   or let the dashboard open. What it can read:
-  - **Photos** (JPEG, PNG, GIF, WebP). A photo over
+  - **Photos** (JPEG, PNG, GIF, WebP, and iPhone HEIC). A photo over
     **Shrink photos over** (Settings, Limits; 5 MB by default) is scaled down to fit
-    first, except WebP, which is sent only if it's under that size. Over 25 MB is refused.
+    first, except WebP, which is sent only if it's under that size. A HEIC photo is
+    always converted to JPEG here, since no AI provider reads HEIC, and only the first
+    image of a HEIC file is read. Over 25 MB is refused.
   - **PDFs** (up to 20 MB). OpenRouter extracts the text for any model, and reads scans
     too, which can add a small charge. A custom OpenAI-compatible endpoint is sent the
     PDF as a file, and again as an image part if it refuses that.

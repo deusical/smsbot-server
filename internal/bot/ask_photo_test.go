@@ -11,6 +11,7 @@ import (
 	"math/rand"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -104,7 +105,7 @@ func TestAskOnAPhotoTheModelCannotRead(t *testing.T) {
 		modalities []string
 		reply      string
 	}{
-		{"unsupported_format", "image/heic", len(syntheticPNG), nil, "I can only read JPEG, PNG, GIF and WebP photos."},
+		{"unsupported_format", "image/tiff", len(syntheticPNG), nil, "I can only read JPEG, PNG, GIF, WebP and HEIC photos."},
 		{"too_large", "image/png", maxPhotoMB<<20 + 1, nil, "That photo is too large for the AI; the limit is 25 MB."},
 		{"webp_over_setting", "image/webp", defaultPhotoMB<<20 + 1, nil, "That WebP photo is over 5 MB and can't be shrunk; the limit is set in Settings."},
 	} {
@@ -356,5 +357,39 @@ func TestPhotoSizeSettingIsValidated(t *testing.T) {
 		if (c.Validate() == nil) != ok {
 			t.Errorf("limit %d: valid=%t want %t", limit, !ok, ok)
 		}
+	}
+}
+
+func TestAskAboutAnIPhonePhotoSendsItAsAJPEG(t *testing.T) {
+	heic, err := os.ReadFile("../media/testdata/sample.heic")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ name, mime, file string }{{"typed", "image/heic", "synthetic-photo"}, {"heif", "image/heif", "synthetic-photo"}, {"untyped", "application/octet-stream", "IMG_0001.HEIC"}} {
+		t.Run(tc.name, func(t *testing.T) {
+			e, _ := setup(t)
+			enableInbox(t, e)
+			arm(t, e)
+			configureAI(t, e, true, false)
+			setModalities(t, e, "text", "image")
+			provider := &transcriptProvider{}
+			e.Provider = provider
+			files := []media.File{{Info: media.Info{ID: "part-0", Name: tc.file, MIME: tc.mime, Size: int64(len(heic))}, Data: heic, SizeUnverified: true}}
+			if err := e.Store.SaveObservedFiles("demo-chat", "photo-wire", "", "incoming", "", "phone", "", time.Now(), files); err != nil {
+				t.Fatal(err)
+			}
+			if p := threadAccept(t, e, threadPrompt("ask-heic", "!ask what's in this?", "photo-wire")); p.File == nil || p.Reply != "" {
+				t.Fatalf("not planned: file=%v reply=%q", p.File, p.Reply)
+			}
+			if err := e.Dispatch(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if stateOf(t, e, store.Hash("demo-chat\x00ask-heic")) != "submitted" {
+				t.Fatal("the photo question was not answered")
+			}
+			if len(provider.images) != 1 || provider.images[0] == nil || provider.images[0].MIME != "image/jpeg" || !bytes.HasPrefix(provider.images[0].Data, []byte{0xff, 0xd8}) {
+				t.Fatalf("the provider did not get a JPEG: %+v", provider.images)
+			}
+		})
 	}
 }

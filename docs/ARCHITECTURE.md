@@ -90,7 +90,8 @@ sends twice.
   prompt, each hop resolved within the same conversation. A file it quotes or carries is
   planned by reference and read only while generating, through the same access checks as
   the dashboard. `internal/bot/attachments.go` decides how each kind is read: photos are
-  shrunk, text and office documents (`documents.go`, standard-library zip and XML with
+  shrunk, and HEIC is converted to JPEG (`internal/media/shrink.go`, with the pure-Go
+  WebAssembly decoder in `github.com/gen2brain/heic`, never a host libheif), text and office documents (`documents.go`, standard-library zip and XML with
   a cap on what is unpacked) become prompt text for any model, and PDFs, audio and video
   go to the provider as they are. The model's catalog modalities are not used to refuse a
   file; a provider that rejects it (HTTP 4xx) is reported in the chat.
