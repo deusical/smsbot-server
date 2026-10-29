@@ -66,6 +66,18 @@ export function GroupBot({
               onChange={(on) => void toggle(m.id, on)}
             />
           ))}
+          <Switch
+            label="One AI conversation for everyone"
+            checked={c.shared_ai ?? false}
+            disabled={busy}
+            onChange={(on) => void act(() => api(`/enrollment/${encodeURIComponent(c.id)}/shared`, "PUT", { shared: on }))}
+          />
+          <small>
+            {c.shared_ai
+              ? "Everyone here, you included, continues the same AI conversation, and each question is marked with who asked it. Only you can clear it with !new."
+              : "Each person has their own AI conversation."}{" "}
+            Changing this starts the group's AI conversations over.
+          </small>
           <small>Only the people you switch on can run commands here. Answers go to the whole group.</small>
         </div>
       )}

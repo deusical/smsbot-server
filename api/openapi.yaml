@@ -135,6 +135,26 @@ paths:
           description: Approved
         '409':
           description: group_changed; the group has different people than the roster given
+  /enrollment/{id}/shared:
+    parameters:
+    - {name: id, in: path, required: true, schema: {type: string}}
+    put:
+      description: Switch a group between one AI conversation for each person who uses the bot (the default) and one shared by everyone in it, the owner included. Either way the group's AI conversations are forgotten and work waiting for the group is cancelled. In a shared conversation each question is marked with who asked it, and only the owner can clear it with `!new`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [shared]
+              properties:
+                shared: {type: boolean}
+      responses:
+        '200':
+          description: Saved
+        '400':
+          description: Not a group the owner can send to
   /enrollment/{id}:
     parameters:
     - name: id
@@ -1425,6 +1445,9 @@ components:
         bot_roster:
           type: string
           description: For a group, the roster approved for the enrolled members. The bot is silent unless it equals `roster`.
+        shared_ai:
+          type: boolean
+          description: For a group, true when everyone who uses the bot there shares one AI conversation.
         last_message_at:
           type: string
           format: date-time

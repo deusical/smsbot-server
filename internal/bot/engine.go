@@ -104,7 +104,7 @@ func (e *Engine) Unenroll(id string) error {
 	if err := e.Store.Unenroll(id); err != nil {
 		return err
 	}
-	return e.Store.ClearMemory(id)
+	return e.Store.ClearMemory(id, "")
 }
 func (e *Engine) Enroll(id, peer string) error {
 	e.mu.Lock()
@@ -135,6 +135,18 @@ func (e *Engine) UnenrollMember(conv, member string) error {
 	defer e.mu.Unlock()
 	e.cancelRunning(conv)
 	return e.Store.UnenrollMember(conv, member)
+}
+
+// SetGroupShared switches whether a group has one AI conversation for everyone.
+func (e *Engine) SetGroupShared(conv string, shared bool) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.cancelRunning(conv)
+	if err := e.Store.SetGroupShared(conv, shared); err != nil {
+		return err
+	}
+	e.cancelClearedThreadRuns()
+	return nil
 }
 
 // ApproveGroup accepts a group's new people for the members still in it, after
@@ -219,6 +231,16 @@ func (e *Engine) Approve(id string) error {
 	return err
 }
 
+// validPeer reports whether the person a request is for is still in the place it
+// was made: a member of the group under the roster, or the one person in an
+// individual conversation. ownerSend is the owner's own dashboard send.
+func (e *Engine) validPeer(ctx context.Context, conv, peer, roster string, ownerSend bool) (bool, error) {
+	if roster != "" && !ownerSend {
+		return e.validGroupMember(ctx, conv, peer, roster)
+	}
+	return e.validConversation(ctx, conv, peer, roster, ownerSend)
+}
+
 // validConversation reports whether conv is still the conversation with peer
 // that can be sent to. A group is valid only where groups are allowed and has
 // exactly the people in roster; the bot's own commands pass allowGroup false.
@@ -278,7 +300,8 @@ func (e *Engine) Accept(ctx context.Context, m transport.Incoming) (bool, error)
 		return false, err
 	}
 	p := store.Plan{Participant: peer, Roster: roster, MaxChars: cfg.Settings.MaxChars, Owner: m.Outgoing}
-	reply, builtin, ok, err := e.builtinReply(m.ConversationID, name, input, cfg)
+	p.Shared = p.GroupBotJob() && e.Store.GroupShared(m.ConversationID)
+	reply, builtin, ok, err := e.builtinReply(m.ConversationID, p, name, input, cfg)
 	if err != nil || !ok {
 		return false, err
 	}
@@ -339,12 +362,7 @@ func (e *Engine) admit(ctx context.Context, m transport.Incoming, parent *store.
 	if err != nil || !inbox.AutomaticReplies {
 		return cfg, "", "", false, err
 	}
-	var valid bool
-	if roster != "" {
-		valid, err = e.validGroupMember(ctx, m.ConversationID, peer, roster)
-	} else {
-		valid, err = e.validConversation(ctx, m.ConversationID, peer, "", false)
-	}
+	valid, err := e.validPeer(ctx, m.ConversationID, peer, roster, false)
 	if err != nil || !valid || quiet(cfg.Settings, e.now()) {
 		return cfg, "", "", false, err
 	}
@@ -396,7 +414,7 @@ func parseCommand(text string) (name, input string, ok bool) {
 
 // builtinReply answers the built-in commands, which take no input. builtin is
 // false for any other name; ok is false when a built-in was misused.
-func (e *Engine) builtinReply(conv, name, input string, cfg Configuration) (reply string, builtin, ok bool, err error) {
+func (e *Engine) builtinReply(conv string, p store.Plan, name, input string, cfg Configuration) (reply string, builtin, ok bool, err error) {
 	switch name {
 	case "ping", "help", "status", "new", "more":
 	default:
@@ -419,7 +437,10 @@ func (e *Engine) builtinReply(conv, name, input string, cfg Configuration) (repl
 	case "status":
 		return "Bot active. Default model: " + cfg.Settings.DefaultModel, true, true, nil
 	case "new":
-		if err = e.Store.ClearMemory(conv); err != nil {
+		if p.Shared && !p.Owner {
+			return "Only the owner can clear this group's shared conversation.", true, true, nil
+		}
+		if err = e.Store.ClearMemory(conv, p.MemberOf()); err != nil {
 			return "", true, false, err
 		}
 		e.cancelClearedThreadRuns()
@@ -445,7 +466,7 @@ func (e *Engine) planCommand(ctx context.Context, m transport.Incoming, p *store
 	p.Memory = cmd.Memory
 	if p.Memory {
 		var err error
-		if p.MemoryEpoch, err = e.Store.MemoryEpoch(m.ConversationID); err != nil {
+		if p.MemoryEpoch, err = e.Store.MemoryEpoch(m.ConversationID, p.MemberOf()); err != nil {
 			return "", false, err
 		}
 		if !threaded {
@@ -462,7 +483,21 @@ func (e *Engine) planCommand(ctx context.Context, m transport.Incoming, p *store
 		return name, true, nil
 	}
 	ok, err := e.planAI(ctx, m, p, cfg, cmd, model, instructions, g, input, threaded, parent)
+	if ok && err == nil && p.Shared && p.Model != "" {
+		// One conversation among several people: each question says who asked it.
+		p.Input = askerLabel(*p) + ": " + p.Input
+		p.Instructions += "\nThis conversation is shared by a group chat. Each question starts with who asked it; answer the one who asked."
+	}
 	return name, ok, err
+}
+
+// askerLabel names who is asking in a group's shared AI conversation. It is a
+// stable label, never a real name, so contacts' names are not sent to the provider.
+func askerLabel(p store.Plan) string {
+	if p.Owner {
+		return "Owner"
+	}
+	return "Member " + store.Hash(p.Participant)[:4]
 }
 
 // planAI selects the model for an AI command and, for !ask, its thread.
@@ -500,7 +535,7 @@ func (e *Engine) planAI(ctx context.Context, m transport.Incoming, p *store.Plan
 		p.File = own
 	}
 	if parent == nil {
-		if quoted, file, ok := e.quotedInput(m, input, own != nil); ok {
+		if quoted, file, ok := e.quotedInput(m, input, p.Roster != "", own != nil); ok {
 			// A bare "!ask" on a quoted message responds to that message.
 			p.Input, input = quoted, quoted
 			if file != nil && own == nil {
@@ -557,11 +592,11 @@ const quoteLimit = 2000
 // it the question is sent alone. With no question, the AI is asked to respond
 // to the last message. A photo on the message replied to directly is returned
 // as a reference; its bytes are read only to generate.
-func (e *Engine) quotedInput(m transport.Incoming, input string, hasOwn bool) (string, *store.FileRef, bool) {
+func (e *Engine) quotedInput(m transport.Incoming, input string, group, hasOwn bool) (string, *store.FileRef, bool) {
 	if m.Interaction == nil || m.Interaction.ReplyTo == "" || !strings.Contains(strings.ToUpper(m.Interaction.Protocol), "RCS") {
 		return input, nil, false
 	}
-	chain, more, file, err := e.replyChain(m, hasOwn)
+	chain, more, file, err := e.replyChain(m, group, hasOwn)
 	if err != nil || len(chain) == 0 {
 		return input, nil, false
 	}
@@ -626,7 +661,7 @@ type chainMessage struct {
 // replyChain returns the messages m replies to, oldest first. more reports that
 // older messages exist but were left out. photo is the image on the message m
 // replies to directly, if any. The bot's own answers are part of the chain.
-func (e *Engine) replyChain(m transport.Incoming, hasOwn bool) (chain []chainMessage, more bool, file *store.FileRef, err error) {
+func (e *Engine) replyChain(m transport.Incoming, group, hasOwn bool) (chain []chainMessage, more bool, file *store.FileRef, err error) {
 	seen := map[string]bool{}
 	budget := chainChars
 	wire := m.Interaction.ReplyTo
@@ -668,21 +703,7 @@ func (e *Engine) replyChain(m transport.Incoming, hasOwn bool) (chain []chainMes
 		if err != nil {
 			return nil, false, nil, err
 		}
-		author := "the other person in this chat"
-		inGroup := m.Interaction.Sender != ""
-		if inGroup {
-			author = "another member of the group chat"
-		}
-		switch {
-		case inGroup && origin != "bot" && direction == "outgoing":
-			author = "the owner of the phone"
-		case inGroup && origin != "bot" && sender != "" && sender == m.ParticipantID:
-			author = "the person asking"
-		case origin == "bot":
-			author = "the AI assistant in this chat"
-		case !inGroup && (direction == "outgoing") == m.Outgoing:
-			author = "the person asking"
-		}
+		author := chainAuthor(m, group, origin, direction, sender)
 		noun := ""
 		if attached != nil {
 			noun = fileNoun(attached)
@@ -698,6 +719,26 @@ func (e *Engine) replyChain(m transport.Incoming, hasOwn bool) (chain []chainMes
 		chain[i], chain[j] = chain[j], chain[i]
 	}
 	return chain, more, file, nil
+}
+
+// chainAuthor says who wrote a quoted message, as the AI is told: the same few
+// roles in an individual chat and in a group, whoever is asking.
+func chainAuthor(m transport.Incoming, group bool, origin, direction, sender string) string {
+	switch {
+	case origin == "bot":
+		return "the AI assistant in this chat"
+	case !group && (direction == "outgoing") == m.Outgoing:
+		return "the person asking"
+	case !group:
+		return "the other person in this chat"
+	case direction == "outgoing" && m.Outgoing:
+		return "the person asking"
+	case direction == "outgoing":
+		return "the owner of the phone"
+	case !m.Outgoing && sender != "" && sender == m.ParticipantID:
+		return "the person asking"
+	}
+	return "another member of the group chat"
 }
 
 // memoryScope names where an AI command's conversation memory is kept. In a
@@ -761,18 +802,13 @@ func (e *Engine) check(ctx context.Context, j store.Job, p store.Plan) (Configur
 		if !enabled || cmd.Type != "ai" || !cmd.Memory {
 			return cfg, "thread_unavailable", nil
 		}
-		if err := e.Store.CheckAIThread(j.ConversationID, p.Participant, j.Command, p, e.now(), cfg.Settings.MemoryHours, cfg.Settings.RetentionDays); errors.Is(err, store.ErrAIThreadUnavailable) {
+		if err := e.Store.CheckAIThread(j.ConversationID, p.ThreadOwner(), j.Command, p, e.now(), cfg.Settings.MemoryHours, cfg.Settings.RetentionDays); errors.Is(err, store.ErrAIThreadUnavailable) {
 			return cfg, "thread_unavailable", nil
 		} else if err != nil {
 			return cfg, "", err
 		}
 	}
-	var valid bool
-	if p.GroupBotJob() {
-		valid, err = e.validGroupMember(ctx, j.ConversationID, p.Participant, p.Roster)
-	} else {
-		valid, err = e.validConversation(ctx, j.ConversationID, p.Participant, p.Roster, p.InboxOwnerOnly)
-	}
+	valid, err := e.validPeer(ctx, j.ConversationID, p.Participant, p.Roster, p.InboxOwnerOnly)
 	if err != nil {
 		return cfg, "", err
 	}
@@ -872,7 +908,7 @@ func (e *Engine) nextReady(ctx context.Context) (j store.Job, p store.Plan, cfg 
 func (e *Engine) memoryContext(j store.Job, cfg Configuration, p *store.Plan) ([]store.Turn, error) {
 	history := p.Context
 	if p.Memory {
-		epoch, epochErr := e.Store.MemoryEpoch(j.ConversationID)
+		epoch, epochErr := e.Store.MemoryEpoch(j.ConversationID, p.MemberOf())
 		cmd, _, _, _, enabled := resolve(cfg, strings.TrimPrefix(j.Command, "!"))
 		if epochErr != nil {
 			return nil, epochErr
@@ -1160,7 +1196,7 @@ func (e *Engine) submit(ctx context.Context, j store.Job, p store.Plan, cfg Conf
 	}
 	if p.Model != "" && p.Memory && p.Thread == nil {
 		cmd, _, _, _, ok := resolve(cfg, strings.TrimPrefix(j.Command, "!"))
-		epoch, epochErr := e.Store.MemoryEpoch(j.ConversationID)
+		epoch, epochErr := e.Store.MemoryEpoch(j.ConversationID, p.MemberOf())
 		if epochErr != nil {
 			return epochErr
 		}

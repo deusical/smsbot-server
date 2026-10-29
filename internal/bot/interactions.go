@@ -168,8 +168,8 @@ func (e *Engine) QueueReactionIn(ctx context.Context, conv, roster, target, emoj
 	if !a.React {
 		return "", errors.New("reaction_unavailable")
 	}
-	if c.Group && (roster == "" || roster != c.Roster) {
-		return "", errors.New("group_changed")
+	if err = groupAsShown(c, roster); err != nil {
+		return "", err
 	}
 	if version == "" || a.Version != version {
 		return "", errors.New("reaction_conflict")
@@ -249,4 +249,13 @@ func (e *Engine) dispatchReaction(ctx context.Context, j store.Job, p store.Plan
 func (e *Engine) ReactionStatus(conv, id string) (map[string]string, error) {
 	state, code, err := e.Store.ReactionJobStatus(conv, id)
 	return map[string]string{"id": id, "state": state, "code": code}, err
+}
+
+// groupAsShown reports group_changed unless c is an individual conversation or a
+// group whose people are exactly the roster the owner was shown.
+func groupAsShown(c transport.Conversation, roster string) error {
+	if c.Group && (roster == "" || roster != c.Roster) {
+		return errors.New("group_changed")
+	}
+	return nil
 }

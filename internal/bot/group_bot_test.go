@@ -3,6 +3,7 @@ package bot
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/deusical/smsbot-server/internal/store"
@@ -283,5 +284,134 @@ func TestTheOwnerContinuesAnAIThreadInAGroupByReplyingToTheAnswer(t *testing.T) 
 	p := threadAccept(t, e, follow)
 	if len(p.Context) != 2 || p.Context[0].Content != "First question" || p.Participant != store.OwnerMember {
 		t.Fatalf("the reply did not continue the thread: %+v", p)
+	}
+}
+
+func TestOneMembersNewLeavesTheOthersConversationsAlone(t *testing.T) {
+	e, _, roster := botGroup(t)
+	configureAI(t, e, true, false)
+	e.Provider = &transcriptProvider{}
+	if err := e.EnrollMember("demo-group", "demo-member-b", roster); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	for _, who := range []string{"a", "b"} {
+		root := groupPrompt("g-root-"+who, "demo-member-"+who, "!ask Question "+who, "")
+		threadAccept(t, e, root)
+		if err := e.Dispatch(ctx); err != nil {
+			t.Fatal(err)
+		}
+		threadEcho(t, e, root, "g-answer-"+who)
+	}
+	if ok, err := e.Accept(ctx, groupPrompt("g-new-a", "demo-member-a", "!new", "")); err != nil || !ok {
+		t.Fatalf("!new %t %v", ok, err)
+	}
+	// The one who cleared has nothing to continue; the other carries on with their context.
+	if ok, err := e.Accept(ctx, groupPrompt("g-again-a", "demo-member-a", "More", "g-answer-a")); err != nil || ok {
+		t.Fatalf("a's conversation survived !new: %t %v", ok, err)
+	}
+	if b := threadAccept(t, e, groupPrompt("g-again-b", "demo-member-b", "More", "g-answer-b")); len(b.Context) != 2 || b.Context[0].Content != "Question b" {
+		t.Fatalf("b's conversation was cleared by a: %+v", b)
+	}
+}
+
+func TestAskerIsNamedTheSameWayWhoeverIsAsking(t *testing.T) {
+	mine := transport.Incoming{Outgoing: true}
+	theirs := transport.Incoming{ParticipantID: "p1"}
+	for _, c := range []struct {
+		name                      string
+		m                         transport.Incoming
+		group                     bool
+		origin, direction, sender string
+		want                      string
+	}{
+		{"owner quoting themselves in a chat", mine, false, "", "outgoing", "", "the person asking"},
+		{"owner quoting the friend", mine, false, "", "incoming", "", "the other person in this chat"},
+		{"friend quoting themselves", theirs, false, "", "incoming", "", "the person asking"},
+		{"friend quoting the owner", theirs, false, "", "outgoing", "", "the other person in this chat"},
+		{"owner quoting themselves in a group", mine, true, "", "outgoing", "", "the person asking"},
+		{"member quoting the owner in a group", theirs, true, "", "outgoing", "", "the owner of the phone"},
+		{"member quoting themselves in a group", theirs, true, "", "incoming", "p1", "the person asking"},
+		{"member quoting another in a group", theirs, true, "", "incoming", "p2", "another member of the group chat"},
+		{"owner quoting a member in a group", mine, true, "", "incoming", "p1", "another member of the group chat"},
+		{"anyone quoting the bot", theirs, true, "bot", "outgoing", "", "the AI assistant in this chat"},
+	} {
+		if got := chainAuthor(c.m, c.group, c.origin, c.direction, c.sender); got != c.want {
+			t.Errorf("%s: %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+func TestAGroupCanShareOneAIConversationAndOnlyTheOwnerClearsIt(t *testing.T) {
+	e, _, roster := botGroup(t)
+	configureAI(t, e, true, false)
+	cfg, err := e.Configuration()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Settings.OwnerCommands = true
+	if err = e.SetConfiguration(cfg); err != nil {
+		t.Fatal(err)
+	}
+	e.Provider = &transcriptProvider{}
+	ctx := context.Background()
+	if err = e.EnrollMember("demo-group", "demo-member-b", roster); err != nil {
+		t.Fatal(err)
+	}
+	if err = e.SetGroupShared("demo-group", true); err != nil {
+		t.Fatal(err)
+	}
+	root := groupPrompt("s-root", "demo-member-a", "!ask First question", "")
+	if p := threadAccept(t, e, root); !p.Shared || p.Thread == nil || !strings.HasPrefix(p.Input, "Member ") || !strings.HasSuffix(p.Input, ": First question") {
+		t.Fatalf("the question is not marked with who asked: %+v", p)
+	}
+	if err = e.Dispatch(ctx); err != nil {
+		t.Fatal(err)
+	}
+	threadEcho(t, e, root, "s-answer")
+	// Another member carries on the same conversation, with its context.
+	b := threadAccept(t, e, groupPrompt("s-b", "demo-member-b", "And then?", "s-answer"))
+	if len(b.Context) != 2 || !strings.HasSuffix(b.Context[0].Content, ": First question") || b.Input == "" || b.Reply != "" {
+		t.Fatalf("another member could not continue the shared conversation: %+v", b)
+	}
+	// So can the owner, labelled as the owner.
+	follow := ownerGroupCommand("s-owner", "Thanks")
+	follow.Interaction = &transport.MessageInteraction{UpstreamID: follow.ID, Protocol: "RCS", ReplyTo: "s-answer", Sender: "me"}
+	if o := threadAccept(t, e, follow); len(o.Context) != 2 || o.Input != "Owner: Thanks" {
+		t.Fatalf("the owner could not continue it: %+v", o)
+	}
+	// Only the owner clears it.
+	if ok, err := e.Accept(ctx, groupPrompt("s-new-b", "demo-member-b", "!new", "")); err != nil || !ok {
+		t.Fatalf("!new %t %v", ok, err)
+	}
+	_, p, _ := e.Store.JobPlan(store.Hash("demo-group\x00s-new-b"))
+	if !strings.Contains(p.Reply, "Only the owner") {
+		t.Fatalf("a member cleared the shared conversation: %q", p.Reply)
+	}
+	if again := threadAccept(t, e, groupPrompt("s-b2", "demo-member-a", "Still there?", "s-answer")); len(again.Context) != 2 {
+		t.Fatalf("a member's !new cleared it: %+v", again)
+	}
+	own := ownerGroupCommand("s-new-owner", "!new")
+	threadAccept(t, e, own)
+	if ok, err := e.Accept(ctx, groupPrompt("s-gone", "demo-member-a", "Hello?", "s-answer")); err != nil || ok {
+		t.Fatalf("the owner's !new did not clear it: %t %v", ok, err)
+	}
+}
+
+func TestSwitchingAGroupToSharedStartsItsConversationsOver(t *testing.T) {
+	e, _, _ := botGroup(t)
+	configureAI(t, e, true, false)
+	e.Provider = &transcriptProvider{}
+	root := groupPrompt("w-root", "demo-member-a", "!ask First question", "")
+	threadAccept(t, e, root)
+	if err := e.Dispatch(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	threadEcho(t, e, root, "w-answer")
+	if err := e.SetGroupShared("demo-group", true); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := e.Accept(context.Background(), groupPrompt("w-after", "demo-member-a", "Continue", "w-answer")); err != nil || ok {
+		t.Fatalf("an old conversation survived the switch: %t %v", ok, err)
 	}
 }

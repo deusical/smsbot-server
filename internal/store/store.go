@@ -42,7 +42,10 @@ type Plan struct {
 	File *FileRef `json:"image,omitempty"`
 	// Roster is exactly who was in the group when the owner sent to it. The
 	// send goes only if the group still has those people.
-	Roster          string          `json:"roster,omitempty"`
+	Roster string `json:"roster,omitempty"`
+	// Shared is set when the group the bot answers in has one AI conversation
+	// for everyone, so memory and threads belong to the group, not the asker.
+	Shared          bool            `json:"shared,omitempty"`
 	ReplyTarget     string          `json:"reply_target,omitempty"`
 	ReplyWireTarget string          `json:"reply_wire_target,omitempty"`
 	Mutation        *MutationIntent `json:"mutation,omitempty"`

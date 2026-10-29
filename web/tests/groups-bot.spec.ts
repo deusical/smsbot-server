@@ -75,3 +75,29 @@ test("the owner chooses who may use the bot in a group, and a change of people s
     await putInbox(page, original);
   }
 });
+
+test("the owner can make a group share one AI conversation", async ({ page }) => {
+  await login(page);
+  const original = await getInbox(page);
+  await putInbox(page, { ...original, enabled: true, scope: "all", groups: true, load_older: false });
+  const shared = async () =>
+    ((await (await page.request.get("/api/v1/inbox/conversations")).json()).conversations as { id: string; shared_ai?: boolean }[]).find((c) => c.id === "demo-group")?.shared_ai ?? false;
+  try {
+    await page.reload();
+    await openGroup(page);
+    await page.locator(".group-bot").getByRole("button").first().click();
+    const toggle = page.getByRole("switch", { name: "One AI conversation for everyone" });
+    await expect(toggle).not.toBeChecked();
+    await expect(page.getByText("Each person has their own AI conversation.")).toBeVisible();
+    await toggle.click();
+    await expect(toggle).toBeChecked();
+    await expect(page.getByText("Only you can clear it with !new.")).toBeVisible();
+    expect(await shared()).toBe(true);
+    await toggle.click();
+    await expect(toggle).not.toBeChecked();
+    expect(await shared()).toBe(false);
+  } finally {
+    await page.request.put("/api/v1/enrollment/demo-group/shared", { headers, data: { shared: false } });
+    await putInbox(page, original);
+  }
+});

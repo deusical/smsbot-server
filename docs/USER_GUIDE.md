@@ -52,7 +52,11 @@ use commands.
   are ignored. You can always use the bot in any group you can send to, with no
   switch, as long as **Commands from your phone** is on: it answers to the people in
   the group at that moment. Answers go to the whole group, and each person has their own AI
-  conversation and memory. The choice is approved for the group as it is: if anyone joins
+  conversation and memory, unless you switch on **One AI conversation for everyone** in
+  the Bot panel. Then everyone who uses the bot there, you included, continues the same
+  conversation by replying to any answer; each question is marked with who asked it (a
+  label such as "Member 3f2a", never a real name); and only you can clear it with `!new`.
+  Switching it on or off starts the group's AI conversations over. The choice is approved for the group as it is: if anyone joins
   or leaves, the bot goes quiet in that group (the button says **Bot paused: people
   changed**) until you look at who is there and choose **Approve these people**. People
   who left are then removed. Turning the bot off for a person removes only them.
@@ -115,7 +119,7 @@ own messages can run commands too.
   first 60,000 characters of a file's text are sent. If the file is a type that can't be
   read, is too large, or can't be fetched from your phone (it is tried a few times), the
   bot replies with the reason and a short code in brackets.
-- `!new` clears the AI's memory for that chat. Conversations also expire after the
+- `!new` clears the AI's memory for that chat (in a group, only yours). Conversations also expire after the
   memory window (24 hours by default).
 
 Replies need RCS. On SMS, send a new `!ask` with everything in it.

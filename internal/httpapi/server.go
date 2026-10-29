@@ -55,6 +55,7 @@ func New(e *bot.Engine, c *collection.Service, origin string, fixture bool) *Ser
 	s.mux.HandleFunc("DELETE /api/v1/enrollment/{id}", s.protected(s.unenroll))
 	s.mux.HandleFunc("DELETE /api/v1/enrollment/{id}/members/{member}", s.protected(s.unenrollMember))
 	s.mux.HandleFunc("POST /api/v1/enrollment/{id}/approve", s.protected(s.approveGroup))
+	s.mux.HandleFunc("PUT /api/v1/enrollment/{id}/shared", s.protected(s.sharedGroup))
 	s.mux.HandleFunc("GET /api/v1/activity", s.protected(s.activity))
 	s.mux.HandleFunc("POST /api/v1/fixture/incoming", s.protected(s.incoming))
 	s.mux.HandleFunc("POST /api/v1/fixture/typing", s.protected(s.fixtureTyping))
@@ -419,6 +420,35 @@ func (s *Server) unenrollMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.json(w, 200, map[string]bool{"enrolled": false})
+}
+
+// sharedGroup switches a group between one AI conversation each and one for
+// everyone. The group's AI conversations start over either way.
+func (s *Server) sharedGroup(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Shared *bool `json:"shared"`
+	}
+	if !s.decode(w, r, &in) {
+		return
+	}
+	if in.Shared == nil {
+		s.bad(w, 400, "shared_required")
+		return
+	}
+	c, e := transport.Lookup(r.Context(), s.Transport, r.PathValue("id"))
+	if e != nil {
+		s.bad(w, 503, "transport_unavailable")
+		return
+	}
+	if !c.Group || !c.Writable {
+		s.bad(w, 400, "ineligible_conversation")
+		return
+	}
+	if e = s.Engine.SetGroupShared(c.ID, *in.Shared); e != nil {
+		s.bad(w, 500, "storage_error")
+		return
+	}
+	s.json(w, 200, map[string]bool{"shared": *in.Shared})
 }
 
 // approveGroup accepts who is in a group now for the members still in it. The

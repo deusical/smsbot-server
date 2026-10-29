@@ -119,8 +119,8 @@ func (e *Engine) ComposeInboxTo(ctx context.Context, conv, roster, text, request
 	if a, archiveErr := e.Store.Archive(conv); archiveErr == nil && a.Conversation.ParticipantID != c.ParticipantID {
 		return "", errors.New("archive_identity_changed")
 	}
-	if c.Group && (roster == "" || roster != c.Roster) {
-		return "", errors.New("group_changed")
+	if err = groupAsShown(c, roster); err != nil {
+		return "", err
 	}
 
 	e.mu.Lock()
