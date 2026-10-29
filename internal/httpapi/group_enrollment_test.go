@@ -90,3 +90,44 @@ func TestGroupApprovalAndRemovingOneMember(t *testing.T) {
 		t.Fatalf("turning the bot off for the group: %d", w.Code)
 	}
 }
+
+func TestAGroupSharesOneAIConversationOnlyWhenTheOwnerSwitchesItOn(t *testing.T) {
+	s := apiSetup(t)
+	put := func(id, body string) int {
+		return req(s, "PUT", "/api/v1/enrollment/"+id+"/shared", body, "fixture-client", "").Code
+	}
+	if s.Store.GroupShared("demo-group") {
+		t.Fatal("a group shares by default")
+	}
+	for name, c := range map[string]struct{ id, body string }{
+		"no choice":     {"demo-group", `{}`},
+		"not a group":   {"demo-chat", `{"shared":true}`},
+		"unknown group": {"nowhere", `{"shared":true}`},
+	} {
+		if code := put(c.id, c.body); code == 200 {
+			t.Errorf("%s was accepted", name)
+		}
+	}
+	if code := put("demo-group", `{"shared":true}`); code != 200 || !s.Store.GroupShared("demo-group") {
+		t.Fatalf("switch on: %d", code)
+	}
+	w := req(s, "GET", "/api/v1/inbox/conversations", "", "fixture-client", "")
+	var page struct {
+		Conversations []transport.Conversation `json:"conversations"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &page); err != nil {
+		t.Fatal(err)
+	}
+	shown := false
+	for _, c := range page.Conversations {
+		if c.ID == "demo-group" {
+			shown = c.SharedAI
+		}
+	}
+	if !shown {
+		t.Fatal("the listing does not show the group as shared")
+	}
+	if code := put("demo-group", `{"shared":false}`); code != 200 || s.Store.GroupShared("demo-group") {
+		t.Fatalf("switch off: %d", code)
+	}
+}

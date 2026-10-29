@@ -30,6 +30,7 @@ export type Conversation = {
   /** For a group: who may use the bot there, and the roster approved for them. */
   enrolled_members?: string[];
   bot_roster?: string;
+  shared_ai?: boolean;
   writable: boolean;
   enrolled: boolean;
   last_message_at?: string;

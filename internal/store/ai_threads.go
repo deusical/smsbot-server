@@ -101,8 +101,7 @@ func (s *Store) validAIThread(q aiReader, id, conv, peer, command string, epoch 
 	if err = s.openAI("ai-thread:"+id, payload, &data); err != nil {
 		return data, err
 	}
-	var current int64
-	err = q.QueryRow("SELECT coalesce((SELECT CAST(value AS INTEGER) FROM settings WHERE key=?),0)", "memory_epoch:"+Hash(conv)).Scan(&current)
+	current, err := memoryEpochOf(q, conv, peer)
 	if err != nil {
 		return data, err
 	}
@@ -164,14 +163,14 @@ func (s *Store) AIHistory(parent AIParent, conv, peer, command string, epoch int
 }
 func (s *Store) enqueueAIExchange(tx *sql.Tx, id, conv, command string, p Plan, now time.Time) error {
 	if p.Thread.Parent == "" {
-		var epoch int64
-		if err := tx.QueryRow("SELECT coalesce((SELECT CAST(value AS INTEGER) FROM settings WHERE key=?),0)", "memory_epoch:"+Hash(conv)).Scan(&epoch); err != nil {
+		epoch, err := memoryEpochOf(tx, conv, p.ThreadOwner())
+		if err != nil {
 			return err
 		}
 		if epoch != p.MemoryEpoch {
 			return ErrAIThreadUnavailable
 		}
-		payload, err := s.sealAI("ai-thread:"+p.Thread.ID, aiThread{conv, p.Participant, command, epoch})
+		payload, err := s.sealAI("ai-thread:"+p.Thread.ID, aiThread{conv, p.ThreadOwner(), command, epoch})
 		if err != nil {
 			return err
 		}
@@ -179,7 +178,7 @@ func (s *Store) enqueueAIExchange(tx *sql.Tx, id, conv, command string, p Plan, 
 			return err
 		}
 	} else {
-		if _, err := s.validAIThread(tx, p.Thread.ID, conv, p.Participant, command, p.MemoryEpoch, now, p.MemoryHours, p.Thread.RetentionDays); err != nil {
+		if _, err := s.validAIThread(tx, p.Thread.ID, conv, p.ThreadOwner(), command, p.MemoryEpoch, now, p.MemoryHours, p.Thread.RetentionDays); err != nil {
 			return err
 		}
 		var found int
@@ -206,7 +205,7 @@ func (s *Store) prepareAIAnswer(tx *sql.Tx, id, txn string, p Plan, now time.Tim
 	if err := tx.QueryRow("SELECT conversation,command FROM jobs WHERE id=?", id).Scan(&conv, &command); err != nil {
 		return err
 	}
-	if _, err := s.validAIThread(tx, p.Thread.ID, conv, p.Participant, command, p.MemoryEpoch, now, p.MemoryHours, p.Thread.RetentionDays); err != nil {
+	if _, err := s.validAIThread(tx, p.Thread.ID, conv, p.ThreadOwner(), command, p.MemoryEpoch, now, p.MemoryHours, p.Thread.RetentionDays); err != nil {
 		return err
 	}
 	var payload string
@@ -267,8 +266,8 @@ func (s *Store) RecordAIAnswer(conv, txn, wire string, now time.Time, hours, day
 	if state != "submitting" && state != "unknown_submission" && state != "submitted" && state != "delivered" && state != "read" {
 		return nil
 	}
-	var epoch int64
-	if err = tx.QueryRow("SELECT coalesce((SELECT CAST(value AS INTEGER) FROM settings WHERE key=?),0)", "memory_epoch:"+Hash(conv)).Scan(&epoch); err != nil {
+	epoch, err := memoryEpochOf(tx, conv, peer)
+	if err != nil {
 		return err
 	}
 	if _, err = s.validAIThread(tx, thread, conv, peer, command, epoch, now, hours, days); errors.Is(err, ErrAIThreadUnavailable) {
@@ -377,6 +376,46 @@ func (s *Store) PruneAIThreads(now time.Time, hours, days int) error {
 	}
 	return tx.Commit()
 }
+
+// clearMemberThreads removes the AI conversations one person started in a group,
+// cancelling their requests still waiting on one.
+func (s *Store) clearMemberThreads(tx *sql.Tx, conv, member string) error {
+	rows, err := tx.Query("SELECT id,payload FROM ai_threads WHERE chat_key=?", Hash(conv))
+	if err != nil {
+		return err
+	}
+	var ids []string
+	for rows.Next() {
+		var id, payload string
+		if err = rows.Scan(&id, &payload); err != nil {
+			rows.Close()
+			return err
+		}
+		var data aiThread
+		if err = s.openAI("ai-thread:"+id, payload, &data); err != nil {
+			rows.Close()
+			return err
+		}
+		if data.Participant == member {
+			ids = append(ids, id)
+		}
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	for _, id := range ids {
+		if _, err = tx.Exec("UPDATE jobs SET state='cancelled',code='memory_cleared',plan='' WHERE state IN ('queued','generating','awaiting_approval') AND id IN (SELECT id FROM ai_exchanges WHERE thread_id=?)", id); err != nil {
+			return err
+		}
+		if _, err = tx.Exec("DELETE FROM ai_threads WHERE id=?", id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func clearAIThreads(tx *sql.Tx, chat string) error {
 	where := ""
 	args := []any{}

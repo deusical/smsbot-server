@@ -155,30 +155,63 @@ func (s *Store) Remember(scope string, turns []Turn, expires time.Time) error {
 	_, err = s.DB.Exec("INSERT INTO memory VALUES(?,?,?) ON CONFLICT(scope) DO UPDATE SET payload=excluded.payload,expires=excluded.expires", scope, enc, expires.UTC().Format(time.RFC3339Nano))
 	return err
 }
-func (s *Store) ClearMemory(conv string) error {
+
+// ClearMemory forgets the AI conversations in conv: all of them, or when member
+// is set (a person in a group) only theirs, so one person's !new never wipes
+// another's. Plans made before it are invalidated by the new memory epoch.
+func (s *Store) ClearMemory(conv, member string) error {
 	tx, err := s.DB.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	if err = clearAIThreads(tx, conv); err != nil {
+	if member == "" {
+		err = clearAIThreads(tx, conv)
+	} else {
+		err = s.clearMemberThreads(tx, conv, member)
+	}
+	if err != nil {
 		return err
 	}
-	if _, err = tx.Exec("DELETE FROM memory WHERE scope LIKE ?", Hash(conv)+":%"); err != nil {
+	scope := Hash(conv) + ":%"
+	if member != "" {
+		scope += ":" + Hash(member)
+	}
+	if _, err = tx.Exec("DELETE FROM memory WHERE scope LIKE ?", scope); err != nil {
 		return err
 	}
-	if _, err = tx.Exec("INSERT INTO settings VALUES(?, '1') ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1", "memory_epoch:"+Hash(conv)); err != nil {
+	if _, err = tx.Exec("INSERT INTO settings VALUES(?, '1') ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1", memoryEpochKey(conv, member)); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
-func (s *Store) MemoryEpoch(conv string) (int64, error) {
-	var epoch int64
-	err := s.DB.QueryRow("SELECT CAST(value AS INTEGER) FROM settings WHERE key=?", "memory_epoch:"+Hash(conv)).Scan(&epoch)
-	if errors.Is(err, sql.ErrNoRows) {
-		return 0, nil
+
+// memoryEpochKey names the counter of how often memory was cleared: for a whole
+// conversation, or for one member of a group who cleared only their own.
+func memoryEpochKey(conv, member string) string {
+	if member == "" {
+		return "memory_epoch:" + Hash(conv)
 	}
+	return "memory_epoch:" + Hash(conv) + ":" + Hash(member)
+}
+
+// memoryEpochOf is the number a plan records so it can tell later that memory was
+// cleared. Either counter moving changes it, and a member who never cleared
+// their own (everyone outside a group) adds nothing.
+func memoryEpochOf(q aiReader, conv, member string) (int64, error) {
+	var epoch int64
+	if member == "" {
+		err := q.QueryRow("SELECT coalesce((SELECT CAST(value AS INTEGER) FROM settings WHERE key=?),0)", memoryEpochKey(conv, "")).Scan(&epoch)
+		return epoch, err
+	}
+	err := q.QueryRow("SELECT coalesce((SELECT CAST(value AS INTEGER) FROM settings WHERE key=?),0)+coalesce((SELECT CAST(value AS INTEGER) FROM settings WHERE key=?),0)", memoryEpochKey(conv, ""), memoryEpochKey(conv, member)).Scan(&epoch)
 	return epoch, err
+}
+
+// MemoryEpoch is the memory epoch for conv, and for member when it is a group
+// member whose memory is kept apart.
+func (s *Store) MemoryEpoch(conv, member string) (int64, error) {
+	return memoryEpochOf(s.DB, conv, member)
 }
 
 // InvalidateMemory is used when consent is removed from any command. Conservatively
@@ -214,7 +247,7 @@ func (s *Store) InvalidateMemory() error {
 		return err
 	}
 	for _, conv := range conversations {
-		if _, err = tx.Exec("INSERT INTO settings VALUES(?,'1') ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1", "memory_epoch:"+Hash(conv)); err != nil {
+		if _, err = tx.Exec("INSERT INTO settings VALUES(?,'1') ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1", memoryEpochKey(conv, "")); err != nil {
 			return err
 		}
 	}

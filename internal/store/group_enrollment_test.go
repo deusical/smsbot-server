@@ -56,6 +56,9 @@ func TestGroupEnrollmentSurvivesABackup(t *testing.T) {
 	if err := source.EnrollMember("g", "a", "group:r1"); err != nil {
 		t.Fatal(err)
 	}
+	if err := source.SetGroupShared("g", true); err != nil {
+		t.Fatal(err)
+	}
 	data, err := source.ExportBackup()
 	if err != nil {
 		t.Fatal(err)
@@ -66,6 +69,9 @@ func TestGroupEnrollmentSurvivesABackup(t *testing.T) {
 	}
 	if got, ok := fresh.GroupMemberEnrollment("g", "a"); !ok || got != "group:r1" {
 		t.Fatalf("restored %q %t", got, ok)
+	}
+	if !fresh.GroupShared("g") {
+		t.Fatal("a shared group came back unshared")
 	}
 	// A restore needs fresh state, and group enrollment counts as state.
 	if err = fresh.RestoreBackup(data); err == nil {

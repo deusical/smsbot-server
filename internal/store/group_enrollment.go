@@ -13,8 +13,49 @@ import (
 // Individual conversations keep their own table, unchanged.
 
 func (s *Store) ensureGroupEnrollment() error {
-	_, err := s.DB.Exec(`CREATE TABLE IF NOT EXISTS group_enrollment(conversation TEXT NOT NULL,participant TEXT NOT NULL,roster TEXT NOT NULL,PRIMARY KEY(conversation,participant))`)
+	_, err := s.DB.Exec(`CREATE TABLE IF NOT EXISTS group_enrollment(conversation TEXT NOT NULL,participant TEXT NOT NULL,roster TEXT NOT NULL,PRIMARY KEY(conversation,participant));
+ CREATE TABLE IF NOT EXISTS group_shared(conversation TEXT PRIMARY KEY)`)
 	return err
+}
+
+// A group can share one AI conversation between everyone who uses the bot in it,
+// the owner included, instead of each person having their own. The owner
+// switches that on per group; it is off until then.
+
+// SharedMember stands for the whole group as the owner of its shared AI
+// conversation, in place of any one person.
+const SharedMember = "shared:group"
+
+// GroupShared reports whether the group conv has one AI conversation for all.
+func (s *Store) GroupShared(conv string) bool {
+	var n int
+	return s.DB.QueryRow("SELECT count(*) FROM group_shared WHERE conversation=?", conv).Scan(&n) == nil && n > 0
+}
+
+// SetGroupShared switches a group between one AI conversation each and one for
+// everyone. Either way the group's AI conversations are forgotten and work
+// waiting for it is cancelled, so nobody inherits someone else's.
+func (s *Store) SetGroupShared(conv string, shared bool) error {
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if shared {
+		_, err = tx.Exec("INSERT OR IGNORE INTO group_shared VALUES(?)", conv)
+	} else {
+		_, err = tx.Exec("DELETE FROM group_shared WHERE conversation=?", conv)
+	}
+	if err != nil {
+		return err
+	}
+	if _, err = tx.Exec(cancelPending, conv); err != nil {
+		return err
+	}
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+	return s.ClearMemory(conv, "")
 }
 
 const cancelPending = "UPDATE jobs SET state='cancelled',code='unenrolled',plan='' WHERE conversation=? AND state IN ('queued','generating','awaiting_approval')"
@@ -143,12 +184,24 @@ func (s *Store) BotOn(conv string) bool {
 // as opposed to the owner sending to one.
 func (p Plan) GroupBotJob() bool { return p.Roster != "" && !p.InboxOwnerOnly }
 
-// MemberOf is the group member a bot job is for, or "" for any other job.
+// MemberOf is who a bot job's AI memory belongs to: the group member it is for,
+// or the whole group when it shares one conversation. It is "" for any other job.
 func (p Plan) MemberOf() string {
-	if p.GroupBotJob() {
-		return p.Participant
+	switch {
+	case !p.GroupBotJob():
+		return ""
+	case p.Shared:
+		return SharedMember
 	}
-	return ""
+	return p.Participant
+}
+
+// ThreadOwner is who an AI thread started by this job belongs to.
+func (p Plan) ThreadOwner() string {
+	if m := p.MemberOf(); m != "" {
+		return m
+	}
+	return p.Participant
 }
 
 // ShowEnrollment fills in whether the bot is on in a listed conversation: for
@@ -160,5 +213,6 @@ func (s *Store) ShowEnrollment(c *transport.Conversation) {
 	}
 	members, roster, err := s.GroupBot(c.ID)
 	c.Enrolled = err == nil && len(members) > 0
+	c.SharedAI = s.GroupShared(c.ID)
 	c.EnrolledMembers, c.BotRoster = members, roster
 }

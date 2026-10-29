@@ -26,7 +26,7 @@ func (e *Engine) planAIThread(m transport.Incoming, p *store.Plan, parent *store
 	}
 	p.Thread = &store.AIThreadPlan{ID: store.ID(), RetentionDays: settings.RetentionDays}
 	if parent != nil {
-		history, omitted, err := e.Store.AIHistory(*parent, m.ConversationID, p.Participant, "!ask", p.MemoryEpoch, e.now(), settings.MemoryHours, settings.RetentionDays, budget)
+		history, omitted, err := e.Store.AIHistory(*parent, m.ConversationID, p.ThreadOwner(), "!ask", p.MemoryEpoch, e.now(), settings.MemoryHours, settings.RetentionDays, budget)
 		if errors.Is(err, store.ErrAIThreadUnavailable) {
 			p.Thread = nil
 			p.Memory = false

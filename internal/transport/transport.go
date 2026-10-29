@@ -51,6 +51,8 @@ type Conversation struct {
 	// the bot is silent if the group's Roster is not that one.
 	EnrolledMembers []string `json:"enrolled_members,omitempty"`
 	BotRoster       string   `json:"bot_roster,omitempty"`
+	// SharedAI is set for a group whose bot users share one AI conversation.
+	SharedAI bool `json:"shared_ai,omitempty"`
 	// LastMessageAt (RFC3339), Unread and Pinned mirror the phone list for ordering.
 	// They are volatile display hints and never part of identity checks.
 	LastMessageAt string `json:"last_message_at,omitempty"`

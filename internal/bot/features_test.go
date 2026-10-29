@@ -279,7 +279,7 @@ func TestConsentRemovalInvalidatesQueuedContext(t *testing.T) {
 	c.Commands[0].Memory = false
 	e.SetConfiguration(c)
 	_, p, _ := e.Store.JobPlan(id)
-	epoch, _ := e.Store.MemoryEpoch("demo-chat")
+	epoch, _ := e.Store.MemoryEpoch("demo-chat", "")
 	if epoch == p.MemoryEpoch {
 		t.Fatal("memory revocation did not invalidate plan")
 	}

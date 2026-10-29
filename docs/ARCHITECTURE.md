@@ -66,7 +66,9 @@ sends twice.
   in a group only for members the owner enrolled (`group_enrollment`: conversation,
   member, approved roster) and only while the live roster is the approved one; a change
   silences it until the owner approves again, and each member has their own AI memory
-  and threads. The owner's own commands from the phone
+  and threads, unless the owner switched that group to one shared conversation
+  (`group_shared`): memory and threads then belong to the fixed owner `shared:group`,
+  questions carry an anonymous asker label, and only the owner's `!new` clears it. The owner's own commands from the phone
   (when allowed) run in any group they can send to, as the fixed participant
   `owner:self`: the reply is planned for the roster at that moment and cancelled if it
   changes before it goes.

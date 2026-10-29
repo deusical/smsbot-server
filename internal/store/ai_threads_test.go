@@ -121,7 +121,7 @@ func TestAIThreadsAtomicAcceptanceResetAndExpiry(t *testing.T) {
 	}
 	child := aiPlan("root", "a", "queued child")
 	enqueueAI(t, s, "b", child)
-	if err := s.ClearMemory("fixture-chat"); err != nil {
+	if err := s.ClearMemory("fixture-chat", ""); err != nil {
 		t.Fatal(err)
 	}
 	if ref, err := s.FindAIParent("fixture-chat", "wire"); err != nil || ref != nil {

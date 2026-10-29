@@ -67,10 +67,12 @@ type backupSnapshot struct {
 	Enrollment  []backupEnrollment `json:"enrollment"`
 	// GroupEnrollment lists who may use the bot in each group.
 	GroupEnrollment []backupEnrollment `json:"group_enrollment,omitempty"`
-	Jobs            []backupJob        `json:"jobs"`
-	Messages        []backupMessage    `json:"messages"`
-	Usage           []backupUsage      `json:"usage,omitempty"`
-	Aliases         []backupAlias      `json:"aliases,omitempty"`
+	// SharedGroups lists the groups that share one AI conversation.
+	SharedGroups []string        `json:"shared_groups,omitempty"`
+	Jobs         []backupJob     `json:"jobs"`
+	Messages     []backupMessage `json:"messages"`
+	Usage        []backupUsage   `json:"usage,omitempty"`
+	Aliases      []backupAlias   `json:"aliases,omitempty"`
 }
 type backupAlias struct {
 	Alias   string `json:"alias"`
@@ -151,6 +153,23 @@ func (s *Store) ExportBackup() ([]byte, error) {
 			return nil, e
 		}
 		b.GroupEnrollment = append(b.GroupEnrollment, v)
+	}
+	e = rows.Err()
+	rows.Close()
+	if e != nil {
+		return nil, e
+	}
+	rows, e = tx.Query("SELECT conversation FROM group_shared")
+	if e != nil {
+		return nil, e
+	}
+	for rows.Next() {
+		var conv string
+		if e = rows.Scan(&conv); e != nil {
+			rows.Close()
+			return nil, e
+		}
+		b.SharedGroups = append(b.SharedGroups, conv)
 	}
 	e = rows.Err()
 	rows.Close()
@@ -413,6 +432,11 @@ func (s *Store) RestoreBackup(data []byte) error {
 	}
 	for _, v := range b.GroupEnrollment {
 		if _, e = tx.Exec("INSERT INTO group_enrollment VALUES(?,?,?)", v.Conversation, v.Participant, v.Roster); e != nil {
+			return e
+		}
+	}
+	for _, conv := range b.SharedGroups {
+		if _, e = tx.Exec("INSERT INTO group_shared VALUES(?)", conv); e != nil {
 			return e
 		}
 	}
