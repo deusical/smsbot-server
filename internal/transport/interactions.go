@@ -121,7 +121,12 @@ func (g *Google) React(ctx context.Context, conv, expectedPeer, target, emoji, o
 	}
 	g.countPhone(ctx, phoneLookup)
 	c, err := g.client.GetConversation(ctx, conv)
-	if err != nil || c.GetConversationID() != conv || !eligible(c) || peer(c) != expectedPeer || !rcsProtocol(c.GetType().String()) {
+	if err != nil || c.GetConversationID() != conv || !readable(c) || peer(c) != expectedPeer || !rcsProtocol(c.GetType().String()) {
+		return ErrNotSubmitted
+	}
+	// A reaction in a group is seen by everyone in it: only as the people were
+	// when the owner was shown them, and as last verified.
+	if want, given := expectedRoster(ctx); c.GetIsGroupChat() && (!given || want == "" || roster(c) != want) {
 		return ErrNotSubmitted
 	}
 	sim := c.GetSimCard().GetSIMData().GetSIMPayload()
@@ -129,7 +134,7 @@ func (g *Google) React(ctx context.Context, conv, expectedPeer, target, emoji, o
 	settings := g.settings
 	known := g.conversations[conv]
 	g.mu.Unlock()
-	if known == nil || known.GetDefaultOutgoingID() != c.GetDefaultOutgoingID() {
+	if known == nil || known.GetDefaultOutgoingID() != c.GetDefaultOutgoingID() || roster(c) != roster(known) {
 		return ErrNotSubmitted
 	}
 	if sim == nil && len(settings.GetSIMCards()) == 1 {
@@ -166,7 +171,7 @@ func (f *Fixture) SendReply(ctx context.Context, conv, txn, text, target string,
 	return f.Send(ctx, conv, txn, text)
 }
 func (f *Fixture) React(ctx context.Context, conv, expectedPeer, target, emoji, operation string) error {
-	if conv != "demo-chat" || expectedPeer != "demo-peer" || target == "" {
+	if target == "" || !(conv == "demo-chat" && expectedPeer == "demo-peer" || conv == "demo-group" && expectedPeer == "group:demo-group") {
 		return ErrNotSubmitted
 	}
 	_, err := f.Send(ctx, conv, "reaction:"+target, operation+":"+emoji)

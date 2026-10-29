@@ -56,6 +56,7 @@ export function MessageActions({
   conversation,
   label,
   writable,
+  roster,
   eligibilityKey,
   onReply,
   onChanged,
@@ -64,6 +65,8 @@ export function MessageActions({
   conversation: string;
   label: string;
   writable: boolean;
+  /** For a group: who the owner has seen in it. A reaction goes only to them. */
+  roster?: string;
   eligibilityKey: string;
   onReply: (message: Message) => void;
   onChanged: () => void;
@@ -285,6 +288,7 @@ export function MessageActions({
         operation: attempt.operation,
         version: attempt.version,
         request_id: attempt.request_id,
+        ...(roster ? { roster } : {}),
       });
       if (reactionAttempt(key)?.request_id === attempt.request_id) setReactionAttempt(key, { ...attempt, id: result.id, state: "queued" });
       setOpen(false);
@@ -292,7 +296,11 @@ export function MessageActions({
       // Keep the exact intent/key: the request may have reached the server.
       if (reactionAttempt(key)?.request_id === attempt.request_id)
         setReactionAttempt(key, { ...attempt, state: err instanceof ApiError && err.status >= 400 && err.status < 500 ? "failed" : "unconfirmed" });
-      setActionError("Reaction request not confirmed. Check its status before changing it.");
+      setActionError(
+        err instanceof ApiError && err.message === "group_changed"
+          ? "The people in this group changed. Check who is in it, then react again."
+          : "Reaction request not confirmed. Check its status before changing it.",
+      );
     } finally {
       submitting.current = false;
     }

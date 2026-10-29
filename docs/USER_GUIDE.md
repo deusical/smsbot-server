@@ -44,7 +44,9 @@ use commands.
   the group change while you have it open, a notice shows who it has now and sending
   waits until you choose **Send to these people**. A message is never sent to people you
   hadn't seen in the group: if they change before it goes, it is cancelled. Replies to a
-  specific message and reactions in groups aren't available yet.
+  specific message and reactions work in groups the same way (on RCS messages), and
+  likewise only go to the people you were shown. While a notice about changed people is
+  open, Reply and reactions wait too.
 - **The bot in a group.** Open the group and use the **Bot** button in its header to
   switch on the other people who may run commands there. Only they can; other members
   are ignored. You can always use the bot in any group you can send to, with no

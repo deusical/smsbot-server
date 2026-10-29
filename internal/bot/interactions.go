@@ -31,7 +31,7 @@ func (e *Engine) replyTarget(ctx context.Context, c transport.Conversation, targ
 	if err != nil {
 		return nil, err
 	}
-	if v == nil || v.Protocol != "RCS" || v.UpstreamID == "" || !isRCS(c.Protocol) || c.Group || !c.Writable {
+	if v == nil || v.Protocol != "RCS" || v.UpstreamID == "" || !isRCS(c.Protocol) || !c.Writable {
 		return nil, errors.New("rcs_action_unavailable")
 	}
 	if _, ok := e.Transport.(transport.ReplySender); !ok {
@@ -83,7 +83,7 @@ func (e *Engine) actionPolicy(ctx context.Context, conv, target string, live boo
 		}
 	}
 	archive, err := e.Store.Archive(conv)
-	if err != nil || archive.Conversation.ParticipantID != c.ParticipantID || !settings.Allows(c) || c.Group || !c.Writable || !isRCS(c.Protocol) {
+	if err != nil || archive.Conversation.ParticipantID != c.ParticipantID || !settings.Allows(c) || !c.Writable || !isRCS(c.Protocol) {
 		a.Reason = "conversation_action_unavailable"
 		return a, c, nil
 	}
@@ -136,6 +136,14 @@ func validEmoji(s string) bool {
 	return emoji || strings.ContainsRune(s, 0x20e3)
 }
 func (e *Engine) QueueReaction(ctx context.Context, conv, target, emoji, operation, version, requestID string) (string, error) {
+	return e.QueueReactionIn(ctx, conv, "", target, emoji, operation, version, requestID)
+}
+
+// QueueReactionIn is QueueReaction in a conversation whose people the owner has
+// seen. A reaction in a group is shown to everyone in it, so, as for a message,
+// roster is exactly who was in the group: it is queued only if the group has those
+// people now, and goes only if it still does.
+func (e *Engine) QueueReactionIn(ctx context.Context, conv, roster, target, emoji, operation, version, requestID string) (string, error) {
 	emoji = transport.CanonicalEmoji(emoji)
 	if len(requestID) < 16 || len(requestID) > 100 || len(target) > 128 || !validEmoji(emoji) || (operation != "add" && operation != "switch" && operation != "remove") {
 		return "", errors.New("invalid_reaction")
@@ -159,6 +167,9 @@ func (e *Engine) QueueReaction(ctx context.Context, conv, target, emoji, operati
 	}
 	if !a.React {
 		return "", errors.New("reaction_unavailable")
+	}
+	if c.Group && (roster == "" || roster != c.Roster) {
+		return "", errors.New("group_changed")
 	}
 	if version == "" || a.Version != version {
 		return "", errors.New("reaction_conflict")
@@ -186,7 +197,7 @@ func (e *Engine) QueueReaction(ctx context.Context, conv, target, emoji, operati
 		return "", errors.New("quiet_hours")
 	}
 	intent := &store.MutationIntent{Target: target, WireTarget: v.UpstreamID, Protocol: "RCS", Emoji: emoji, Operation: operation, Version: version}
-	_, err = e.Store.Enqueue(id, conv, "reaction", store.Plan{Participant: c.ParticipantID, Manual: true, InboxOwnerOnly: true, Mutation: intent})
+	_, err = e.Store.Enqueue(id, conv, "reaction", store.Plan{Participant: c.ParticipantID, Roster: c.Roster, Manual: true, InboxOwnerOnly: true, Mutation: intent})
 	return id, err
 }
 
@@ -203,7 +214,7 @@ func (e *Engine) dispatchReaction(ctx context.Context, j store.Job, p store.Plan
 	if err != nil {
 		return err
 	}
-	if m.Protocol != "RCS" || v == nil || v.Protocol != "RCS" || v.OwnerID == "" || v.UpstreamID != m.WireTarget || store.InteractionVersion(v) != m.Version || !isRCS(c.Protocol) {
+	if m.Protocol != "RCS" || v == nil || v.Protocol != "RCS" || v.OwnerID == "" || v.UpstreamID != m.WireTarget || store.InteractionVersion(v) != m.Version || !isRCS(c.Protocol) || c.Roster != p.Roster {
 		return e.Store.Complete(j.ID, "failed", "reaction_conflict")
 	}
 	// The separate durable intent must exist before any submission.
@@ -223,7 +234,7 @@ func (e *Engine) dispatchReaction(ctx context.Context, j store.Job, p store.Plan
 	}
 	sendctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	err = reactor.React(sendctx, j.ConversationID, p.Participant, m.WireTarget, m.Emoji, m.Operation)
+	err = reactor.React(transport.WithRoster(sendctx, p.Roster), j.ConversationID, p.Participant, m.WireTarget, m.Emoji, m.Operation)
 	if err != nil {
 		state, code := "unknown_submission", "transport_outcome_unknown"
 		if errors.Is(err, transport.ErrNotSubmitted) {

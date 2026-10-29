@@ -77,8 +77,8 @@ func readable(c *gmproto.Conversation) bool {
 }
 
 // eligible is an individual conversation the bot may act in, and the one
-// typing, read marking and reactions apply to. A group can be sent to once its
-// roster is checked (see sendParts), but nothing else here acts for it.
+// typing and read marking apply to. A group can be sent to, and reacted in, once
+// its roster is checked (see sendParts and React), but nothing else here acts for it.
 func eligible(c *gmproto.Conversation) bool {
 	return readable(c) && !c.GetIsGroupChat()
 }

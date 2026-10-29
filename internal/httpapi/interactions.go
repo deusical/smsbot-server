@@ -19,6 +19,8 @@ func (s *Server) interactionRoutes() {
 	}))
 	s.mux.HandleFunc("POST /api/v1/inbox/conversations/{id}/messages/{message}/reactions", s.protected(func(w http.ResponseWriter, r *http.Request) {
 		var v struct {
+			// Roster is, for a group, who the owner saw in it.
+			Roster    string `json:"roster"`
 			Emoji     string `json:"emoji"`
 			Operation string `json:"operation"`
 			Version   string `json:"version"`
@@ -29,11 +31,11 @@ func (s *Server) interactionRoutes() {
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 		defer cancel()
-		id, err := s.Engine.QueueReaction(ctx, r.PathValue("id"), r.PathValue("message"), v.Emoji, v.Operation, v.Version, v.RequestID)
+		id, err := s.Engine.QueueReactionIn(ctx, r.PathValue("id"), v.Roster, r.PathValue("message"), v.Emoji, v.Operation, v.Version, v.RequestID)
 		if err != nil {
 			code := "reaction_unavailable"
 			switch err.Error() {
-			case "invalid_reaction", "reaction_conflict", "request_id_reused_with_different_action":
+			case "invalid_reaction", "reaction_conflict", "request_id_reused_with_different_action", "group_changed":
 				code = err.Error()
 			}
 			s.bad(w, 409, code)
