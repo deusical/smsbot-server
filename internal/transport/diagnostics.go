@@ -15,6 +15,16 @@ type AuthDiagnostic struct {
 	Success    bool   `json:"success"`
 }
 
+// SendDiagnostic contains only fixed reasons and numeric protocol/status values.
+// It deliberately excludes message text, recipient/transaction IDs and raw errors.
+type SendDiagnostic struct {
+	At       string `json:"at"`
+	Reply    bool   `json:"reply"`
+	Result   string `json:"result"`
+	Protocol int32  `json:"protocol"`
+	Status   int32  `json:"status"`
+}
+
 func (g *Google) diagnose(event string, err error) {
 	if g.Diagnostic == nil {
 		return

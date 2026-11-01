@@ -80,14 +80,22 @@ sends twice.
 - **Pause wins.** Every start is paused, and pausing cancels queued work.
 - **Plans don't change.** Editing a command doesn't affect requests already queued.
 - **No secrets in logs.** Message text, contacts, credentials and raw errors from Google
-  are never logged.
+  are never logged. `Send:` journal entries report whether a send used a native
+  reply, its fixed result code, and numeric conversation protocol (2 is RCS) and
+  upstream send status. Results distinguish lookup failure, missing baseline or
+  SIM, identity/roster changes, non-RCS reply refusal, upstream rejection and
+  uncertain submission. A refused reply followed by a plain send can be traced
+  by their timestamps; no recipient or transaction identifiers are logged.
 
 ## Where things live
 
 - **Sending:** `bot.Engine.Dispatch` runs each job's steps under one lock and releases it
   only while waiting on the AI provider or uploading files.
 - **AI threads:** each `!ask` answer is linked to its upstream message ID, so a native
-  reply to it continues that thread. Only the replied-to branch is sent as context. A
+  reply to it continues that thread. Quoting the prompt is optional: after a definite
+  native-reply non-submission, the same recorded answer and transaction may be sent
+  as a regular message through the normal recipient checks. Uncertain outcomes never
+  fall back. Only the replied-to branch is sent as context. A
   message quoted with an AI command brings the chain of replies above it into the
   prompt, each hop resolved within the same conversation. A file it quotes or carries is
   planned by reference and read only while generating, through the same access checks as

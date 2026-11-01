@@ -122,7 +122,9 @@ own messages can run commands too.
 - `!new` clears the AI's memory for that chat (in a group, only yours). Conversations also expire after the
   memory window (24 hours by default).
 
-Replies need RCS. On SMS, send a new `!ask` with everything in it.
+Native replies need RCS. If quoting the prompt cannot be submitted, `!ask` sends
+the answer as a regular message without a quote or prefix. An uncertain send is
+never retried. On SMS, send a new `!ask` with everything in it.
 
 ## Activity
 
