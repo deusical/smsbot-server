@@ -416,6 +416,11 @@ func (o *options) serve(s *store.Store, v *vault.Vault, sessionPath string) erro
 				fmt.Fprintln(os.Stderr, "Phone request:", string(b))
 			}
 		}
+		google.SendLog = func(d transport.SendDiagnostic) {
+			if b, err := json.Marshal(d); err == nil {
+				fmt.Fprintln(os.Stderr, "Send:", string(b))
+			}
+		}
 		if e = google.Connect(ctx); e != nil {
 			return e
 		}

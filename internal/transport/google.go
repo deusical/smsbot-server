@@ -44,6 +44,7 @@ type Google struct {
 	started       time.Time
 	saveMu        sync.Mutex
 	Diagnostic    func(AuthDiagnostic)
+	SendLog       func(SendDiagnostic)
 	// RequestLog, when set, receives every request the adapter sends to the phone.
 	RequestLog func(PhoneRequestLog)
 	// Reconnected, when set, runs after a connection outage ends (see OutagesSince).

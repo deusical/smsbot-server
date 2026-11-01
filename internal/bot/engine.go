@@ -1135,11 +1135,21 @@ func (e *Engine) submit(ctx context.Context, j store.Job, p store.Plan, cfg Conf
 	sendctx, cancelSend := context.WithTimeout(transport.WithRoster(ctx, p.Roster), 30*time.Second)
 	var receipt transport.Receipt
 	var senderr error
+	threadReply := false
 	if p.Thread != nil && p.Thread.ReplyWire != "" {
 		if sender, ok := e.Transport.(transport.ReplySender); ok {
+			threadReply = true
 			receipt, senderr = sender.SendReply(sendctx, j.ConversationID, txn, p.Reply, p.Thread.ReplyWire, nil)
 		} else {
 			senderr = transport.ErrNotSubmitted
+		}
+		// Quoting the prompt is optional. Only a definite non-submission may
+		// fall back; an uncertain result must never trigger another send. The
+		// normal transport path repeats its recipient and roster checks, using
+		// the same persisted outbound intent and transaction.
+		if errors.Is(senderr, transport.ErrNotSubmitted) {
+			threadReply = false
+			receipt, senderr = e.Transport.Send(sendctx, j.ConversationID, txn, p.Reply)
 		}
 	} else if p.ReplyTarget != "" {
 		if sender, ok := e.Transport.(transport.ReplySender); ok {
@@ -1177,7 +1187,7 @@ func (e *Engine) submit(ctx context.Context, j store.Job, p store.Plan, cfg Conf
 	if err != nil {
 		return err
 	}
-	if p.Thread != nil && p.Thread.ReplyWire != "" {
+	if threadReply {
 		if err = e.Store.SaveReplyRelationship(txn, j.ConversationID, p.Thread.ReplyWire); err != nil {
 			return err
 		}
