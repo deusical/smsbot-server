@@ -14,6 +14,11 @@ const builtins = [
 ];
 const templates: { label: string; detail: string; command: Partial<Command> }[] = [
   {
+    label: "Download video",
+    detail: "Save on the server and send a video under 20 MB",
+    command: { name: "download", description: "Download a Douyin or Xiaohongshu video", type: "download" },
+  },
+  {
     label: "Blank",
     detail: "Start from scratch",
     command: {},
@@ -221,11 +226,11 @@ export function CommandsPage({
                   >
                     <code className="bang">!{c.name || "untitled"}</code>
                     <small>
-                      {c.description || (c.type === "ai" ? "AI command" : "Fixed reply")}
+                      {c.description || (c.type === "ai" ? "AI command" : c.type === "download" ? "Download video" : "Fixed reply")}
                     </small>
                   </button>
                   <span className={"type-tag " + c.type}>
-                    {c.type === "ai" ? "AI" : "Text"}
+                    {c.type === "ai" ? "AI" : c.type === "download" ? "Video" : "Text"}
                   </span>
                   <Switch
                     label={`Enable !${c.name || "untitled"}`}
@@ -415,10 +420,16 @@ function CommandEditor({
           options={[
             { value: "fixed", label: "Fixed text" },
             { value: "ai", label: "AI" },
+            { value: "download", label: "Download video" },
           ]}
         />
       </div>
-      <Field
+      {command.type === "download" && <p className="muted">Paste a Douyin or Xiaohongshu share message after the command. The original stays on the server; a video under 20 MB is sent here.</p>}
+      {command.type === "download" && <Field label="Execution deadline (minutes)" hint="Accepted jobs have this long to download, verify and send. Defaults to 15 minutes; maximum 60.">
+        <input type="number" min={1} max={60} value={command.execution_minutes || 15}
+          onChange={(event) => onChange({ execution_minutes: Number(event.target.value) })} />
+      </Field>}
+      {command.type !== "download" && <Field
         label={command.type === "fixed" ? "Reply" : "Instructions"}
         hint={
           command.type === "fixed" ? (
@@ -436,7 +447,7 @@ function CommandEditor({
           value={command.instructions}
           onChange={(e) => onChange({ instructions: e.target.value })}
         />
-      </Field>
+      </Field>}
       <div className="editor-section">
         <h3>Behavior</h3>
         <Switch

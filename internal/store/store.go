@@ -20,6 +20,7 @@ type Store struct {
 	Path  string
 }
 type Job struct {
+	PreparationStage   string   `json:"preparation_stage,omitempty"`
 	ID                 string   `json:"id"`
 	ConversationID     string   `json:"conversation_id"`
 	Command            string   `json:"command"`
@@ -35,7 +36,11 @@ type Job struct {
 	RequestedReasoning string   `json:"requested_reasoning,omitempty"`
 }
 type Plan struct {
-	Thread *AIThreadPlan `json:"thread,omitempty"`
+	ExecutionDeadline string        `json:"execution_deadline,omitempty"`
+	DownloadURL       string        `json:"download_url,omitempty"`
+	DownloadUploaded  bool          `json:"download_uploaded,omitempty"`
+	DownloadMaxBytes  int64         `json:"download_max_bytes,omitempty"`
+	Thread            *AIThreadPlan `json:"thread,omitempty"`
 	// File is the attachment the AI command carries or quoted. Only the
 	// reference is planned; the bytes are read just before generation and never
 	// stored in the plan. The JSON name predates files other than photos.
@@ -121,7 +126,11 @@ func (s *Store) migrate() error {
 	if err := s.migrateSchema(); err != nil {
 		return err
 	}
-	return s.ensureGroupEnrollment()
+	if err := s.ensureGroupEnrollment(); err != nil {
+		return err
+	}
+	_, err := s.DB.Exec(`CREATE TABLE IF NOT EXISTS job_work(job TEXT PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE,stage TEXT NOT NULL,next_poll INTEGER NOT NULL);`)
+	return err
 }
 
 func (s *Store) migrateSchema() error {
@@ -388,7 +397,7 @@ func (s *Store) Enqueue(id, conv, command string, p Plan) (bool, error) {
 func (s *Store) Next() (Job, Plan, error) {
 	var j Job
 	var enc string
-	e := s.DB.QueryRow("SELECT id,conversation,command,state,created,txn,code,plan FROM jobs WHERE state='queued' ORDER BY created LIMIT 1").Scan(&j.ID, &j.ConversationID, &j.Command, &j.State, &j.CreatedAt, &j.TransactionID, &j.Code, &enc)
+	e := s.DB.QueryRow("SELECT id,conversation,command,state,created,txn,code,plan FROM jobs WHERE state='queued' AND id NOT IN (SELECT job FROM job_work WHERE next_poll>?) ORDER BY created LIMIT 1", time.Now().UnixMilli()).Scan(&j.ID, &j.ConversationID, &j.Command, &j.State, &j.CreatedAt, &j.TransactionID, &j.Code, &enc)
 	if e != nil {
 		return j, Plan{}, e
 	}
@@ -436,7 +445,7 @@ func (s *Store) Recover() error {
 	return e
 }
 func (s *Store) Jobs() ([]Job, error) {
-	rows, e := s.DB.Query("SELECT j.id,j.conversation,j.command,j.state,j.created,j.txn,j.code,coalesce(u.model,''),coalesce(u.prompt_tokens,0),coalesce(u.completion_tokens,0),coalesce(u.reasoning_tokens,0),u.cost,coalesce((SELECT json_extract(value,'$') FROM settings WHERE key='requested_reasoning:'||j.id),'') FROM jobs j LEFT JOIN usage u ON u.job=j.id ORDER BY j.created DESC LIMIT 200")
+	rows, e := s.DB.Query("SELECT j.id,j.conversation,j.command,j.state,j.created,j.txn,j.code,coalesce(u.model,''),coalesce(u.prompt_tokens,0),coalesce(u.completion_tokens,0),coalesce(u.reasoning_tokens,0),u.cost,coalesce((SELECT json_extract(value,'$') FROM settings WHERE key='requested_reasoning:'||j.id),'') ,coalesce(w.stage,'') FROM jobs j LEFT JOIN usage u ON u.job=j.id LEFT JOIN job_work w ON w.job=j.id ORDER BY j.created DESC LIMIT 200")
 	if e != nil {
 		return nil, e
 	}
@@ -444,7 +453,7 @@ func (s *Store) Jobs() ([]Job, error) {
 	list := []Job{}
 	for rows.Next() {
 		var j Job
-		if e = rows.Scan(&j.ID, &j.ConversationID, &j.Command, &j.State, &j.CreatedAt, &j.TransactionID, &j.Code, &j.Model, &j.PromptTokens, &j.CompletionTokens, &j.ReasoningTokens, &j.Cost, &j.RequestedReasoning); e != nil {
+		if e = rows.Scan(&j.ID, &j.ConversationID, &j.Command, &j.State, &j.CreatedAt, &j.TransactionID, &j.Code, &j.Model, &j.PromptTokens, &j.CompletionTokens, &j.ReasoningTokens, &j.Cost, &j.RequestedReasoning, &j.PreparationStage); e != nil {
 			return nil, e
 		}
 		list = append(list, j)

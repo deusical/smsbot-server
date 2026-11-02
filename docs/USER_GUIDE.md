@@ -74,6 +74,10 @@ built-ins are `!ping`, `!help`, `!status`, `!new` and `!more`. You can add your 
   follows the command.
 - **AI** commands send the input to a model you choose. They can require your approval
   before replying, and can be limited to certain conversations.
+- **Download video** commands extract one Douyin or Xiaohongshu link from share
+  text, keep an encrypted original on the server and send a video strictly below
+  20 MB. Add the **Download video** template to create `!download`. The server-local
+  worker must be configured first; see [Download command setup](DOWNLOAD_COMMAND.md).
 
 **New** offers templates (Quick reply, AI assistant, Translator); new commands start
 disabled. **Try it** previews a command offline. Bot replies are limited per hour and per
@@ -181,3 +185,9 @@ Attach images, video, audio or documents with an optional caption. Like the Goog
 Messages app, each file goes as its own message, followed by the caption. Images, audio
 and video preview inline (iPhone HEIC photos are shown as a JPEG the server makes; the download is the original); other files download. Limits are under **Messages & privacy >
 Attachment limits**. A message with an attachment never runs a command.
+
+Download commands accept fresh incoming messages and then use their own execution
+lifetime: 15 minutes by default, configurable up to 60 minutes in Commands. Activity
+shows preparation progress. Approval still expires after two minutes; pause and
+consent changes cancel sending. Restarting SmsBot remains paused and cancels unsent
+jobs. See [Download command](DOWNLOAD_COMMAND.md) for checkpoint recovery details.

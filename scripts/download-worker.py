@@ -1,0 +1,424 @@
+"""Server-local video worker for SmsBot. Only authenticated loopback HTTP.
+
+Uses the existing downloader's anonymous Rednote runner, never a browser vault.
+Subprocess output and HTTP bodies are never logged. Originals and send copies
+are intentionally kept in the owner's download directory.
+"""
+import argparse
+import hashlib
+import re
+import tempfile
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+import hmac
+import json
+import math
+import os
+from pathlib import Path
+import secrets
+import shutil
+import signal
+import subprocess
+import threading
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import urlsplit
+
+LIMIT = 20_000_000 - 1
+work = threading.local()
+
+
+class LeaseExpired(Exception):
+    pass
+
+
+def valid_url(value):
+    if not isinstance(value, str) or len(value) > 4096:
+        return False
+    try:
+        u = urlsplit(value)
+        return (u.scheme == "https" and not u.username and not u.password and
+                u.port is None and any(u.hostname == h or (u.hostname or "").endswith("." + h)
+                for h in ("douyin.com", "xiaohongshu.com", "xhslink.com")))
+    except ValueError:
+        return False
+
+
+def run(args, deadline, capture=False):
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError()
+    folder = getattr(work, "folder", None)
+    if folder and Path(args[0]).name == "ffmpeg":
+        args = args[:1] + ["-progress", str(folder / "progress"), "-stats_period", "1"] + args[1:]
+    p = subprocess.Popen(args, stdin=subprocess.DEVNULL,
+                         stdout=subprocess.PIPE if capture else subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL,
+                         creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
+                         start_new_session=os.name != "nt")
+    last, signature = time.monotonic(), None
+    try:
+        while True:
+            if time.monotonic() >= deadline:
+                raise TimeoutError()
+            if getattr(work, "alive", None) and not work.alive():
+                raise LeaseExpired()
+            if folder:
+                current = []
+                for f in sorted(folder.rglob("*")):
+                    try:
+                        if f.is_file():
+                            if f.name == "progress":
+                                with f.open("rb") as progress:
+                                    progress.seek(max(0, f.stat().st_size-4096))
+                                    values = re.findall(rb"(?:frame|out_time_us)=([0-9]+)", progress.read())
+                                current.append((str(f), tuple(values[-2:])))
+                            else:
+                                current.append((str(f), f.stat().st_size))
+                    except FileNotFoundError:
+                        pass
+                if current != signature:
+                    signature, last = current, time.monotonic()
+                if time.monotonic() - last > getattr(work, "stall_seconds", 120):
+                    raise RuntimeError("progress_stalled")
+            try:
+                output, _ = p.communicate(timeout=min(1, max(.01, deadline-time.monotonic())))
+                if p.returncode:
+                    raise RuntimeError("process_failed")
+                return output
+            except subprocess.TimeoutExpired:
+                pass
+    finally:
+        if p.poll() is None:
+            if os.name == "nt":
+                subprocess.run(["taskkill", "/PID", str(p.pid), "/T", "/F"],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            else:
+                os.killpg(p.pid, signal.SIGKILL)
+            p.wait()
+
+
+def probe(source, deadline):
+    return json.loads(run(["ffprobe", "-v", "error", "-show_streams", "-show_format",
+                           "-of", "json", str(source)], deadline, capture=True))
+
+
+def compress(source, destination, limit, deadline, encoder=None):
+    """Use CPU H.264 two-pass on Linux, or the existing AV1 NVENC on Windows.
+
+    Target just below the ceiling and re-encode with measured size correction
+    if muxing overshoots. Preserve resolution/aspect ratio rather than imposing
+    the old batch script's fixed landscape scaling on portrait videos.
+    """
+    encoder = encoder or ("libx264" if os.name != "nt" else "av1_nvenc")
+    info = probe(source, deadline)
+    duration = float(info["format"]["duration"])
+    if not math.isfinite(duration) or duration <= 0:
+        raise ValueError("invalid_duration")
+    if not any(s.get("codec_type") == "video" for s in info["streams"]):
+        raise ValueError("video_required")
+    audio = any(s.get("codec_type") == "audio" for s in info["streams"])
+    if source.stat().st_size <= limit:
+        shutil.copy2(source, destination)
+    else:
+        target = int(limit * .985)
+        audio_rate = 128000 if audio else 0
+        rate = int(target * 8 / duration - audio_rate - 12000)
+        if rate < 32000:
+            raise ValueError("video_too_long")
+        for _ in range(3):
+            base = ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+                 "-i", str(source), "-map", "0:v:0", "-map", "0:a:0?",
+                 "-map_metadata", "-1", "-map_chapters", "-1"]
+            if encoder == "libx264":
+                stats = str(destination.with_suffix(".pass"))
+                video = ["-c:v", "libx264", "-preset", "slow", "-threads", "2", "-pix_fmt", "yuv420p", "-b:v", str(rate), "-passlogfile", stats]
+                try:
+                    run(base + video + ["-pass", "1", "-an", "-f", "null", "-"], deadline)
+                    run(base + video + ["-pass", "2", "-c:a", "aac", "-b:a", str(audio_rate or 128000), "-movflags", "+faststart", str(destination)], deadline)
+                finally:
+                    for log in destination.parent.glob(destination.with_suffix(".pass").name + "*"):
+                        log.unlink(missing_ok=True)
+            else:
+                run(base + ["-c:v", "av1_nvenc", "-preset", "p7", "-tune", "hq",
+                 "-multipass", "fullres", "-rc", "vbr", "-b:v", str(rate),
+                 "-maxrate", str(rate * 2), "-bufsize", str(rate * 4),
+                 "-rc-lookahead", "32", "-spatial-aq", "1", "-temporal-aq", "1",
+                 "-pix_fmt", "p010le", "-c:a", "aac", "-b:a", str(audio_rate or 128000),
+                 "-movflags", "+faststart", str(destination)], deadline)
+            size = destination.stat().st_size
+            if 0 < size <= limit:
+                break
+            rate = max(32000, int(rate * target / size * .98))
+        else:
+            raise ValueError("size_limit")
+    if not 0 < destination.stat().st_size <= limit:
+        raise ValueError("size_limit")
+    if getattr(work, "stage", None):
+        work.stage("verifying")
+    result = probe(destination, deadline)
+    if abs(float(result["format"]["duration"]) - duration) > .25:
+        raise ValueError("duration_changed")
+    if audio and not any(s.get("codec_type") == "audio" for s in result["streams"]):
+        raise ValueError("audio_missing")
+    run(["ffmpeg", "-nostdin", "-v", "error", "-xerror", "-i", str(destination),
+         "-f", "null", "-"], deadline)
+    return destination
+
+
+def seal_file(source, destination, key):
+    nonce = secrets.token_bytes(12)
+    encrypt = Cipher(algorithms.AES(key), modes.GCM(nonce)).encryptor()
+    encrypt.authenticate_additional_data((destination.parent.name + ":" + destination.name).encode())
+    temporary = destination.with_suffix(".tmp")
+    with source.open("rb") as src, temporary.open("wb") as out:
+        out.write(nonce)
+        while chunk := src.read(1024*1024):
+            out.write(encrypt.update(chunk))
+        out.write(encrypt.finalize())
+        out.write(encrypt.tag)
+        out.flush()
+        os.fsync(out.fileno())
+    temporary.replace(destination)
+
+
+def open_file(source, destination, key):
+    if source.stat().st_size < 28:
+        raise ValueError("invalid_checkpoint")
+    with source.open("rb") as src, destination.open("wb") as out:
+        nonce = src.read(12)
+        src.seek(-16, 2)
+        tag = src.read(16)
+        length = src.tell() - 28
+        src.seek(12)
+        decrypt = Cipher(algorithms.AES(key), modes.GCM(nonce, tag)).decryptor()
+        decrypt.authenticate_additional_data((source.parent.name + ":" + source.name).encode())
+        while length:
+            chunk = src.read(min(length, 1024*1024))
+            if not chunk:
+                raise ValueError("invalid_checkpoint")
+            out.write(decrypt.update(chunk))
+            length -= len(chunk)
+        out.write(decrypt.finalize())
+
+
+class Jobs:
+    """Encrypted checkpoints; one encoder, short authenticated HTTP polls.
+
+    Polls renew a 30-second lease. Loss of bot consent stops work when the
+    lease expires; checkpoints survive. Only the bot can authorize sending.
+    """
+    def __init__(self, root, token, output_root=None):
+        self.root = root
+        self.directory = output_root or root / "downloads" / "smsbot"
+        self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self.key = hashlib.sha256(("smsbot-download-jobs:" + token).encode()).digest()
+        self.scratch = self.directory / ".scratch"
+        # Clean only this worker's resolved scratch directory after a crash.
+        if self.scratch.resolve().parent != self.directory.resolve():
+            raise ValueError("invalid_scratch_directory")
+        if self.scratch.exists():
+            shutil.rmtree(self.scratch)
+        self.scratch.mkdir(mode=0o700)
+        self.lock = threading.RLock()
+        self.active = {}
+        self.busy = threading.Lock()
+
+    def path(self, job):
+        if not re.fullmatch(r"[a-f0-9]{64}", job):
+            raise ValueError("invalid_job")
+        path = self.directory / job
+        path.mkdir(exist_ok=True, mode=0o700)
+        return path
+
+    def save(self, path, value):
+        nonce = secrets.token_bytes(12)
+        data = nonce + AESGCM(self.key).encrypt(nonce, json.dumps(value).encode(), path.name.encode())
+        temporary = path / "state.tmp"
+        with temporary.open("wb") as out:
+            out.write(data)
+            out.flush()
+            os.fsync(out.fileno())
+        temporary.replace(path / "state.enc")
+
+    def load(self, path):
+        data = (path / "state.enc").read_bytes()
+        return json.loads(AESGCM(self.key).decrypt(data[:12], data[12:], path.name.encode()))
+
+    def poll(self, job, request):
+        with self.lock:
+            path = self.path(job)
+            if (path / "state.enc").exists():
+                state = self.load(path)
+                if any(state[k] != request[k] for k in ("url", "max_bytes", "deadline")):
+                    raise ValueError("immutable_job")
+            else:
+                state = {**request, "stage": "queued"}
+                self.save(path, state)
+            if time.time() >= state["deadline"]:
+                state["stage"] = "expired"
+                self.save(path, state)
+            elif state["stage"] not in ("complete", "failed", "expired"):
+                if job in self.active:
+                    self.active[job] = time.monotonic() + 30
+                elif len(self.active) < 100:
+                    self.active[job] = time.monotonic() + 30
+                    threading.Thread(target=self.execute, args=(job,), daemon=True).start()
+                else:
+                    raise RuntimeError("busy")
+            return {"stage": state["stage"]}
+
+    def execute(self, job):
+        state, path = None, None
+        try:
+            with self.busy:
+                with self.lock:
+                    path = self.path(job)
+                    state = self.load(path)
+                def alive():
+                    with self.lock:
+                        return time.monotonic() < self.active.get(job, 0) and time.time() < state["deadline"]
+                if not alive():
+                    return
+                def stage(value):
+                    with self.lock:
+                        state["stage"] = value
+                        self.save(path, state)
+                # Working files are transient, owner-only; only encrypted files
+                # are published as durable checkpoints.
+                with tempfile.TemporaryDirectory(prefix="video-", dir=self.scratch) as tmp:
+                    folder = Path(tmp)
+                    work.folder, work.alive, work.stage = folder, alive, stage
+                    deadline = time.monotonic() + max(0, state["deadline"] - time.time())
+                    original = folder / "original.mp4"
+                    checkpoint = path / "original.enc"
+                    if checkpoint.exists():
+                        open_file(checkpoint, original, self.key)
+                    else:
+                        stage("downloading")
+                        originals = folder / "originals"
+                        originals.mkdir()
+                        receipt = folder / "receipt.json"
+                        python = self.root / "research/.oss-venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+                        run([str(python), str(Path(__file__).with_name("download-source.py")),
+                             "--root", str(self.root), state["url"], "--output", str(originals),
+                             "--receipt", str(receipt), "--timeout", str(max(1, int(deadline-time.monotonic())))], deadline)
+                        files = [Path(f).resolve() for f in json.loads(receipt.read_text())["files"]]
+                        if len(files) != 1 or not files[0].is_relative_to(originals.resolve()) or files[0].suffix.lower() != ".mp4":
+                            raise ValueError("single_video_required")
+                        files[0].replace(original)
+                        seal_file(original, checkpoint, self.key)
+                    stage("compressing")
+                    output = compress(original, folder / "send.mp4", state["max_bytes"], deadline)
+                    if not alive():
+                        raise LeaseExpired()
+                    seal_file(output, path / "result.enc", self.key)
+                    stage("complete")
+        except (TimeoutError, LeaseExpired):
+            with self.lock:
+                state["stage"] = "expired" if time.time() >= state["deadline"] else "queued"
+                self.save(path, state)
+        except Exception:
+            if state is None:
+                return
+            with self.lock:
+                state["stage"] = "failed"
+                self.save(path, state)
+        finally:
+            with self.lock:
+                self.active.pop(job, None)
+
+    def result(self, job, destination):
+        with self.lock:
+            path = self.path(job)
+            state = self.load(path)
+            if state["stage"] != "complete" or time.time() >= state["deadline"]:
+                raise ValueError("result_unavailable")
+            open_file(path / "result.enc", destination, self.key)
+            if not 0 < destination.stat().st_size <= state["max_bytes"]:
+                raise ValueError("size_limit")
+
+
+def create_server(root, token, port, output_root=None):
+    jobs = Jobs(root, token, output_root)
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def job_request(self):
+            self.connection.settimeout(10)
+            if not hmac.compare_digest(self.headers.get("Authorization", "").encode(), ("Bearer " + token).encode()):
+                self.send_error(401)
+                return
+            try:
+                parts = self.path.split("/")
+                if len(parts) not in (4, 5) or parts[:3] != ["", "download", "jobs"]:
+                    raise ValueError()
+                job = parts[3]
+                if self.command == "POST" and len(parts) == 4:
+                    length = int(self.headers.get("Content-Length", "0"))
+                    if not 0 < length <= 16384:
+                        raise ValueError()
+                    request = json.loads(self.rfile.read(length))
+                    if (not valid_url(request.get("url")) or type(request.get("max_bytes")) is not int or
+                        not 100000 <= request["max_bytes"] <= LIMIT or type(request.get("deadline")) is not int or
+                        not time.time()-5 < request["deadline"] <= time.time()+3600):
+                        raise ValueError()
+                    data = json.dumps(jobs.poll(job, request)).encode()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(data)))
+                    self.send_header("Cache-Control", "no-store")
+                    self.end_headers()
+                    self.wfile.write(data)
+                elif self.command == "GET" and len(parts) == 5 and parts[4] == "result":
+                    with tempfile.TemporaryDirectory(prefix="result-", dir=jobs.scratch) as tmp:
+                        destination = Path(tmp) / "result.mp4"
+                        jobs.result(job, destination)
+                        self.send_response(200)
+                        self.send_header("Content-Type", "video/mp4")
+                        self.send_header("Content-Length", str(destination.stat().st_size))
+                        self.send_header("Cache-Control", "no-store")
+                        self.end_headers()
+                        with destination.open("rb") as src:
+                            shutil.copyfileobj(src, self.wfile)
+                else:
+                    self.send_error(404)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            except Exception:
+                self.send_error(502, "download_failed")
+
+        def do_GET(self):
+            self.job_request()
+
+        def do_POST(self):
+            if self.path.startswith("/download/jobs/"):
+                return self.job_request()
+            # Old synchronous helpers must be upgraded with the bot.
+            self.send_error(410, "async_download_required")
+
+    return ThreadingHTTPServer(("127.0.0.1", port), Handler)
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--root", type=Path, required=True)
+    parser.add_argument("--output-root", type=Path)
+    parser.add_argument("--token-file", type=Path, required=True)
+    parser.add_argument("--port", type=int, default=8767)
+    args = parser.parse_args()
+    if not (args.root / "research/rednote_downloader/app/downloader.py").is_file():
+        raise SystemExit("Existing Rednote engine not found.")
+    if not args.token_file.exists():
+        args.token_file.parent.mkdir(parents=True, exist_ok=True)
+        with args.token_file.open("x", encoding="ascii") as f:
+            f.write(secrets.token_urlsafe(48))
+        if os.name != "nt":
+            args.token_file.chmod(0o600)
+    worker_token = args.token_file.read_text(encoding="ascii").strip()
+    if len(worker_token) < 32:
+        raise SystemExit("Invalid worker token file.")
+    print("Download worker ready on loopback; originals remain in the configured downloads folder.", flush=True)
+    create_server(args.root.resolve(), worker_token, args.port, output_root=args.output_root).serve_forever()

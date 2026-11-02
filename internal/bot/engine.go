@@ -22,13 +22,16 @@ type Engine struct {
 	Store      *store.Store
 	Transport  transport.Transport
 	Provider   Provider
+	Downloader DownloadProvider
 	// mu is the control lock shared with Collection: send decisions serialize
 	// with consent changes and protected commits.
-	mu         *sync.Mutex
-	preflight  preflightRetry
-	dispatchMu sync.Mutex
-	now        func() time.Time
-	pending    map[string]context.CancelFunc
+	mu              *sync.Mutex
+	preflight       preflightRetry
+	dispatchMu      sync.Mutex
+	now             func() time.Time
+	pending         map[string]context.CancelFunc
+	downloadUploads map[string]downloadUpload
+	downloadWG      sync.WaitGroup
 }
 
 // New wires an engine without touching storage or starting work. control is
@@ -38,7 +41,7 @@ func New(s *store.Store, t transport.Transport, c *collection.Service, control *
 	if _, offline := t.(*transport.Fixture); offline {
 		provider = SimulatedProvider{}
 	}
-	return &Engine{Collection: c, Store: s, Transport: t, Provider: provider, mu: control, now: time.Now, pending: map[string]context.CancelFunc{}}
+	return &Engine{Collection: c, Store: s, Transport: t, Provider: provider, mu: control, now: time.Now, pending: map[string]context.CancelFunc{}, downloadUploads: map[string]downloadUpload{}}
 }
 
 // Init performs the engine's one-time startup work: offline fixture mode
@@ -458,6 +461,24 @@ func (e *Engine) planCommand(ctx context.Context, m transport.Incoming, p *store
 		return "", false, nil
 	}
 	name = cmd.Name
+	if cmd.Type == "download" {
+		if parent != nil {
+			return "", false, nil
+		}
+		p.Approval = cmd.Approval
+		p.DownloadURL = downloadURL(input)
+		if p.DownloadURL != "" {
+			minutes := cmd.ExecutionMinutes
+			if minutes == 0 {
+				minutes = 15
+			}
+			p.ExecutionDeadline = e.now().Add(time.Duration(minutes) * time.Minute).UTC().Format(time.RFC3339Nano)
+		}
+		if p.DownloadURL == "" {
+			p.Reply = "Include one Douyin or Xiaohongshu video link after the command."
+		}
+		return name, true, nil
+	}
 	// Only the canonical AI ask uses explicit threads. Other command memory stays unchanged.
 	threaded := cmd.Name == "ask" && cmd.Type == "ai"
 	if parent != nil && (!threaded || !cmd.Memory) {
@@ -767,7 +788,15 @@ func (e *Engine) check(ctx context.Context, j store.Job, p store.Plan) (Configur
 		return cfg, "transport_unavailable", nil
 	}
 	at, err := time.Parse(time.RFC3339Nano, j.CreatedAt)
-	if err != nil || e.now().Sub(at) > 2*time.Minute {
+	if err != nil {
+		return cfg, "stale", nil
+	}
+	if p.DownloadURL != "" && p.ExecutionDeadline != "" {
+		deadline, err := time.Parse(time.RFC3339Nano, p.ExecutionDeadline)
+		if err != nil || !e.now().Before(deadline) {
+			return cfg, "execution_expired", nil
+		}
+	} else if e.now().Sub(at) > 2*time.Minute {
 		return cfg, "stale", nil
 	}
 	if quiet(cfg.Settings, e.now()) {
@@ -776,6 +805,11 @@ func (e *Engine) check(ctx context.Context, j store.Job, p store.Plan) (Configur
 	inbox, err := e.Collection.Settings()
 	if err != nil {
 		return cfg, "", err
+	}
+	if p.DownloadURL != "" {
+		if err := inbox.FileLimits().Check(p.Attachments); err != nil {
+			return cfg, "attachment_limits_changed", nil
+		}
 	}
 	if !p.Manual && !inbox.AutomaticReplies {
 		return cfg, "automatic_replies_disabled", nil
@@ -837,6 +871,10 @@ func (e *Engine) Dispatch(ctx context.Context) error {
 	e.dispatchMu.Lock()
 	defer e.dispatchMu.Unlock()
 	e.mu.Lock()
+	if err := e.collectDownloadUploads(ctx); err != nil {
+		e.mu.Unlock()
+		return err
+	}
 	j, p, cfg, ready, err := e.nextReady(ctx)
 	if !ready || err != nil {
 		e.mu.Unlock()
@@ -846,6 +884,9 @@ func (e *Engine) Dispatch(ctx context.Context) error {
 		return e.dispatchReaction(ctx, j, p) // releases the lock
 	}
 	defer e.mu.Unlock()
+	if done, err := e.prepareDownload(ctx, j, &p); done {
+		return err
+	}
 	history, err := e.memoryContext(j, cfg, &p)
 	if err != nil {
 		return err
@@ -853,7 +894,11 @@ func (e *Engine) Dispatch(ctx context.Context) error {
 	if done, err := e.generateReply(ctx, j, &p, &cfg, history); done {
 		return err
 	}
-	if done, err := e.prepareFiles(ctx, j, &p); done {
+	if p.DownloadURL != "" {
+		if done, err := e.prepareDownloadUpload(ctx, j, &p); done {
+			return err
+		}
+	} else if done, err := e.prepareFiles(ctx, j, &p); done {
 		return err
 	}
 	return e.submit(ctx, j, p, cfg, history)
@@ -893,7 +938,7 @@ func (e *Engine) nextReady(ctx context.Context) (j store.Job, p store.Plan, cfg 
 			_, err = e.Store.Transition(j.ID, "queued", "awaiting_approval")
 		} else {
 			state := "cancelled"
-			if code == "stale" {
+			if code == "stale" || code == "execution_expired" {
 				state = "expired"
 			}
 			err = e.Store.Complete(j.ID, state, code)
@@ -1296,9 +1341,18 @@ func (e *Engine) Playground(name, input string) (map[string]any, error) {
 	if cmd.Type == "fixed" {
 		text = strings.ReplaceAll(instructions, "{input}", input)
 	}
+	if cmd.Type == "download" {
+		model = "Local"
+		text = "Include one Douyin or Xiaohongshu video link after the command."
+		if downloadURL(input) != "" {
+			text = "Video link recognized. A live command saves the original on the server and sends a video under 20 MB. No download or send was performed by this preview."
+		}
+	}
 	return map[string]any{"text": text, "model": model, "simulated": true}, nil
 }
 func (e *Engine) Run(ctx context.Context, report func(error)) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer func() { cancel(); e.downloadWG.Wait() }()
 	ticker := time.NewTicker(250 * time.Millisecond)
 	defer ticker.Stop()
 	retention := time.NewTicker(time.Hour)

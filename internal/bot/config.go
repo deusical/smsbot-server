@@ -37,6 +37,7 @@ type Settings struct {
 	OwnerCommands bool `json:"owner_commands"`
 }
 type Command struct {
+	ExecutionMinutes     int         `json:"execution_minutes,omitempty"`
 	Name                 string      `json:"name"`
 	Description          string      `json:"description"`
 	Instructions         string      `json:"instructions"`
@@ -104,7 +105,7 @@ func (c Configuration) Validate() error {
 	}
 	names := map[string]bool{}
 	for _, cmd := range c.Commands {
-		if !commandPattern.MatchString(cmd.Name) || strings.Contains("|ping|help|status|new|more|deepseek|", "|"+cmd.Name+"|") || names[cmd.Name] || len(cmd.Description) > 200 || len(cmd.Instructions) > 12000 || (cmd.Type != "ai" && cmd.Type != "fixed") || len(cmd.Model) > 200 || len(cmd.AllowedConversations) > 100 || cmd.ProfileID != "" && !profiles[cmd.ProfileID] {
+		if cmd.ExecutionMinutes < 0 || cmd.ExecutionMinutes > 60 || !commandPattern.MatchString(cmd.Name) || strings.Contains("|ping|help|status|new|more|deepseek|", "|"+cmd.Name+"|") || names[cmd.Name] || len(cmd.Description) > 200 || len(cmd.Instructions) > 12000 || (cmd.Type != "ai" && cmd.Type != "fixed" && cmd.Type != "download") || len(cmd.Model) > 200 || len(cmd.AllowedConversations) > 100 || cmd.ProfileID != "" && !profiles[cmd.ProfileID] {
 			return errors.New("invalid command")
 		}
 		if cmd.Generation != nil {

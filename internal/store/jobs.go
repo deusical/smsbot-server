@@ -56,3 +56,9 @@ func (s *Store) RecordSubmitted(txn, origin string, ownerOnly bool) error {
 	_, err := s.DB.Exec("INSERT INTO message_meta VALUES(?,?,'submitted',?) ON CONFLICT(message) DO UPDATE SET origin=excluded.origin,owner_only=excluded.owner_only,status=CASE WHEN message_meta.status IN ('read','delivered') THEN message_meta.status ELSE 'submitted' END", txn, origin, ownerOnly)
 	return err
 }
+
+// DeferWork records a sanitized preparation stage and lets other queued sends run.
+func (s *Store) DeferWork(id, stage string, until int64) error {
+	_, err := s.DB.Exec("INSERT INTO job_work VALUES(?,?,?) ON CONFLICT(job) DO UPDATE SET stage=excluded.stage,next_poll=excluded.next_poll", id, stage, until)
+	return err
+}

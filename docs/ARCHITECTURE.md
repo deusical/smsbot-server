@@ -91,6 +91,18 @@ sends twice.
 
 - **Sending:** `bot.Engine.Dispatch` runs each job's steps under one lock and releases it
   only while waiting on the AI provider or uploading files.
+- **Download commands:** an encrypted plan snapshots the URL and independent
+  execution deadline (15 minutes by default, up to 60). Admission still requires
+  fresh input. Dispatch makes short idempotent requests to a token-authenticated
+  loopback worker and defers its next poll in `job_work`, letting other sends run.
+  One background upload lane also yields dispatch; its results are committed only
+  by dispatch after repeating safety checks. Activity exposes sanitized stages. The single-slot worker encrypts
+  originals, verified MP4 results and metadata; checkpoints survive worker restart.
+  Progress watchdogs and a renewable lease stop stalled or unauthorized work.
+  Every normal enrollment, pause, attachment and send check still applies, with
+  the execution deadline replacing post-acceptance freshness for these jobs.
+  Restarting SmsBot still pauses and cancels unsent jobs. Checkpoints alone never
+  authorize a send. See [Download command](DOWNLOAD_COMMAND.md).
 - **AI threads:** each `!ask` answer is linked to its upstream message ID, so a native
   reply to it continues that thread. Quoting the prompt is optional: after a definite
   native-reply non-submission, the same recorded answer and transaction may be sent

@@ -50,6 +50,21 @@ jobs:
             web/dist/
           retention-days: 1
           compression-level: 1
+  download-worker:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install offline worker test dependencies
+        run: |
+          python -m pip install 'cryptography>=45,<47'
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+      - name: Worker fixtures and synthetic FFmpeg verification
+        run: python -B -m unittest discover -s scripts -p test_download_worker.py
   backend:
     needs: build
     runs-on: ubuntu-24.04

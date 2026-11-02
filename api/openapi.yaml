@@ -1466,6 +1466,10 @@ components:
     Job:
       type: object
       properties:
+        preparation_stage:
+          type: string
+          description: Last observed worker stage; historical after completion. Does not authorize sending.
+          enum: [waiting_worker, queued, downloading, compressing, verifying, complete, waiting_upload, uploading, ready]
         id:
           type: string
         conversation_id:
@@ -1572,6 +1576,11 @@ components:
       type: object
       additionalProperties: false
       properties:
+        execution_minutes:
+          type: integer
+          minimum: 0
+          maximum: 60
+          description: Download execution lifetime from acceptance, including queueing and upload. Zero or absent means 15 minutes. Snapshotted in the encrypted immutable plan. Incoming freshness and approval remain two minutes.
         name:
           type: string
           pattern: ^[a-z][a-z0-9_-]{0,23}$
@@ -1579,9 +1588,11 @@ components:
         instructions: *id002
         type:
           type: string
+          description: Download commands use an owner-configured server-local worker; see docs/DOWNLOAD_COMMAND.md. No worker token is exposed by this API.
           enum:
           - ai
           - fixed
+          - download
         enabled: *id001
         memory:
           type: boolean
