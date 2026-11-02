@@ -40,6 +40,7 @@ export type Conversation = {
   preview_from_me?: boolean;
 };
 export type Job = {
+  preparation_stage?: string;
   id: string;
   conversation_id: string;
   command: string;
@@ -145,10 +146,11 @@ export type CompatibleProviderStatus = {
   configured: boolean;
 };
 export type Command = {
+  execution_minutes?: number;
   name: string;
   description: string;
   instructions: string;
-  type: "ai" | "fixed";
+  type: "ai" | "fixed" | "download";
   enabled: boolean;
   model: string;
   profile_id: string;

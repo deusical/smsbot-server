@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"github.com/deusical/smsbot-server/internal/app"
 	"github.com/deusical/smsbot-server/internal/archive"
+	"github.com/deusical/smsbot-server/internal/bot"
 	"github.com/deusical/smsbot-server/internal/httpapi"
 	"github.com/deusical/smsbot-server/internal/store"
 	"github.com/deusical/smsbot-server/internal/transport"
@@ -16,9 +17,11 @@ import (
 	"github.com/gofrs/flock"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -37,23 +40,24 @@ func run() error {
 }
 
 type options struct {
-	showVersion         bool
-	data, key           string
-	listen, origin      string
-	tlsCert, tlsKey     string
-	backup              string
-	archiveBackup       string
-	archiveRestore      string
-	archivePlain        bool
-	archiveSince        string
-	archiveConversation string
-	restore             string
-	ownerFile           string
-	init                bool
-	fixture             bool
-	pair                bool
-	updateCookies       bool
-	cookiesStdin        bool
+	showVersion                         bool
+	data, key                           string
+	listen, origin                      string
+	tlsCert, tlsKey                     string
+	backup                              string
+	archiveBackup                       string
+	archiveRestore                      string
+	archivePlain                        bool
+	archiveSince                        string
+	archiveConversation                 string
+	restore                             string
+	ownerFile                           string
+	init                                bool
+	fixture                             bool
+	pair                                bool
+	updateCookies                       bool
+	cookiesStdin                        bool
+	downloadEndpoint, downloadTokenFile string
 }
 
 func parseOptions(args []string) (*options, error) {
@@ -79,6 +83,8 @@ func parseOptions(args []string) (*options, error) {
 	flags.BoolVar(&o.pair, "pair", false, "pair Google Messages locally with owner emoji approval")
 	flags.BoolVar(&o.updateCookies, "update-cookies", false, "replace cookies in the existing encrypted pairing offline")
 	flags.BoolVar(&o.cookiesStdin, "cookies-stdin", false, "read Google cookies from stdin, never command arguments")
+	flags.StringVar(&o.downloadEndpoint, "download-endpoint", "", "server-local download worker endpoint")
+	flags.StringVar(&o.downloadTokenFile, "download-token-file", "", "worker token file outside source")
 	if e := flags.Parse(args); e != nil {
 		return nil, e
 	}
@@ -429,6 +435,17 @@ func (o *options) serve(s *store.Store, v *vault.Vault, sessionPath string) erro
 		defer google.Close()
 	}
 	service := app.New(s, t, filepath.Join(filepath.Dir(s.Path), "archive"))
+	if o.downloadEndpoint != "" && !o.fixture {
+		u, err := url.Parse(o.downloadEndpoint)
+		if err != nil || u.Scheme != "http" || u.User != nil || (u.Hostname() != "127.0.0.1" && u.Hostname() != "localhost" && u.Hostname() != "::1") {
+			return errors.New("download endpoint must use loopback HTTP")
+		}
+		token, err := os.ReadFile(o.downloadTokenFile)
+		if err != nil || len(strings.TrimSpace(string(token))) < 32 {
+			return errors.New("download token file unavailable or invalid")
+		}
+		service.Engine.Downloader = &bot.HTTPDownloader{Endpoint: o.downloadEndpoint, Token: strings.TrimSpace(string(token))}
+	}
 	// Push services require a contact for the sending server: its origin.
 	service.Notify.Subject = origin
 	if e = service.Init(); e != nil {

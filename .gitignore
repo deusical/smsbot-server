@@ -17,6 +17,7 @@ coverage*
 playwright-report/
 test-results/
 web/.test-state/
+__pycache__/
 
 # Local implementation handoff
 docs/CHECKPOINT.md

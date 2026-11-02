@@ -73,7 +73,7 @@ export function ActivityFeed({
                 >
                   {timeAgo(j.created_at)}
                 </time>
-                <span className="status">{stateLabel(j.state)}</span>
+                <span className="status">{stateLabel(j.state)}{pendingStates.includes(j.state) && j.preparation_stage ? ` / ${j.preparation_stage.replaceAll("_", " ")}` : ""}</span>
               </button>
               {act && pendingStates.includes(j.state) && (
                 <span className="feed-actions">
