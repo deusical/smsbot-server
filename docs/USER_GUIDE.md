@@ -79,7 +79,17 @@ built-ins are `!ping`, `!help`, `!status`, `!new` and `!more`. You can add your 
   20 MB. Add the **Download video** template to create `!download`. The server-local
   worker must be configured first; see [Download command setup](DOWNLOAD_COMMAND.md).
 
-**New** offers templates (Quick reply, AI assistant, Translator); new commands start
+- **Custom steps** commands are built from modules, one step after another. Each
+  step's inputs connect to the command message or to an earlier step's output, and
+  only outputs of a fitting kind are offered. For example: **Find video link** →
+  **Download video** → **Compress video** → **Text** ("Here you go: {input}") →
+  **Reply** with that text and the video. The last step is always **Reply**, the
+  only one that sends, after the same checks as every reply. A command can use one
+  AI step; with a conversation step it remembers recent exchanges or continues reply
+  threads. Choosing **Custom steps** on an existing command starts from the steps it
+  already runs. **Try it** lists what each step produced.
+
+**New** offers templates (Quick reply, AI assistant, Translator, Custom steps); new commands start
 disabled. **Try it** previews a command offline. Bot replies are limited per hour and per
 day, and AI spending per day; your own messages never count toward these limits. Quiet
 hours drop requests instead of delaying them. With **Commands from your phone** on, your

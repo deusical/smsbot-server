@@ -60,6 +60,19 @@ func (e *Engine) CommandKindDefinitions() ([]KindDefinition, error) {
 	return defs, nil
 }
 
+// CommandPipeline returns the steps a command runs, for an editor converting
+// a template command to custom steps. Nothing is saved.
+func CommandPipeline(c Command) (Pipeline, error) {
+	if err := normalizeCommand(&c); err != nil {
+		return Pipeline{}, err
+	}
+	p := commandPipeline(c)
+	if len(p.Steps) == 0 {
+		return Pipeline{}, errors.New("invalid command pipeline")
+	}
+	return p, nil
+}
+
 // CommandModuleDefinitions lists the modules commands are built from, with the
 // video size ceiling lowered to this server's attachment limits.
 func (e *Engine) CommandModuleDefinitions() ([]ModuleDefinition, error) {

@@ -232,6 +232,25 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/CommandModule'
+  /command-pipeline:
+    post:
+      summary: Steps a command runs
+      description: Returns the validated pipeline the posted command would run, without saving anything. Editors use it to convert a template command (fixed, AI, download) to equivalent custom steps.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Command'
+      responses:
+        '200':
+          description: The command's steps
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Pipeline'
+        '400':
+          description: invalid_command
   /config:
     get:
       description: Encrypted server bot configuration

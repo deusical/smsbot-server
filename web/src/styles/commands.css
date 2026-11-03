@@ -364,3 +364,72 @@
   border-top: 1px solid var(--line);
 }
 
+
+/* Step editor: a command's modules in order. */
+.pipeline-steps {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+.pipeline-step {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+.pipeline-step.trigger {
+  border-style: dashed;
+}
+.pipeline-step p {
+  margin: 0;
+}
+.step-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.step-head select {
+  flex: 1 1 140px;
+  min-width: 0;
+}
+.step-number {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--line);
+  font-size: 12px;
+  font-weight: 600;
+  flex: none;
+}
+.step-id {
+  flex: 0 1 140px;
+  min-width: 0;
+  font-family: var(--mono, monospace);
+}
+.step-actions {
+  display: flex;
+  gap: 2px;
+  margin-left: auto;
+}
+.step-actions .flip {
+  display: inline-flex;
+  transform: rotate(180deg);
+}
+.type-tag[class*="effect-"] {
+  margin-left: 6px;
+}
+.type-tag.effect-paid {
+  color: var(--violet);
+}
+.preview-steps {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  font-size: 13px;
+}

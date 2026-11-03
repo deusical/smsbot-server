@@ -5,8 +5,13 @@ import {
   type Command,
   type Conversation,
   type CommandKind,
+  type CommandModule,
+  type Pipeline,
+  type PreviewStep,
 } from "../lib/api";
 import { SchemaSettings, settingsForKind } from "../components/SchemaSettings";
+import { PipelineEditor } from "../components/PipelineEditor";
+import { starterPipeline } from "../lib/pipeline";
 import { Icon } from "../components/Icon";
 import { Field, ModelPicker, Segmented, Switch } from "../components/ui";
 import { failure, type Workspace } from "../lib/workspace";
@@ -36,6 +41,17 @@ const templates: {
     label: "Blank",
     detail: "Start from scratch",
     command: {},
+  },
+  {
+    label: "Custom steps",
+    detail: "Connect modules: links, videos, AI, text",
+    command: {
+      name: "custom",
+      description: "Built from steps",
+      kind: "pipeline",
+      type: "fixed",
+      pipeline: starterPipeline(),
+    },
   },
   {
     label: "Quick reply",
@@ -90,11 +106,19 @@ export function CommandsPage({
     [mobileDetail, setMobileDetail] = useState(false);
   const [kinds, setKinds] = useState<CommandKind[]>([]);
   const [kindsError, setKindsError] = useState("");
+  const [modules, setModules] = useState<CommandModule[]>([]);
   useEffect(() => {
     let active = true;
     api<CommandKind[]>("/command-kinds")
       .then((v) => {
         if (active) setKinds(v);
+      })
+      .catch((e) => {
+        if (active) setKindsError(failure(e));
+      });
+    api<CommandModule[]>("/command-modules")
+      .then((v) => {
+        if (active) setModules(v);
       })
       .catch((e) => {
         if (active) setKindsError(failure(e));
@@ -306,6 +330,7 @@ export function CommandsPage({
                 key={index}
                 index={index}
                 kinds={kinds}
+                modules={modules}
                 kindsError={kindsError}
                 command={command}
                 workspace={workspace}
@@ -360,6 +385,7 @@ export function CommandsPage({
 
 function CommandEditor({
   kinds,
+  modules,
   kindsError,
   index,
   command,
@@ -373,6 +399,7 @@ function CommandEditor({
   onBack,
 }: {
   kinds: CommandKind[];
+  modules: CommandModule[];
   kindsError: string;
   index: number;
   command: Command;
@@ -392,6 +419,27 @@ function CommandEditor({
     kinds.find((k) => k.id === command.kind) ||
     kinds.find((k) => k.legacy_type === command.type);
   const unsaved = JSON.stringify(savedCommand) !== JSON.stringify(command);
+  const [converting, setConverting] = useState("");
+  const custom = definition?.id === "pipeline";
+  // Switching to custom steps starts from the steps the command already runs.
+  function toSteps() {
+    setConverting("");
+    api<Pipeline>("/command-pipeline", "POST", command)
+      .then((pipeline) =>
+        onChange({
+          kind: "pipeline",
+          type: "fixed",
+          settings: undefined,
+          instructions: "",
+          model: "",
+          profile_id: "",
+          generation: undefined,
+          execution_minutes: pipeline.execution_minutes,
+          pipeline,
+        }),
+      )
+      .catch((e) => setConverting(failure(e)));
+  }
   return (
     <div className="editor" aria-label={`Edit command ${index + 1}`}>
       <div className="editor-head">
@@ -461,18 +509,40 @@ function CommandEditor({
           options={kinds.map((k) => ({ value: k.id, label: k.title }))}
           onChange={(id) => {
             const k = kinds.find((k) => k.id === id);
-            if (k) onChange(settingsForKind(command, k));
+            if (!k) return;
+            if (k.id === "pipeline") toSteps();
+            else
+              onChange({ ...settingsForKind(command, k), pipeline: undefined });
           }}
         />
       </div>
       {kindsError && <p role="alert">{kindsError}</p>}
-      {definition && (
-        <SchemaSettings
-          definition={definition}
-          command={command}
+      {converting && (
+        <p role="alert" className="inline-alert">
+          {converting}
+        </p>
+      )}
+      {custom ? (
+        <PipelineEditor
+          pipeline={command.pipeline ?? { steps: [] }}
+          modules={modules}
           workspace={workspace}
-          onChange={onChange}
+          onChange={(pipeline) =>
+            onChange({
+              pipeline,
+              execution_minutes: pipeline.execution_minutes,
+            })
+          }
         />
+      ) : (
+        definition && (
+          <SchemaSettings
+            definition={definition}
+            command={command}
+            workspace={workspace}
+            onChange={onChange}
+          />
+        )
       )}
       <div className="editor-section">
         <h3>Behavior</h3>
@@ -537,6 +607,7 @@ function TryIt({
 }) {
   const [input, setInput] = useState(""),
     [result, setResult] = useState(""),
+    [steps, setSteps] = useState<PreviewStep[]>([]),
     [error, setError] = useState(""),
     [running, setRunning] = useState(false);
   return (
@@ -546,14 +617,19 @@ function TryIt({
         e.preventDefault();
         setRunning(true);
         setError("");
-        api<{ text: string; simulated: boolean }>("/playground", "POST", {
-          command: command.name,
-          input,
-        })
+        api<{ text: string; simulated: boolean; steps?: PreviewStep[] }>(
+          "/playground",
+          "POST",
+          {
+            command: command.name,
+            input,
+          },
+        )
           .then((r) => {
             if (!r.simulated)
               throw new ApiError(502, "simulation_not_confirmed");
             setResult(r.text);
+            setSteps(r.steps ?? []);
           })
           .catch((e) => setError(failure(e)))
           .finally(() => setRunning(false));
@@ -593,6 +669,18 @@ function TryIt({
             <span className="sender">Preview</span>
           </small>
         </div>
+      )}
+      {result && command.kind === "pipeline" && steps.length > 0 && (
+        <ol className="preview-steps" aria-label="Preview steps">
+          {steps.map((s) => (
+            <li key={s.id}>
+              <code>{s.id}</code>{" "}
+              {Object.entries(s.outputs)
+                .map(([k, v]) => `${k}: ${v}`)
+                .join("; ") || "done"}
+            </li>
+          ))}
+        </ol>
       )}
     </form>
   );
