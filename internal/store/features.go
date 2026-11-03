@@ -88,9 +88,10 @@ func (s *Store) Cancel(id string) error {
 	_, err := s.DB.Exec("UPDATE jobs SET state='cancelled',code='owner_cancelled',plan='' WHERE id=? AND state IN ('queued','generating','awaiting_approval')", id)
 	return err
 }
+
+// Usage records a job's single AI request. See StepUsage for jobs with several.
 func (s *Store) Usage(id, model string, prompt, completion, reasoning int, cost *float64) error {
-	_, err := s.DB.Exec("INSERT INTO usage(job,model,prompt_tokens,completion_tokens,reasoning_tokens,cost) VALUES(?,?,?,?,?,?) ON CONFLICT(job) DO UPDATE SET model=excluded.model,prompt_tokens=excluded.prompt_tokens,completion_tokens=excluded.completion_tokens,reasoning_tokens=excluded.reasoning_tokens,cost=excluded.cost", id, model, prompt, completion, reasoning, cost)
-	return err
+	return s.StepUsage(id, "", model, prompt, completion, reasoning, cost)
 }
 
 // botJobs leaves out what the owner sends by hand: the request limits are for

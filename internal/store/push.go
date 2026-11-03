@@ -54,7 +54,10 @@ func (s *Store) migratePush() error {
 	if _, err = tx.Exec(`CREATE TABLE IF NOT EXISTS push_subscriptions(id TEXT PRIMARY KEY,payload TEXT NOT NULL,created TEXT NOT NULL); PRAGMA user_version=8;`); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+	return s.migrate()
 }
 
 // PushSubscriptionID derives a device ID from its push endpoint.

@@ -877,7 +877,7 @@ func (e *Engine) generateReply(ctx context.Context, j store.Job, p *store.Plan, 
 	if err != nil || !ok {
 		return true, err
 	}
-	if err = e.Store.Usage(j.ID, call.Model, 0, 0, 0, nil); err != nil {
+	if err = e.Store.StepUsage(j.ID, call.Step, call.Model, 0, 0, 0, nil); err != nil {
 		return true, err
 	}
 	if err = e.Store.SetPublicSetting("requested_reasoning:"+j.ID, g.Reasoning); err != nil {
@@ -904,7 +904,7 @@ func (e *Engine) generateReply(ctx context.Context, j store.Job, p *store.Plan, 
 	if reportedModel == "" {
 		reportedModel = call.Model
 	}
-	if err = e.Store.Usage(j.ID, reportedModel, result.PromptTokens, result.CompletionTokens, result.ReasoningTokens, result.Cost); err != nil {
+	if err = e.Store.StepUsage(j.ID, call.Step, reportedModel, result.PromptTokens, result.CompletionTokens, result.ReasoningTokens, result.Cost); err != nil {
 		return true, err
 	}
 	current, _, loaderr := e.Store.JobPlan(j.ID)

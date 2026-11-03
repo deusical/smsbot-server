@@ -84,9 +84,10 @@ built-ins are `!ping`, `!help`, `!status`, `!new` and `!more`. You can add your 
   only outputs of a fitting kind are offered. For example: **Find video link** →
   **Download video** → **Compress video** → **Text** ("Here you go: {input}") →
   **Reply** with that text and the video. The last step is always **Reply**, the
-  only one that sends, after the same checks as every reply. A command can use one
-  AI step; with a conversation step it remembers recent exchanges or continues reply
-  threads. Choosing **Custom steps** on an existing command starts from the steps it
+  only one that sends, after the same checks as every reply. A command can use
+  several AI steps, such as summarize and then translate; each request counts
+  toward the AI spending limit. With a conversation step, one AI step remembers
+  recent exchanges or continues reply threads. Choosing **Custom steps** on an existing command starts from the steps it
   already runs. **Try it** lists what each step produced.
 
 **New** offers templates (Quick reply, AI assistant, Translator, Custom steps); new commands start

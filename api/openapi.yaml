@@ -1775,7 +1775,7 @@ components:
         effect:
           type: string
           enum: [pure, local, paid, sink]
-          description: sink is the reply, the only module that leads to a send. A command may use one paid step.
+          description: sink is the reply, the only module that leads to a send. paid steps (AI requests) are each accounted, and the daily budget is checked before every one.
         retry_class: {type: string, enum: [none, idempotent-poll, local-repeatable]}
         resource_class: {type: string}
         immediate:
@@ -1802,10 +1802,12 @@ components:
       description: >-
         A command's steps. The trigger (outputs args and message) comes first
         implicitly. Steps run in order; each input binds to trigger.<output> or
-        an earlier <step>.<output> of a compatible type. At most 8 steps, at
-        most one paid (AI) step, and the last step is the reply. A conversation
-        (context.rolling or context.thread) feeds exactly one AI step whose
-        answer the reply sends and continues. Accepted jobs snapshot the
+        an earlier <step>.<output> of a compatible type. At most 8 steps, and
+        the last step is the reply. A conversation (context.rolling or
+        context.thread) feeds exactly one AI step whose answer the reply sends
+        and continues; with reply threads that step's prompt must be known when
+        the command arrives. Several AI steps, or a long-running step, give the
+        job the execution deadline. Accepted jobs snapshot the
         pipeline; later edits apply only to new requests. Invalid pipelines are
         rejected with 400 {error: invalid_pipeline, step, port, reason}.
       properties:

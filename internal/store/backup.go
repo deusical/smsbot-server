@@ -553,6 +553,10 @@ func (s *Store) RestoreBackup(data []byte) error {
 		if _, e = tx.Exec("INSERT INTO usage VALUES(?,?,?,?,?,?)", v.Job, v.Model, v.Prompt, v.Completion, v.Reasoning, v.Cost); e != nil {
 			return e
 		}
+		// The job's total as one step, so a later step adds to it.
+		if _, e = tx.Exec("INSERT INTO usage_steps VALUES(?,'',?,?,?,?,?)", v.Job, v.Model, v.Prompt, v.Completion, v.Reasoning, v.Cost); e != nil {
+			return e
+		}
 	}
 	if _, e = tx.Exec("INSERT INTO settings(key,value) VALUES('paused','true') ON CONFLICT(key) DO UPDATE SET value='true'"); e != nil {
 		return e

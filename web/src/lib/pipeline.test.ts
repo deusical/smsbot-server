@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { CommandModule, Pipeline } from "./api";
-import { connect, freshId, newStep, problems, sources } from "./pipeline";
+import {
+  connect,
+  freshId,
+  needsDeadline,
+  newStep,
+  problems,
+  sources,
+} from "./pipeline";
 
 const port = (name: string, types: string[], required = false) => ({
   name,
@@ -102,7 +109,20 @@ describe("pipeline helpers", () => {
     const found = problems(bad, modules);
     expect(found.video.join()).toContain("no longer comes before");
     expect(found.link.join()).toContain("Connect");
-    expect(found.b.join()).toContain("one AI step");
+    // Several AI steps are fine.
+    expect(found.b).toBeUndefined();
+    expect(needsDeadline(bad, modules)).toBe(true);
+    expect(
+      needsDeadline(
+        {
+          steps: [
+            { id: "a", module: "ai.chat" },
+            { id: "reply", module: "reply" },
+          ],
+        },
+        modules,
+      ),
+    ).toBe(false);
     expect(found.reply.join()).toContain("text or a file");
     const typed = problems(
       {

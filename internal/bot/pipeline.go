@@ -210,7 +210,7 @@ func validatePipeline(p *Pipeline, env pipelineEnv) error {
 	for _, o := range triggerOutputs {
 		outputs[triggerID][o.Name] = o.Types[0]
 	}
-	paid, threads := 0, 0
+	threads := 0
 	consumers := map[string][]string{} // binding -> step ids using it
 	for i := range p.Steps {
 		s := &p.Steps[i]
@@ -235,11 +235,6 @@ func validatePipeline(p *Pipeline, env pipelineEnv) error {
 		}
 		if i == len(p.Steps)-1 && m.Effect != effectSink {
 			return pipelineErr(s.ID, "", "the last step must be the reply")
-		}
-		if m.Effect == effectPaid {
-			if paid++; paid > 1 {
-				return pipelineErr(s.ID, "", "a command can use one AI step")
-			}
 		}
 		if s.Module == "context.thread" {
 			if threads++; threads > 1 {
@@ -305,11 +300,13 @@ func validatePipeline(p *Pipeline, env pipelineEnv) error {
 		if reply.Inputs["continues"] != ai.ID+".context" {
 			return pipelineErr(reply.ID, "continues", "the reply must continue the AI step's conversation")
 		}
+		// A thread records the question when the command arrives; recent
+		// memory records the turn when the reply is sent.
 		for _, port := range []string{"prompt", "file"} {
-			if b := ai.Inputs[port]; b != "" {
+			if b := ai.Inputs[port]; b != "" && s.Module == "context.thread" {
 				from, _, _ := strings.Cut(b, ".")
 				if !immediate[from] {
-					return pipelineErr(ai.ID, port, "with a conversation, this must come from a step that finishes when the command arrives")
+					return pipelineErr(ai.ID, port, "with reply threads, this must come from a step that finishes when the command arrives")
 				}
 			}
 		}
@@ -347,13 +344,44 @@ func (p Pipeline) has(moduleID string) bool {
 	return false
 }
 
+// longRunning reports whether the pipeline's work can outlast the two-minute
+// freshness window: a long-running step, or several AI requests one after
+// another. Such a job gets the pipeline's execution deadline instead.
 func (p Pipeline) longRunning() bool {
+	paid := 0
 	for _, s := range p.Steps {
-		if modules[s.Module].LongRunning {
+		m := modules[s.Module]
+		if m.LongRunning {
 			return true
 		}
+		if m.Effect == effectPaid {
+			paid++
+		}
 	}
-	return false
+	return paid > 1
+}
+
+// turnStep is the AI step whose request is the job's conversation turn: the
+// one reading a conversation, else the first AI step. Only it sets the plan's
+// AI request fields (model, prompt, earlier turns) that the dispatcher uses
+// to record the turn and that Activity shows.
+func turnStep(steps []store.StepRun) string {
+	first := ""
+	for _, s := range steps {
+		if s.Module != "ai.chat" {
+			continue
+		}
+		if first == "" {
+			first = s.ID
+		}
+		from, _, _ := strings.Cut(s.Inputs["context"], ".")
+		for _, c := range steps {
+			if c.ID == from && (c.Module == "context.rolling" || c.Module == "context.thread") {
+				return s.ID
+			}
+		}
+	}
+	return first
 }
 
 // strictSettings decodes raw settings into v, rejecting unknown fields and

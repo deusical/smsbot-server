@@ -68,7 +68,6 @@ export function problems(
   if (!steps.length) add("", "Add at least a reply step.");
   if (steps.length > maxSteps) add("", `Use at most ${maxSteps} steps.`);
   const ids = new Set<string>();
-  let paid = 0;
   steps.forEach((step, i) => {
     const m = modules.find((m) => m.id === step.module);
     if (!/^[a-z][a-z0-9_]{0,23}$/.test(step.id) || step.id === "trigger")
@@ -79,8 +78,6 @@ export function problems(
       add(step.id, "Unknown module.");
       return;
     }
-    if (m.effect === "paid" && ++paid > 1)
-      add(step.id, "A command can use one AI step.");
     if (m.effect === "sink" && i !== steps.length - 1)
       add(step.id, "The reply must be the last step.");
     const available = sources(pipeline, i, modules);
@@ -148,6 +145,23 @@ export function connect(
     if (fits.length) inputs[port.name] = fits[fits.length - 1].value;
   }
   return inputs;
+}
+
+/**
+ * Whether the steps can outlast the two-minute window, so the command uses its
+ * execution deadline: a long-running step, or several AI requests.
+ */
+export function needsDeadline(
+  pipeline: Pipeline,
+  modules: CommandModule[],
+): boolean {
+  const used = pipeline.steps.map((s) =>
+    modules.find((m) => m.id === s.module),
+  );
+  return (
+    used.some((m) => m?.long_running) ||
+    used.filter((m) => m?.effect === "paid").length > 1
+  );
 }
 
 /** The steps a new custom command starts with. */
