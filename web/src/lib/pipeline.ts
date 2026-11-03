@@ -179,7 +179,7 @@ export function starterPipeline(): Pipeline {
   };
 }
 
-/** A short "Find video link → Download video → …" summary of the steps. */
+/** A short "Find Douyin/Xiaohongshu link → Download Douyin/Xiaohongshu video → …" summary of the steps. */
 export function flowSummary(
   pipeline: Pipeline | undefined,
   modules: CommandModule[],

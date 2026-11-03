@@ -54,7 +54,7 @@ type sourceState struct {
 func videoDownloadModule() module {
 	return module{
 		ModuleDefinition: ModuleDefinition{
-			ID: "video.download", Version: 2, Title: "Download video", Description: "Downloads the linked video on the server. The original stays on the server.",
+			ID: "video.download", Version: 2, Title: "Download Douyin/Xiaohongshu video", Description: "Downloads the linked Douyin or Xiaohongshu video on the server. The original stays on the server.",
 			Inputs:  []Port{{Name: "url", Title: "Link", Types: []string{typeURL}, Required: true}},
 			Outputs: []Port{{Name: "source", Title: "Original video", Types: []string{typeStoredVideo}}},
 			Effect:  effectLocal, RetryClass: "idempotent-poll", ResourceClass: "media", LongRunning: true,

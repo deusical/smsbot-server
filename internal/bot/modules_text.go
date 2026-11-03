@@ -83,7 +83,7 @@ func extractURLModule() module {
 	}
 	return module{
 		ModuleDefinition: ModuleDefinition{
-			ID: "text.extract_url", Version: 1, Title: "Find video link", Description: "Finds one Douyin or Xiaohongshu video link in the text, or replies with how to include one.",
+			ID: "text.extract_url", Version: 1, Title: "Find Douyin/Xiaohongshu link", Description: "Finds one Douyin or Xiaohongshu video link in the text, or replies with how to include one.",
 			Inputs:  []Port{{Name: "text", Title: "Text", Types: []string{typeText}, Required: true}},
 			Outputs: []Port{{Name: "url", Title: "Link", Types: []string{typeURL}}},
 			Effect:  effectPure, RetryClass: "none", ResourceClass: "local", Immediate: true,
