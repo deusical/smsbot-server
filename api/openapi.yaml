@@ -251,6 +251,10 @@ paths:
                 $ref: '#/components/schemas/Pipeline'
         '400':
           description: invalid_command
+        '401':
+          description: Authentication required
+        '403':
+          description: Access denied
   /config:
     get:
       description: Encrypted server bot configuration

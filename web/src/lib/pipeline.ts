@@ -91,12 +91,15 @@ export function problems(
         continue;
       }
       const source = available.find((s) => s.value === binding);
-      if (!source)
+      if (!source) {
+        const from = binding.split(".")[0];
         add(
           step.id,
-          `“${port.title}” is connected to a step that no longer comes before it.`,
+          steps.slice(0, i).some((s) => s.id === from)
+            ? `“${port.title}” is connected to an output “${from}” no longer has.`
+            : `“${port.title}” is connected to a step that no longer comes before it.`,
         );
-      else if (!port.types.includes(source.type))
+      } else if (!port.types.includes(source.type))
         add(
           step.id,
           `“${port.title}” can't take a ${source.type.replace("_", " ")}.`,

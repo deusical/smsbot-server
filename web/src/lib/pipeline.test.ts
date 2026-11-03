@@ -117,6 +117,17 @@ describe("pipeline helpers", () => {
       modules,
     );
     expect(typed.v.join()).toContain("can't take a text");
+    const gone = problems(
+      {
+        steps: [
+          { id: "link", module: "text.template", inputs: {} },
+          { id: "v", module: "video.download", inputs: { url: "link.url" } },
+          { id: "reply", module: "reply", inputs: { text: "link.text" } },
+        ],
+      },
+      modules,
+    );
+    expect(gone.v.join()).toContain("an output “link” no longer has");
     expect(typed[""].join()).toContain("Reply");
   });
   it("connects new steps to the nearest fitting output and names them uniquely", () => {

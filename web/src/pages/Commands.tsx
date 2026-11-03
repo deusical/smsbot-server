@@ -509,7 +509,7 @@ function CommandEditor({
           options={kinds.map((k) => ({ value: k.id, label: k.title }))}
           onChange={(id) => {
             const k = kinds.find((k) => k.id === id);
-            if (!k) return;
+            if (!k || k.id === definition?.id) return;
             if (k.id === "pipeline") toSteps();
             else
               onChange({ ...settingsForKind(command, k), pipeline: undefined });
