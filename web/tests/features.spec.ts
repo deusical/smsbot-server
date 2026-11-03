@@ -108,6 +108,8 @@ test("natural command forms save AI controls and playground remains offline", as
   // A new AI assistant is steps too; its AI settings live on the AI step.
   await page.getByRole("button", { name: "New", exact: true }).click();
   await page.getByRole("menuitem", { name: /AI assistant/ }).click();
+  for (const name of ["Step 2: conversation", "Step 3: answer"])
+    await page.getByRole("listitem", { name }).locator(".step-toggle").click();
   await page.getByLabel("Module for step 2").selectOption("context.rolling");
   await page
     .getByLabel("Instructions", { exact: true })

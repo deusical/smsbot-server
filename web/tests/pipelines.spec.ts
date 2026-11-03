@@ -208,6 +208,16 @@ test("converting an AI command to steps keeps its reply threads", async ({
     await expect(page.getByRole("list", { name: "Step flow" })).toContainText(
       "Recent memory",
     );
+    // Steps show as rows; open the ones to look at.
+    for (const name of [
+      "Step 2: conversation",
+      "Step 3: answer",
+      "Step 4: reply",
+    ])
+      await page
+        .getByRole("listitem", { name })
+        .locator(".step-toggle")
+        .click();
     await expect(page.getByLabel("Module for step 2")).toHaveValue(
       "context.rolling",
     );
