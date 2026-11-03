@@ -211,6 +211,44 @@ export type Command = {
   approval: boolean;
   allowed_conversations: string[];
   generation?: Generation;
+  /** The steps of a kind "pipeline" command. */
+  pipeline?: Pipeline;
+};
+export type ModulePort = {
+  name: string;
+  title: string;
+  types: string[];
+  required?: boolean;
+};
+export type CommandModule = {
+  id: string;
+  version: number;
+  title: string;
+  description: string;
+  inputs: ModulePort[];
+  outputs: ModulePort[];
+  effect: "pure" | "local" | "paid" | "sink";
+  retry_class: string;
+  resource_class: string;
+  immediate?: boolean;
+  long_running?: boolean;
+  settings: KindSchema;
+};
+export type PipelineStep = {
+  id: string;
+  module: string;
+  version?: number;
+  inputs?: Record<string, string>;
+  settings?: Record<string, unknown>;
+};
+export type Pipeline = {
+  execution_minutes?: number;
+  steps: PipelineStep[];
+};
+export type PreviewStep = {
+  id: string;
+  module: string;
+  outputs: Record<string, string>;
 };
 type Profile = {
   id: string;
@@ -250,6 +288,8 @@ export class ApiError extends Error {
   constructor(
     public status: number,
     code: string,
+    /** Extra fields of the error response, such as an invalid pipeline's step. */
+    public detail: Record<string, string> = {},
   ) {
     super(code);
   }
@@ -271,6 +311,6 @@ export async function api<T>(
   });
   const data = await response.json();
   if (!response.ok)
-    throw new ApiError(response.status, data.error ?? "request_failed");
+    throw new ApiError(response.status, data.error ?? "request_failed", data);
   return data as T;
 }

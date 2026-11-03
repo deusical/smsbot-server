@@ -446,6 +446,10 @@ func (o *options) serve(s *store.Store, v *vault.Vault, sessionPath string) erro
 		}
 		service.Engine.Downloader = &bot.HTTPDownloader{Endpoint: o.downloadEndpoint, Token: strings.TrimSpace(string(token))}
 	}
+	if o.fixture {
+		// Offline: video steps complete with a synthetic file, no worker.
+		service.Engine.Downloader = &bot.FixtureDownloader{}
+	}
 	// Push services require a contact for the sending server: its origin.
 	service.Notify.Subject = origin
 	if e = service.Init(); e != nil {

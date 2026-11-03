@@ -26,8 +26,74 @@ export function SchemaSettings({
   workspace: Workspace;
   onChange: (value: Partial<Command>) => void;
 }) {
-  const values = commandValues(command),
-    config = workspace.config!;
+  const values = commandValues(command);
+  function change(key: string, value: unknown) {
+    onChange({
+      [key]: value,
+      settings: { ...values, [key]: value },
+    } as Partial<Command>);
+  }
+  const mediaCost = definition.schema.ui === "video-cost";
+  const setting = (key: string) =>
+    Number(values[key] ?? definition.schema.properties?.[key]?.default);
+  return (
+    <>
+      {mediaCost && (
+        <VideoCost
+          attempts={setting("max_attempts")}
+          passes={setting("passes")}
+          minutes={setting("execution_minutes") || 15}
+        />
+      )}
+      <SchemaFields
+        schema={definition.schema}
+        values={values}
+        workspace={workspace}
+        onChange={change}
+      />
+    </>
+  );
+}
+
+/** How much encoding work the settings allow, against the deadline. */
+export function VideoCost({
+  attempts,
+  passes,
+  minutes,
+}: {
+  attempts: number;
+  passes: number;
+  minutes: number;
+}) {
+  return (
+    <div className="muted">
+      <p>
+        Up to {attempts} attempts &times; {passes} passes = {attempts * passes}{" "}
+        encode passes plus a verification decode. A long video can take tens of
+        minutes; deadline {minutes} min.
+      </p>
+      {minutes < attempts * passes * 5 && (
+        <p role="note">
+          This deadline may be short for the selected encoding work.
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** A settings form generated from a schema. */
+export function SchemaFields({
+  schema: root,
+  values,
+  workspace,
+  onChange: change,
+}: {
+  schema: KindSchema;
+  values: Record<string, unknown>;
+  workspace: Workspace;
+  onChange: (key: string, value: unknown) => void;
+}) {
+  const config = workspace.config!;
   const model = workspace.models.find(
     (m) =>
       m.id ===
@@ -35,12 +101,6 @@ export function SchemaSettings({
         config.profiles.find((p) => p.id === values.profile_id)?.model ||
         config.settings.default_model),
   );
-  function change(key: string, value: unknown) {
-    onChange({
-      [key]: value,
-      settings: { ...values, [key]: value },
-    } as Partial<Command>);
-  }
   function render(
     key: string,
     schema: KindSchema,
@@ -182,28 +242,9 @@ export function SchemaSettings({
       </Field>
     );
   }
-  const mediaCost = definition.schema.ui === "video-cost";
-  const setting = (key: string) =>
-    Number(values[key] ?? definition.schema.properties?.[key]?.default);
   return (
     <>
-      {mediaCost && (
-        <div className="muted">
-          <p>
-            Up to {setting("max_attempts")} attempts &times; {setting("passes")}{" "}
-            passes = {setting("max_attempts") * setting("passes")} encode passes
-            plus a verification decode. A long video can take tens of minutes;
-            deadline {setting("execution_minutes") || 15} min.
-          </p>
-          {(setting("execution_minutes") || 15) <
-            setting("max_attempts") * setting("passes") * 5 && (
-            <p role="note">
-              This deadline may be short for the selected encoding work.
-            </p>
-          )}
-        </div>
-      )}
-      {Object.entries(definition.schema.properties || {}).map(([key, s]) =>
+      {Object.entries(root.properties || {}).map(([key, s]) =>
         render(key, s, values[key], (value) => change(key, value)),
       )}
     </>

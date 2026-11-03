@@ -193,7 +193,15 @@ func TestCommandModulesAndPipelineErrors(t *testing.T) {
 			t.Fatal("modules unavailable", path, w.Code)
 		}
 	}
-	w := req(s, "GET", "/api/v1/config", "", "fixture-client", "")
+	w := req(s, "POST", "/api/v1/command-pipeline", `{"name":"ask","type":"ai","memory":true,"instructions":"Hi"}`, "fixture-client", "")
+	var converted bot.Pipeline
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &converted) != nil || len(converted.Steps) != 4 || converted.Steps[1].Module != "context.thread" {
+		t.Fatal("template steps unavailable", w.Code, w.Body.String())
+	}
+	if w = req(s, "POST", "/api/v1/command-pipeline", `{"name":"x","type":"shell"}`, "fixture-client", ""); w.Code != 400 {
+		t.Fatal("invalid command converted", w.Code)
+	}
+	w = req(s, "GET", "/api/v1/config", "", "fixture-client", "")
 	var c bot.Configuration
 	if json.Unmarshal(w.Body.Bytes(), &c) != nil {
 		t.Fatal("config")

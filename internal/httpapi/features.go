@@ -36,6 +36,18 @@ func (s *Server) featureRoutes() {
 		s.json(w, 200, defs)
 	})
 	s.mux.HandleFunc("GET /api/v1/command-modules", modules)
+	s.mux.HandleFunc("POST /api/v1/command-pipeline", s.protected(func(w http.ResponseWriter, r *http.Request) {
+		var c bot.Command
+		if !s.decode(w, r, &c) {
+			return
+		}
+		p, err := bot.CommandPipeline(c)
+		if err != nil {
+			s.bad(w, 400, "invalid_command")
+			return
+		}
+		s.json(w, 200, p)
+	}))
 	s.mux.HandleFunc("GET /api/command-modules", modules)
 	s.mux.HandleFunc("GET /api/v1/config", s.protected(s.config))
 	s.mux.HandleFunc("PUT /api/v1/config", s.protected(s.saveConfig))

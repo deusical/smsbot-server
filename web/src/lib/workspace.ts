@@ -32,6 +32,16 @@ export function normalize(c: Configuration): Configuration {
 }
 
 export function failure(e: unknown) {
+  if (
+    e instanceof ApiError &&
+    e.message === "invalid_pipeline" &&
+    e.detail.reason
+  ) {
+    const where = e.detail.step
+      ? `Step “${e.detail.step}”${e.detail.port ? `, ${e.detail.port}` : ""}: `
+      : "";
+    return where + e.detail.reason;
+  }
   return e instanceof ApiError
     ? e.message.replaceAll("_", " ")
     : "Could not reach the server.";
@@ -49,6 +59,11 @@ function validate(c: Configuration): string {
       return `${label}: names start with a lowercase letter and use a–z, 0–9, _ or - (24 max).`;
     if (names.has(command.name)) return `${label} is defined twice.`;
     names.add(command.name);
+    if (command.kind === "pipeline") {
+      if (!command.pipeline?.steps.length)
+        return `${label} needs at least a reply step.`;
+      continue;
+    }
     if (!command.instructions.trim() && command.type !== "download")
       return `${label} needs ${command.type === "fixed" ? "a reply" : "instructions"}.`;
   }
