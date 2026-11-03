@@ -27,6 +27,16 @@ func (s *Server) featureRoutes() {
 		}
 		s.json(w, 200, defs)
 	}))
+	modules := s.protected(func(w http.ResponseWriter, r *http.Request) {
+		defs, err := s.Engine.CommandModuleDefinitions()
+		if err != nil {
+			s.bad(w, 500, "configuration_unavailable")
+			return
+		}
+		s.json(w, 200, defs)
+	})
+	s.mux.HandleFunc("GET /api/v1/command-modules", modules)
+	s.mux.HandleFunc("GET /api/command-modules", modules)
 	s.mux.HandleFunc("GET /api/v1/config", s.protected(s.config))
 	s.mux.HandleFunc("PUT /api/v1/config", s.protected(s.saveConfig))
 	s.mux.HandleFunc("GET /api/v1/models", s.protected(s.models))
@@ -75,6 +85,13 @@ func (s *Server) saveConfig(w http.ResponseWriter, r *http.Request) {
 	if err := s.Engine.SetConfiguration(c); err != nil {
 		if errors.Is(err, bot.ErrConfigurationConflict) {
 			s.bad(w, 409, "configuration_revision_conflict")
+			return
+		}
+		var perr *bot.PipelineError
+		if errors.As(err, &perr) {
+			// The reason is the server's own wording; the step and port are the
+			// owner's configuration.
+			s.json(w, 400, map[string]string{"error": "invalid_pipeline", "step": perr.Step, "port": perr.Port, "reason": perr.Reason})
 			return
 		}
 		s.bad(w, 400, "invalid_configuration")

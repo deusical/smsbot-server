@@ -9,7 +9,6 @@ import (
 	"github.com/deusical/smsbot-server/internal/collection"
 	"github.com/deusical/smsbot-server/internal/store"
 	"github.com/deusical/smsbot-server/internal/transport"
-	"math"
 	"strings"
 	"sync"
 	"time"
@@ -288,16 +287,19 @@ func (e *Engine) Accept(ctx context.Context, m transport.Incoming) (bool, error)
 		return false, err
 	}
 	name, input, ok := parseCommand(text)
-	if !ok && text == "" && parent != nil {
-		// A photo with no text, replying to an AI answer, continues that thread.
-		name, input, ok = "ask", "", true
+	if parent != nil && (!ok || !strings.HasPrefix(text, "!")) {
+		// Plain text, or a photo with no text, replying to an AI answer
+		// continues the command that answered.
+		name, input, ok = strings.TrimPrefix(parent.Command, "!"), text, true
 	}
 	if !ok {
 		return false, nil
 	}
-	if name != "ask" && name != "deepseek" {
-		// Only an ask can continue an AI thread.
-		parent = nil
+	if parent != nil {
+		// Only the command that answered can continue its thread.
+		if cmd, _, _, _, found := resolve(cfg, name); !found || "!"+cmd.Name != parent.Command {
+			parent = nil
+		}
 	}
 	limitOK, err := e.Store.Limits(e.now().UTC(), cfg.Settings.HourlyLimit, cfg.Settings.DailyLimit, 0, 0)
 	if err != nil || !limitOK {
@@ -454,85 +456,19 @@ func (e *Engine) builtinReply(conv string, p store.Plan, name, input string, cfg
 	}
 }
 
-// planCommand fills the plan for a configured fixed or AI command and returns
-// its canonical name.
+// planCommand accepts a configured command: it snapshots the command's
+// pipeline into the plan and runs the steps that finish at acceptance. It
+// returns the command's canonical name.
 func (e *Engine) planCommand(ctx context.Context, m transport.Incoming, p *store.Plan, cfg Configuration, name, input string, parent *store.AIParent) (string, bool, error) {
-	cmd, model, instructions, g, ok := resolve(cfg, name)
+	cmd, _, _, _, ok := resolve(cfg, name)
 	if !ok || !allowed(cmd, m.ConversationID) {
 		return "", false, nil
 	}
-	k, exists := kindRegistry[commandKind(cmd)]
-	if !exists {
-		return "", false, errors.New("invalid command kind")
+	if len(commandPipeline(cmd).Steps) == 0 {
+		return "", false, errors.New("invalid command pipeline")
 	}
-	p.Kind = k.ID
-	p.KindSettings = append(json.RawMessage(nil), cmd.Settings...)
-	return k.plan(e, ctx, Input{Incoming: m, Arguments: input, Parent: parent}, p, cfg, cmd, model, instructions, g)
-}
-
-func planVideoKind(e *Engine, ctx context.Context, in Input, p *store.Plan, cfg Configuration, cmd Command, model, instructions string, g Generation) (string, bool, error) {
-	input, parent := in.Arguments, in.Parent
-	name := cmd.Name
-	if parent != nil {
-		return "", false, nil
-	}
-	p.Approval = cmd.Approval
-	p.DownloadURL = downloadURL(input)
-	if p.DownloadURL != "" {
-		v := videoSettings(cmd)
-		settings, err := e.Collection.Settings()
-		if err != nil {
-			return "", false, err
-		}
-		p.DownloadMaxBytes = min(videoHostLimit(settings.FileLimits()), int64(math.Round(v.MaxMB*1e6)))
-		v.MaxMB = float64(p.DownloadMaxBytes) / 1e6
-		p.KindSettings, _ = json.Marshal(v)
-		p.ExecutionDeadline = e.now().Add(time.Duration(v.ExecutionMinutes) * time.Minute).UTC().Format(time.RFC3339Nano)
-	}
-	if p.DownloadURL == "" {
-		p.Reply = "Include one Douyin or Xiaohongshu video link after the command."
-	}
-	return name, true, nil
-}
-
-func planReplyKind(e *Engine, ctx context.Context, in Input, p *store.Plan, cfg Configuration, cmd Command, model, instructions string, g Generation) (string, bool, error) {
-	m, input, parent := in.Incoming, in.Arguments, in.Parent
-	name := cmd.Name
-	// Only the canonical AI ask uses explicit threads. Other command memory stays unchanged.
-	threaded := cmd.Name == "ask" && kindThreads(cmd)
-	if parent != nil && (!threaded || !cmd.Memory) {
-		return "", false, nil
-	}
-	p.Memory = cmd.Memory
-	if p.Memory {
-		var err error
-		if p.MemoryEpoch, err = e.Store.MemoryEpoch(m.ConversationID, p.MemberOf()); err != nil {
-			return "", false, err
-		}
-		if !threaded {
-			if p.Context, err = e.Store.Memory(memoryScope(m.ConversationID, "!"+name, model, p.MemberOf()), e.now()); err != nil {
-				return "", false, err
-			}
-		}
-	}
-	p.MemoryHours = cfg.Settings.MemoryHours
-	p.Approval = cmd.Approval
-	p.Input = input
-	return kindRegistry[commandKind(cmd)].reply(e, ctx, m, p, cfg, cmd, model, instructions, g, input, threaded, parent)
-}
-func planFixedReply(e *Engine, ctx context.Context, m transport.Incoming, p *store.Plan, cfg Configuration, cmd Command, model, instructions string, g Generation, input string, threaded bool, parent *store.AIParent) (string, bool, error) {
-	p.Reply = strings.ReplaceAll(instructions, "{input}", input)
-	return cmd.Name, true, nil
-}
-func planAIReply(e *Engine, ctx context.Context, m transport.Incoming, p *store.Plan, cfg Configuration, cmd Command, model, instructions string, g Generation, input string, threaded bool, parent *store.AIParent) (string, bool, error) {
-	name := cmd.Name
-	ok, err := e.planAI(ctx, m, p, cfg, cmd, model, instructions, g, input, threaded, parent)
-	if ok && err == nil && p.Shared && p.Model != "" {
-		// One conversation among several people: each question says who asked it.
-		p.Input = askerLabel(*p) + ": " + p.Input
-		p.Instructions += "\nThis conversation is shared by a group chat. Each question starts with who asked it; answer the one who asked."
-	}
-	return name, ok, err
+	ok, err := e.acceptPipeline(ctx, m, p, cfg, cmd, input, parent)
+	return cmd.Name, ok, err
 }
 
 // askerLabel names who is asking in a group's shared AI conversation. It is a
@@ -542,72 +478,6 @@ func askerLabel(p store.Plan) string {
 		return "Owner"
 	}
 	return "Member " + store.Hash(p.Participant)[:4]
-}
-
-// planAI selects the model for an AI command and, for !ask, its thread.
-func (e *Engine) planAI(ctx context.Context, m transport.Incoming, p *store.Plan, cfg Configuration, cmd Command, model, instructions string, g Generation, input string, threaded bool, parent *store.AIParent) (bool, error) {
-	if model == "" {
-		return false, nil
-	}
-	selectedModel, err := e.model(model)
-	if err != nil {
-		return false, err
-	}
-	if !e.ProviderConfiguredFor(selectedModel) {
-		return false, nil
-	}
-	if err = validateModel(g, selectedModel); err != nil {
-		return false, err
-	}
-	p.Model = model
-	p.Instructions = instructions
-	p.Generation, _ = json.Marshal(g)
-	own := ownFile(m)
-	if own != nil {
-		reply := fileUnreadable(*own, cfg.Settings.AIPhotoMaxMB)
-		if reply == "" && !e.filesSaved(m.ConversationID) {
-			reply = "I can only read files in conversations you archive. Turn that on in Settings, or reply to the file with !ask once it's saved."
-		}
-		if reply != "" {
-			p.Model = ""
-			p.Memory = false
-			p.Reply = reply
-			return true, nil
-		}
-		input = ownFilePrompt(input, own)
-		p.Input = input
-		p.File = own
-	}
-	if parent == nil {
-		if quoted, file, ok := e.quotedInput(m, input, p.Roster != "", own != nil); ok {
-			// A bare "!ask" on a quoted message responds to that message.
-			p.Input, input = quoted, quoted
-			if file != nil && own == nil {
-				if reply := fileUnreadable(*file, cfg.Settings.AIPhotoMaxMB); reply != "" {
-					p.Model = ""
-					p.Memory = false
-					p.Reply = reply
-					return true, nil
-				}
-				p.File = file
-			}
-		}
-	}
-	if !threaded {
-		return true, nil
-	}
-	if input == "" {
-		p.Model = ""
-		p.Memory = false
-		p.Reply = "Send !ask followed by a question. Reply to an AI answer to continue it."
-		return true, nil
-	}
-	if cmd.Memory {
-		if err = e.planAIThread(m, p, parent, selectedModel, g, cfg.Settings); err != nil {
-			return false, err
-		}
-	}
-	return true, nil
 }
 
 // record enqueues the job and saves the command message under it.
@@ -814,7 +684,7 @@ func (e *Engine) check(ctx context.Context, j store.Job, p store.Plan) (Configur
 	if err != nil {
 		return cfg, "stale", nil
 	}
-	if p.DownloadURL != "" && p.ExecutionDeadline != "" {
+	if p.ExecutionDeadline != "" {
 		deadline, err := time.Parse(time.RFC3339Nano, p.ExecutionDeadline)
 		if err != nil || !e.now().Before(deadline) {
 			return cfg, "execution_expired", nil
@@ -829,7 +699,7 @@ func (e *Engine) check(ctx context.Context, j store.Job, p store.Plan) (Configur
 	if err != nil {
 		return cfg, "", err
 	}
-	if p.DownloadURL != "" {
+	if len(p.Attachments) > 0 {
 		if err := inbox.FileLimits().Check(p.Attachments); err != nil {
 			return cfg, "attachment_limits_changed", nil
 		}
@@ -856,7 +726,7 @@ func (e *Engine) check(ctx context.Context, j store.Job, p store.Plan) (Configur
 	}
 	if p.Thread != nil {
 		cmd, _, _, _, enabled := resolve(cfg, strings.TrimPrefix(j.Command, "!"))
-		if !enabled || !kindThreads(cmd) || !cmd.Memory {
+		if !enabled || !commandThreads(cmd) || !cmd.Memory {
 			return cfg, "thread_unavailable", nil
 		}
 		if err := e.Store.CheckAIThread(j.ConversationID, p.ThreadOwner(), j.Command, p, e.now(), cfg.Settings.MemoryHours, cfg.Settings.RetentionDays); errors.Is(err, store.ErrAIThreadUnavailable) {
@@ -907,24 +777,19 @@ func (e *Engine) Dispatch(ctx context.Context) error {
 		return e.dispatchReaction(ctx, j, p) // releases the lock
 	}
 	defer e.mu.Unlock()
-	if done, err := prepareKind(e, ctx, j, &p); done {
+	if done, err := e.runPipeline(ctx, j, &p, &cfg); done {
 		return err
 	}
-	history, err := e.memoryContext(j, cfg, &p)
-	if err != nil {
-		return err
-	}
-	if done, err := e.generateReply(ctx, j, &p, &cfg, history); done {
-		return err
-	}
-	if p.DownloadURL != "" {
+	if p.ExecutionDeadline != "" && len(p.Attachments) > 0 {
+		// A long-running job uploads in the background lane, within its deadline.
 		if done, err := e.prepareDownloadUpload(ctx, j, &p); done {
 			return err
 		}
 	} else if done, err := e.prepareFiles(ctx, j, &p); done {
 		return err
 	}
-	return e.submit(ctx, j, p, cfg, history)
+	// The conversation turn's earlier history, as checked by the AI step.
+	return e.submit(ctx, j, p, cfg, p.Context)
 }
 
 // nextReady returns the next queued job that passes every pre-send check.
@@ -971,46 +836,25 @@ func (e *Engine) nextReady(ctx context.Context) (j store.Job, p store.Plan, cfg 
 	return j, p, cfg, true, nil
 }
 
-// memoryContext returns the conversation memory a generation may use, or none
-// when memory was cleared or disabled after the job was planned.
-func (e *Engine) memoryContext(j store.Job, cfg Configuration, p *store.Plan) ([]store.Turn, error) {
-	history := p.Context
-	if p.Memory {
-		epoch, epochErr := e.Store.MemoryEpoch(j.ConversationID, p.MemberOf())
-		cmd, _, _, _, enabled := resolve(cfg, strings.TrimPrefix(j.Command, "!"))
-		if epochErr != nil {
-			return nil, epochErr
-		}
-		if epoch != p.MemoryEpoch || !enabled || !cmd.Memory {
-			p.Memory = false
-			history = nil
-		}
-	}
-	return history, nil
-}
-
-// generateReply asks the provider for an AI reply, within the daily budget.
-// The lock is released only for the provider call; the job state and every
-// pre-send check are verified again afterwards. done reports that dispatch
-// ended here (the job completed, moved to approval, or an error).
-func (e *Engine) generateReply(ctx context.Context, j store.Job, p *store.Plan, cfg *Configuration, history []store.Turn) (done bool, err error) {
-	if p.Model == "" || p.Reply != "" {
-		return false, nil
-	}
-
-	m, err := e.model(p.Model)
+// generateReply asks the provider for one AI step's answer, within the daily
+// budget. The lock is released only for the provider call; the job state and
+// every pre-send check are verified again afterwards. commit records the answer
+// in the step before the plan is saved. done reports that dispatch ended here
+// (the job completed, moved to approval, or an error).
+func (e *Engine) generateReply(ctx context.Context, j store.Job, p *store.Plan, cfg *Configuration, call aiCall, history []store.Turn, commit func(string)) (done bool, err error) {
+	m, err := e.model(call.Model)
 	if err != nil {
 		err = e.Store.Complete(j.ID, "failed", "model_unavailable")
 		return true, err
 	}
 	var g Generation
-	if json.Unmarshal(p.Generation, &g) != nil || validateModel(g, m) != nil {
+	if json.Unmarshal(call.Generation, &g) != nil || validateModel(g, m) != nil {
 		err = e.Store.Complete(j.ID, "failed", "generation_unsupported")
 		return true, err
 	}
-	reserve := m.OutputPrice*float64(g.Tokens) + m.InputPrice*float64(len(p.Input)+len(p.Instructions)+512)
-	if p.File != nil {
-		reserve += m.InputPrice * float64(fileTokens(p.File))
+	reserve := m.OutputPrice*float64(g.Tokens) + m.InputPrice*float64(len(call.Input)+len(call.Instructions)+512)
+	if call.File != nil {
+		reserve += m.InputPrice * float64(fileTokens(call.File))
 	}
 	for _, turn := range history {
 		reserve += m.InputPrice * float64(len(turn.Content)+64)
@@ -1033,7 +877,7 @@ func (e *Engine) generateReply(ctx context.Context, j store.Job, p *store.Plan, 
 	if err != nil || !ok {
 		return true, err
 	}
-	if err = e.Store.Usage(j.ID, p.Model, 0, 0, 0, nil); err != nil {
+	if err = e.Store.Usage(j.ID, call.Model, 0, 0, 0, nil); err != nil {
 		return true, err
 	}
 	if err = e.Store.SetPublicSetting("requested_reasoning:"+j.ID, g.Reasoning); err != nil {
@@ -1043,20 +887,22 @@ func (e *Engine) generateReply(ctx context.Context, j store.Job, p *store.Plan, 
 	e.pending[j.ID] = cancel
 	e.mu.Unlock()
 	var result Result
-	image, imageErr := e.loadFile(genctx, j.ConversationID, p.File, cfg.Settings.AIPhotoMaxMB)
+	image, imageErr := e.loadFile(genctx, j.ConversationID, call.File, cfg.Settings.AIPhotoMaxMB)
 	var generr error
 	if imageErr != nil {
 		zero := 0.0
 		result.Cost = &zero
 	} else {
-		result, generr = provider.Generate(genctx, key, *p, history, m, image)
+		request := *p
+		request.Model, request.Instructions, request.Generation, request.Input, request.File = call.Model, call.Instructions, call.Generation, call.Input, call.File
+		result, generr = provider.Generate(genctx, key, request, history, m, image)
 	}
 	cancel()
 	e.mu.Lock()
 	delete(e.pending, j.ID)
 	reportedModel := result.Model
 	if reportedModel == "" {
-		reportedModel = p.Model
+		reportedModel = call.Model
 	}
 	if err = e.Store.Usage(j.ID, reportedModel, result.PromptTokens, result.CompletionTokens, result.ReasoningTokens, result.Cost); err != nil {
 		return true, err
@@ -1070,18 +916,18 @@ func (e *Engine) generateReply(ctx context.Context, j store.Job, p *store.Plan, 
 	}
 	if imageErr != nil {
 		// Say so in the chat rather than leaving the person waiting.
-		result, generr = Result{Text: fileFailureReply(imageErr), Model: p.Model}, nil
+		result, generr = Result{Text: fileFailureReply(imageErr), Model: call.Model}, nil
 	}
 	if generr != nil && image != nil && providerRefused(generr) {
 		// Files are sent without checking what the model reads; say so if refused.
 		zero := 0.0
-		result, generr = Result{Text: fileRefusalReply(generr), Model: p.Model, Cost: &zero}, nil
+		result, generr = Result{Text: fileRefusalReply(generr), Model: call.Model, Cost: &zero}, nil
 	}
 	if generr != nil {
 		err = e.Store.Complete(j.ID, "failed", safeProviderCode(generr))
 		return true, err
 	}
-	p.Reply = result.Text
+	commit(result.Text)
 	checked, code, err := e.check(ctx, j, *p)
 	*cfg = checked
 	if err != nil {
@@ -1356,17 +1202,20 @@ func (e *Engine) Playground(name, input string) (map[string]any, error) {
 			cfg.Commands[i].Enabled = true
 		}
 	}
-	cmd, model, instructions, _, ok := resolve(cfg, name)
+	cmd, model, _, _, ok := resolve(cfg, name)
 	if !ok {
 		return nil, errors.New("command_unavailable")
 	}
-	k, exists := kindRegistry[commandKind(cmd)]
-	if !exists {
-		return nil, errors.New("invalid command kind")
+	text, simulated, steps, err := simulatePipeline(cfg, cmd, input)
+	if err != nil {
+		return nil, err
 	}
-	text, model := k.preview(instructions, input, model)
-
-	return map[string]any{"text": text, "model": model, "simulated": true}, nil
+	if simulated != "Local" || commandPipeline(cmd).has("ai.chat") {
+		model = simulated
+	} else if commandPipeline(cmd).longRunning() {
+		model = "Local"
+	}
+	return map[string]any{"text": text, "model": model, "simulated": true, "steps": steps}, nil
 }
 func (e *Engine) Run(ctx context.Context, report func(error)) {
 	ctx, cancel := context.WithCancel(ctx)

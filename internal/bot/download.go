@@ -177,12 +177,21 @@ func downloadURL(input string) string {
 	return found
 }
 
-// Caller holds the control lock. Release it during local download/encoding so
-// pause and enrollment changes can cancel work. Never send a result that became
+// videoState is what a video.download step fixed at acceptance.
+type videoState struct {
+	URL      string        `json:"url"`
+	MaxBytes int64         `json:"max_bytes"`
+	Settings VideoSettings `json:"settings"`
+}
+
+// runVideoDownload polls the local worker for one video.download step. Caller
+// holds the control lock. Release it during local download/encoding so pause
+// and enrollment changes can cancel work. Never send a result that became
 // stale or lost consent while it was being prepared.
-func (e *Engine) prepareDownload(ctx context.Context, j store.Job, p *store.Plan) (bool, error) {
-	if p.DownloadURL == "" || len(p.Attachments) > 0 {
-		return false, nil
+func (e *Engine) runVideoDownload(ctx context.Context, j store.Job, p *store.Plan, s *stepRun) (bool, error) {
+	var st videoState
+	if err := s.load(&st); err != nil || st.URL == "" {
+		return true, e.Store.Complete(j.ID, "failed", "download_failed")
 	}
 	if e.Downloader == nil {
 		return true, e.Store.Complete(j.ID, "failed", "download_worker_unavailable")
@@ -192,23 +201,18 @@ func (e *Engine) prepareDownload(ctx context.Context, j store.Job, p *store.Plan
 		return true, err
 	}
 	limits := settings.FileLimits()
-	limit := downloadLimit
-	if limits.MaxFileMiB > 0 {
-		limit = min(limit, limits.FileBytes())
-	}
-	if limits.MaxTotalMiB > 0 {
-		limit = min(limit, limits.MaxTotalMiB<<20)
-	}
-	if p.DownloadMaxBytes > limit {
+	limit := videoHostLimit(limits)
+	if st.MaxBytes > limit {
 		return true, e.Store.Complete(j.ID, "cancelled", "attachment_limits_changed")
 	}
-	if p.DownloadMaxBytes == 0 {
-		p.DownloadMaxBytes = limit
+	if st.MaxBytes == 0 {
+		st.MaxBytes = limit
+		s.save(st)
 		if err := e.Store.SavePlan(j.ID, *p); err != nil {
 			return true, err
 		}
 	}
-	limit = p.DownloadMaxBytes
+	limit = st.MaxBytes
 	ok, err := e.Store.Transition(j.ID, "queued", "generating")
 	if err != nil || !ok {
 		return true, err
@@ -228,14 +232,9 @@ func (e *Engine) prepareDownload(ctx context.Context, j store.Job, p *store.Plan
 	if provider, ok := e.Downloader.(interface {
 		PollDownloadSettings(context.Context, string, string, int64, time.Time, VideoSettings) ([]byte, string, error)
 	}); ok {
-		settings := DefaultVideoSettings()
-		if len(p.KindSettings) > 0 && json.Unmarshal(p.KindSettings, &settings) != nil {
-			workerr = errors.New("download_failed")
-		} else {
-			data, stage, workerr = provider.PollDownloadSettings(requestctx, j.ID, p.DownloadURL, limit, deadline, settings)
-		}
+		data, stage, workerr = provider.PollDownloadSettings(requestctx, j.ID, st.URL, limit, deadline, st.Settings)
 	} else {
-		data, stage, workerr = e.Downloader.PollDownload(requestctx, j.ID, p.DownloadURL, limit, deadline)
+		data, stage, workerr = e.Downloader.PollDownload(requestctx, j.ID, st.URL, limit, deadline)
 	}
 	requestcancel()
 	cancel()
@@ -258,8 +257,8 @@ func (e *Engine) prepareDownload(ctx context.Context, j store.Job, p *store.Plan
 	if workerr != nil || len(data) == 0 || int64(len(data)) > limit {
 		return true, e.Store.Complete(j.ID, "failed", "download_failed")
 	}
-	p.Attachments, err = media.PrepareWithLimits([]media.Upload{{Name: "video.mp4", MIME: "video/mp4", Data: data}}, limits)
-	if err != nil {
+	files, err := media.PrepareWithLimits([]media.Upload{{Name: "video.mp4", MIME: "video/mp4", Data: data}}, limits)
+	if err != nil || len(files) != 1 {
 		return true, e.Store.Complete(j.ID, "failed", "download_attachment_invalid")
 	}
 	_, code, err := e.check(ctx, j, *p)
@@ -269,6 +268,11 @@ func (e *Engine) prepareDownload(ctx context.Context, j store.Job, p *store.Plan
 	if code != "" {
 		return true, e.Store.Complete(j.ID, "cancelled", code)
 	}
+	if err := inboxLimitsAllow(e, files); err != nil {
+		return true, e.Store.Complete(j.ID, "cancelled", "attachment_limits_changed")
+	}
+	s.out("video", store.Value{Type: typeVideo, Media: &files[0]})
+	s.Done = true
 	if err = e.Store.DeferWork(j.ID, "complete", 0); err != nil {
 		return true, err
 	}
@@ -277,6 +281,15 @@ func (e *Engine) prepareDownload(ctx context.Context, j store.Job, p *store.Plan
 	}
 	_, err = e.Store.Transition(j.ID, "generating", "queued")
 	return err != nil, err
+}
+
+// inboxLimitsAllow checks prepared files against the current attachment limits.
+func inboxLimitsAllow(e *Engine, files []media.File) error {
+	inbox, err := e.Collection.Settings()
+	if err != nil {
+		return err
+	}
+	return inbox.FileLimits().Check(files)
 }
 
 // Download uploads run in a bounded background lane. Only the dispatch loop
@@ -291,7 +304,7 @@ type downloadUpload struct {
 }
 
 func (e *Engine) prepareDownloadUpload(ctx context.Context, j store.Job, p *store.Plan) (bool, error) {
-	if p.DownloadUploaded {
+	if p.FilesUploaded {
 		return false, nil
 	}
 	if len(e.downloadUploads) > 0 {
@@ -364,7 +377,7 @@ func (e *Engine) collectDownloadUploads(ctx context.Context) error {
 				continue
 			}
 			p.Attachments = result.files
-			p.DownloadUploaded = true
+			p.FilesUploaded = true
 			if err = e.Store.SavePlan(id, p); err != nil {
 				return err
 			}

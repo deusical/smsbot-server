@@ -29,7 +29,10 @@ type aiExchange struct {
 	Model       string `json:"model,omitempty"`
 	SubmittedAt string `json:"submitted_at,omitempty"`
 }
-type AIParent struct{ Exchange, Thread string }
+
+// AIParent is the recorded AI answer a native reply continues. Command is the
+// command whose conversation it belongs to, so the reply continues that command.
+type AIParent struct{ Exchange, Thread, Command string }
 type aiReader interface{ QueryRow(string, ...any) *sql.Row }
 
 func (s *Store) migrateAIThreads() error {
@@ -79,13 +82,19 @@ func aiStamp(at time.Time) string { return at.UTC().Format(time.RFC3339Nano) }
 // FindAIParent performs only a keyed local lookup, including when collection is off.
 func (s *Store) FindAIParent(conv, wire string) (*AIParent, error) {
 	var p AIParent
-	err := s.DB.QueryRow("SELECT e.id,e.thread_id FROM ai_answer_refs r JOIN ai_exchanges e ON e.id=r.exchange_id JOIN ai_threads t ON t.id=e.thread_id WHERE r.reply_key=? AND t.chat_key=?", Hash(conv+"\x00"+wire), Hash(conv)).Scan(&p.Exchange, &p.Thread)
+	var payload string
+	err := s.DB.QueryRow("SELECT e.id,e.thread_id,t.payload FROM ai_answer_refs r JOIN ai_exchanges e ON e.id=r.exchange_id JOIN ai_threads t ON t.id=e.thread_id WHERE r.reply_key=? AND t.chat_key=?", Hash(conv+"\x00"+wire), Hash(conv)).Scan(&p.Exchange, &p.Thread, &payload)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
+	var data aiThread
+	if err = s.openAI("ai-thread:"+p.Thread, payload, &data); err != nil {
+		return nil, err
+	}
+	p.Command = data.Command
 	return &p, nil
 }
 func (s *Store) validAIThread(q aiReader, id, conv, peer, command string, epoch int64, now time.Time, hours, days int) (aiThread, error) {

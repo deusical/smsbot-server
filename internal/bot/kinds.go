@@ -2,17 +2,14 @@ package bot
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
-	"github.com/deusical/smsbot-server/internal/store"
-	"github.com/deusical/smsbot-server/internal/transport"
 	"io"
-	"strings"
 )
 
-// KindDefinition describes a versioned command implementation. Kinds build plans;
-// permission to submit remains exclusively with the dispatcher.
+// KindDefinition describes a built-in command template: a ready-made pipeline
+// configured through a small settings form. "pipeline" is a command whose
+// steps are configured directly.
 type KindDefinition struct {
 	Title         string         `json:"title"`
 	LegacyType    string         `json:"legacy_type"`
@@ -24,70 +21,88 @@ type KindDefinition struct {
 	Schema        SettingsSchema `json:"schema"`
 }
 
-// Input preserves the incoming quote/attachment references. Quoted content is
-// resolved lazily through the existing conversation-scoped access checks.
-type Input struct {
-	transport.Incoming
-	Arguments string
-	Parent    *store.AIParent
+var kindRegistry = map[string]KindDefinition{
+	"fixed.reply": {ID: "fixed.reply", Title: "Fixed text", LegacyType: "fixed", Version: 1, RetryClass: "none", ResourceClass: "upload"},
+	"ai.generate": {ID: "ai.generate", Title: "AI", LegacyType: "ai", Version: 1, Threads: true, RetryClass: "none", ResourceClass: "provider"},
+	"media.video": {ID: "media.video", Title: "Download video", LegacyType: "download", Version: 1, RetryClass: "idempotent-poll", ResourceClass: "media"},
+	"pipeline":    {ID: "pipeline", Title: "Custom steps", LegacyType: "fixed", Version: 1, RetryClass: "none", ResourceClass: "local"},
 }
-
-type kind struct {
-	KindDefinition
-	plan    func(*Engine, context.Context, Input, *store.Plan, Configuration, Command, string, string, Generation) (string, bool, error)
-	reply   func(*Engine, context.Context, transport.Incoming, *store.Plan, Configuration, Command, string, string, Generation, string, bool, *store.AIParent) (string, bool, error)
-	prepare func(*Engine, context.Context, store.Job, *store.Plan) (bool, error)
-	preview func(string, string, string) (string, string)
-}
-
-var kindRegistry map[string]kind
 
 func init() {
-	kindRegistry = map[string]kind{
-		"fixed.reply": {KindDefinition: KindDefinition{ID: "fixed.reply", Title: "Fixed text", LegacyType: "fixed", Version: 1, RetryClass: "none", ResourceClass: "upload"}, plan: planReplyKind, reply: planFixedReply, prepare: noKindWork, preview: func(instructions, input, model string) (string, string) {
-			return strings.ReplaceAll(instructions, "{input}", input), model
-		}},
-		"ai.generate": {KindDefinition: KindDefinition{ID: "ai.generate", Title: "AI", LegacyType: "ai", Version: 1, Threads: true, RetryClass: "none", ResourceClass: "provider"}, plan: planReplyKind, reply: planAIReply, prepare: noKindWork, preview: func(_, _, model string) (string, string) {
-			return "Simulated AI response. No provider request was made.", model
-		}},
-		"media.video": {KindDefinition: KindDefinition{ID: "media.video", Title: "Download video", LegacyType: "download", Version: 1, RetryClass: "idempotent-poll", ResourceClass: "media"}, plan: planVideoKind, prepare: (*Engine).prepareDownload, preview: func(_, input, _ string) (string, string) {
-			text := "Include one Douyin or Xiaohongshu video link after the command."
-			if downloadURL(input) != "" {
-				text = "Video link recognized. A live command saves the original on the server and sends a video under 20 MB. No download or send was performed by this preview."
-			}
-			return text, "Local"
-		}},
-	}
-
 	for id, k := range kindRegistry {
 		k.Schema = kindSchema(id)
 		kindRegistry[id] = k
 	}
 }
 
-func noKindWork(*Engine, context.Context, store.Job, *store.Plan) (bool, error) { return false, nil }
-
-// Preparation only produces artifacts. Long work yields through DeferWork;
-// submission remains in Dispatch, after the normal safety checks.
-func prepareKind(e *Engine, ctx context.Context, j store.Job, p *store.Plan) (bool, error) {
-	id := p.Kind
-	if id == "" {
-		if p.DownloadURL != "" {
-			id = "media.video"
-		} else {
-			return false, nil
+// templatePipeline is the pipeline a command runs, before validation. For a
+// template kind it reproduces exactly what the command did before commands
+// were pipelines.
+func templatePipeline(c Command) Pipeline {
+	raw := func(v any) json.RawMessage { b, _ := json.Marshal(v); return b }
+	switch commandKind(c) {
+	case "fixed.reply":
+		return Pipeline{Steps: []PipelineStep{
+			{ID: "text", Module: "text.template", Inputs: map[string]string{"input": "trigger.args"}, Settings: raw(templateSettings{Template: c.Instructions})},
+			{ID: "reply", Module: "reply", Inputs: map[string]string{"text": "text.text"}},
+		}}
+	case "ai.generate":
+		conversation := "context.none"
+		if c.Memory {
+			conversation = "context.rolling"
+			if c.Name == "ask" {
+				// Only the canonical ask continues explicit reply threads.
+				conversation = "context.thread"
+			}
+		}
+		return Pipeline{Steps: []PipelineStep{
+			{ID: "question", Module: "message.question", Inputs: map[string]string{"text": "trigger.args", "message": "trigger.message"}, Settings: raw(questionSettings{RequireQuestion: c.Name == "ask"})},
+			{ID: "conversation", Module: conversation},
+			{ID: "answer", Module: "ai.chat", Inputs: map[string]string{"prompt": "question.prompt", "file": "question.file", "context": "conversation.context"}, Settings: raw(aiSettings{Model: c.Model, ProfileID: c.ProfileID, Instructions: c.Instructions, Generation: c.Generation})},
+			{ID: "reply", Module: "reply", Inputs: map[string]string{"text": "answer.text", "continues": "answer.context"}},
+		}}
+	case "media.video":
+		v := videoSettings(c)
+		return Pipeline{ExecutionMinutes: v.ExecutionMinutes, Steps: []PipelineStep{
+			{ID: "link", Module: "text.extract_url", Inputs: map[string]string{"text": "trigger.args"}},
+			{ID: "video", Module: "video.download", Inputs: map[string]string{"url": "link.url"}, Settings: raw(videoStepSettings{v.Preset, v.Passes, v.MaxAttempts, v.CopyIfFits, v.MaxMB})},
+			{ID: "reply", Module: "reply", Inputs: map[string]string{"file": "video.video"}},
+		}}
+	case "pipeline":
+		if c.Pipeline != nil {
+			return clonePipeline(*c.Pipeline)
 		}
 	}
-	k, ok := kindRegistry[id]
-	if !ok {
-		return true, errors.New("invalid command kind")
+	return Pipeline{}
+}
+
+func clonePipeline(p Pipeline) Pipeline {
+	p.Steps = append([]PipelineStep(nil), p.Steps...)
+	for i := range p.Steps {
+		inputs := map[string]string{}
+		for k, v := range p.Steps[i].Inputs {
+			inputs[k] = v
+		}
+		p.Steps[i].Inputs = inputs
 	}
-	return k.prepare(e, ctx, j, p)
+	return p
+}
+
+// commandPipeline is the validated pipeline a command runs.
+func commandPipeline(c Command) Pipeline {
+	p := templatePipeline(c)
+	if validatePipeline(&p, pipelineEnv{}) != nil {
+		return Pipeline{}
+	}
+	return p
 }
 
 func commandKind(c Command) string {
 	if c.Kind != "" {
 		return c.Kind
+	}
+	if c.Type == "" && c.Pipeline != nil {
+		return "pipeline"
 	}
 	switch c.Type {
 	case "fixed":
@@ -99,7 +114,9 @@ func commandKind(c Command) string {
 	}
 	return ""
 }
-func kindThreads(c Command) bool { return kindRegistry[commandKind(c)].Threads }
+
+// commandThreads reports whether a command continues AI reply threads.
+func commandThreads(c Command) bool { return commandPipeline(c).has("context.thread") }
 
 type commandSettings struct {
 	Instructions     string      `json:"instructions,omitempty"`
@@ -121,6 +138,23 @@ func normalizeCommand(c *Command) error {
 	id := commandKind(*c)
 	if _, ok := kindRegistry[id]; !ok {
 		return errors.New("invalid command kind")
+	}
+	if id == "pipeline" {
+		trimmed := bytes.TrimSpace(c.Settings)
+		if c.Pipeline == nil || len(trimmed) > 0 && !bytes.Equal(trimmed, []byte("{}")) && !bytes.Equal(trimmed, []byte("null")) {
+			return errors.New("invalid command pipeline")
+		}
+		pl := clonePipeline(*c.Pipeline)
+		if err := validatePipeline(&pl, pipelineEnv{}); err != nil {
+			return err
+		}
+		// The flat fields describe what older servers understand: a fixed reply
+		// with no text, which they never send.
+		c.Kind, c.Type, c.Pipeline, c.Settings = id, "fixed", &pl, nil
+		c.Instructions, c.Model, c.ProfileID, c.Generation = "", "", "", nil
+		c.Memory = pl.has("context.rolling") || pl.has("context.thread")
+		c.ExecutionMinutes = pl.ExecutionMinutes
+		return nil
 	}
 	s := commandSettings{Instructions: c.Instructions, Model: c.Model, ProfileID: c.ProfileID, Memory: c.Memory, Generation: c.Generation, ExecutionMinutes: c.ExecutionMinutes}
 	if len(c.Settings) > 0 {
@@ -182,7 +216,24 @@ func normalizeCommand(c *Command) error {
 	}
 	c.Instructions, c.Model, c.ProfileID, c.Memory, c.Generation, c.ExecutionMinutes = s.Instructions, s.Model, s.ProfileID, s.Memory, s.Generation, s.ExecutionMinutes
 	c.Settings, _ = json.Marshal(s)
-	return nil
+	// The kind's settings are authoritative; its steps are derived when run,
+	// so the configuration carries them once.
+	c.Pipeline = nil
+	pl := templatePipeline(*c)
+	return validatePipeline(&pl, pipelineEnv{})
+}
+
+// memoryKind is the AI conversation a command remembers: "thread", "rolling"
+// or "" for none. Changing it, or turning memory off, withdraws consent.
+func memoryKind(c Command) string {
+	pl := commandPipeline(c)
+	switch {
+	case pl.has("context.thread"):
+		return "thread"
+	case pl.has("context.rolling"):
+		return "rolling"
+	}
+	return ""
 }
 func normalizeCommands(c *Configuration) error {
 	for i := range c.Commands {
@@ -244,8 +295,8 @@ func kindSchema(id string) SettingsSchema {
 }
 func KindDefinitions() []KindDefinition {
 	out := []KindDefinition{}
-	for _, id := range []string{"fixed.reply", "ai.generate", "media.video"} {
-		d := kindRegistry[id].KindDefinition
+	for _, id := range []string{"fixed.reply", "ai.generate", "media.video", "pipeline"} {
+		d := kindRegistry[id]
 		out = append(out, d)
 	}
 	return out

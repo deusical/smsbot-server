@@ -59,3 +59,25 @@ func (e *Engine) CommandKindDefinitions() ([]KindDefinition, error) {
 	}
 	return defs, nil
 }
+
+// CommandModuleDefinitions lists the modules commands are built from, with the
+// video size ceiling lowered to this server's attachment limits.
+func (e *Engine) CommandModuleDefinitions() ([]ModuleDefinition, error) {
+	settings, err := e.Collection.Settings()
+	if err != nil {
+		return nil, err
+	}
+	defs := ModuleDefinitions()
+	for i := range defs {
+		if field, ok := defs[i].Schema.Properties["max_mb"]; ok && defs[i].ID == "video.download" {
+			props := map[string]SettingsSchema{}
+			for k, v := range defs[i].Schema.Properties {
+				props[k] = v
+			}
+			field.EffectiveMaximum = bound(min(19.99, float64(videoHostLimit(settings.FileLimits()))/1e6))
+			props["max_mb"] = field
+			defs[i].Schema.Properties = props
+		}
+	}
+	return defs, nil
+}
