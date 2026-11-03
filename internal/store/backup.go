@@ -387,7 +387,11 @@ func (s *Store) RestoreBackup(data []byte) error {
 		return errors.New("restore requires fresh bot state")
 	}
 	if schema >= 2 {
-		if e = tx.QueryRow("SELECT (SELECT count(*) FROM usage)+(SELECT count(*) FROM memory)").Scan(&count); e != nil {
+		steps := ""
+		if schema >= 9 {
+			steps = "+(SELECT count(*) FROM usage_steps)"
+		}
+		if e = tx.QueryRow("SELECT (SELECT count(*) FROM usage)+(SELECT count(*) FROM memory)" + steps).Scan(&count); e != nil {
 			return e
 		}
 		if count != 0 {
@@ -551,6 +555,10 @@ func (s *Store) RestoreBackup(data []byte) error {
 			return errors.New("backup usage has no corresponding job")
 		}
 		if _, e = tx.Exec("INSERT INTO usage VALUES(?,?,?,?,?,?)", v.Job, v.Model, v.Prompt, v.Completion, v.Reasoning, v.Cost); e != nil {
+			return e
+		}
+		// The job's total as one step, so a later step adds to it.
+		if _, e = tx.Exec("INSERT INTO usage_steps VALUES(?,'',?,?,?,?,?)", v.Job, v.Model, v.Prompt, v.Completion, v.Reasoning, v.Cost); e != nil {
 			return e
 		}
 	}

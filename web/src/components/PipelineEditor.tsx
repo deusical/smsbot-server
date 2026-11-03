@@ -3,6 +3,7 @@ import type { Workspace } from "../lib/workspace";
 import {
   connect,
   maxSteps,
+  needsDeadline,
   newStep,
   problems,
   sources,
@@ -35,9 +36,7 @@ export function PipelineEditor({
   onChange: (pipeline: Pipeline) => void;
 }) {
   const issues = problems(pipeline, modules);
-  const longRunning = pipeline.steps.some(
-    (s) => modules.find((m) => m.id === s.module)?.long_running,
-  );
+  const longRunning = needsDeadline(pipeline, modules);
   const minutes = pipeline.execution_minutes || 15;
   function setSteps(steps: PipelineStep[]) {
     onChange({ ...pipeline, steps });

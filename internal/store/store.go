@@ -144,11 +144,14 @@ func (s *Store) migrateSchema() error {
 	if e := s.DB.QueryRow("PRAGMA user_version").Scan(&version); e != nil {
 		return e
 	}
-	if version > 8 {
+	if version > 9 {
 		return errors.New("database is newer than this service")
 	}
-	if version == 8 {
+	if version == 9 {
 		return nil
+	}
+	if version == 8 {
+		return s.migrateUsageSteps()
 	}
 	if version == 7 {
 		return s.migratePush()

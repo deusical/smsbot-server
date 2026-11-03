@@ -138,8 +138,15 @@ linear list of steps. Each step runs one registered module
 output ports (`text`, `url`, `file`, `video`, `stored_video`, `message`, `context`), a strict
 settings schema, an effect class and retry/resource classes. Each input is bound
 to `trigger.<output>` or an earlier `<step>.<output>` of a compatible type;
-saving checks every binding, setting and rule (at most 8 steps, one paid AI
-step, the reply last).
+saving checks every binding, setting and rule (at most 8 steps, the reply last).
+A command may make several AI requests, for example summarize and then
+translate: each AI step's usage is kept in `usage_steps` and the job's `usage`
+row is their total, so the daily budget is checked before every request and an
+unknown cost on any step blocks further requests. Several AI steps, like a
+long-running step, give the job the pipeline's execution deadline instead of
+the two-minute window. The job's conversation turn is the AI step that reads a
+conversation (else the first AI step); only it sets the plan's AI request
+fields.
 
 | Module | Does |
 |---|---|

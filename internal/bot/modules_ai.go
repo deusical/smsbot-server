@@ -253,16 +253,8 @@ func aiChatModule() module {
 			if v, ok := s.in("context"); ok && v.Context != nil {
 				st.Conversation = v.Context.Kind
 			}
-			prompt, known := s.in("prompt")
-			if !known {
-				// Built from a later value; prepared when the step runs.
-				s.save(st)
-				return stepPending, nil
-			}
-			st.Input = prompt.Text
-			if f, ok := s.in("file"); ok {
-				st.File = f.File
-			}
+			// The conversation is fixed when the command arrives, even when the
+			// prompt is built by an earlier step at dispatch.
 			p := a.p
 			if st.Conversation != "none" {
 				p.Memory = true
@@ -271,11 +263,26 @@ func aiChatModule() module {
 					return stepDecline, err
 				}
 			}
-			switch st.Conversation {
-			case "rolling":
+			if st.Conversation == "rolling" {
 				if st.History, err = e.Store.Memory(memoryScope(a.m.ConversationID, "!"+a.cmd.Name, model, p.MemberOf()), e.now()); err != nil {
 					return stepDecline, err
 				}
+			}
+			prompt, known := s.in("prompt")
+			if !known {
+				// Built from a later value; prepared when the step runs. A
+				// thread needs its prompt now, which validation guarantees.
+				if turnStep(s.steps) == s.ID {
+					mirrorAI(p, st)
+				}
+				s.save(st)
+				return stepPending, nil
+			}
+			st.Input = prompt.Text
+			if f, ok := s.in("file"); ok {
+				st.File = f.File
+			}
+			switch st.Conversation {
 			case "thread":
 				thread, history, note, halt, err := e.planAIThread(a.m, p, a.parent, "!"+a.cmd.Name, selected, g, a.cfg.Settings, st.Input, st.Instructions, st.File)
 				if err != nil {
@@ -289,14 +296,17 @@ func aiChatModule() module {
 				st.History = history
 				st.Instructions += note
 			}
-			if p.Shared {
-				// One conversation among several people: each question says who asked it.
+			if p.Shared && turnStep(s.steps) == s.ID {
+				// One conversation among several people: each question says who
+				// asked it. Other AI steps (translating, extracting) don't need it.
 				st.Input = askerLabel(*p) + ": " + st.Input
 				st.Instructions += "\nThis conversation is shared by a group chat. Each question starts with who asked it; answer the one who asked."
 			}
 			// A job makes one AI request; the plan records it, and with a
 			// conversation it is the turn recorded when the reply is sent.
-			mirrorAI(p, st)
+			if turnStep(s.steps) == s.ID {
+				mirrorAI(p, st)
+			}
 			st.Prepared = true
 			s.save(st)
 			return stepPending, nil
@@ -311,13 +321,15 @@ func aiChatModule() module {
 				if f, ok := s.in("file"); ok {
 					st.File = f.File
 				}
-				if r.p.Shared {
+				if r.p.Shared && turnStep(s.steps) == s.ID {
 					st.Input = askerLabel(*r.p) + ": " + st.Input
 					st.Instructions += "\nThis conversation is shared by a group chat. Each question starts with who asked it; answer the one who asked."
 				}
 				st.Prepared = true
 				s.save(st)
-				mirrorAI(r.p, st)
+				if turnStep(s.steps) == s.ID {
+					mirrorAI(r.p, st)
+				}
 			}
 			history := st.History
 			if st.Conversation != "none" && r.p.Memory {
@@ -333,7 +345,7 @@ func aiChatModule() module {
 					history = nil
 				}
 			}
-			call := aiCall{Model: st.Model, Instructions: st.Instructions, Generation: st.Generation, Input: st.Input, File: st.File}
+			call := aiCall{Step: s.ID, Model: st.Model, Instructions: st.Instructions, Generation: st.Generation, Input: st.Input, File: st.File}
 			return e.generateReply(r.ctx, r.j, r.p, r.cfg, call, history, func(text string) {
 				s.out("text", store.Value{Type: typeText, Text: text})
 				s.out("context", store.Value{Type: typeContext, Context: &store.ConversationRef{Kind: st.Conversation}})
@@ -344,7 +356,11 @@ func aiChatModule() module {
 			var set aiSettings
 			_ = s.decode(&set)
 			if model, _, _ := resolveAI(sim.cfg, set); model != "" {
-				sim.model = model
+				if sim.model == "Local" || sim.model == "" {
+					sim.model = model
+				} else if !strings.Contains(", "+sim.model+", ", ", "+model+", ") {
+					sim.model += ", " + model
+				}
 			}
 			kind := "none"
 			if v, ok := s.in("context"); ok && v.Context != nil {
@@ -363,6 +379,8 @@ func mirrorAI(p *store.Plan, st aiState) {
 
 // aiCall is one provider request an AI step makes.
 type aiCall struct {
+	// Step names the AI step, so each request's usage is kept separately.
+	Step         string
 	Model        string
 	Instructions string
 	Generation   json.RawMessage

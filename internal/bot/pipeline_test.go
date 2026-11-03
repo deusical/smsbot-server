@@ -47,15 +47,11 @@ func TestPipelineValidation(t *testing.T) {
 		"bad step id":      {Steps: []PipelineStep{step("trigger", "text.template", nil, ""), reply(map[string]string{"text": "trigger.text"})}},
 		"duplicate id":     {Steps: []PipelineStep{step("x", "text.template", nil, ""), step("x", "text.template", nil, ""), reply(map[string]string{"text": "x.text"})}},
 		"video bounds":     {Steps: []PipelineStep{step("link", "text.extract_url", map[string]string{"text": "trigger.args"}, ""), step("v", "video.download", map[string]string{"url": "link.url"}, `{"passes":5}`), reply(map[string]string{"file": "v.video"})}},
-		"two ai steps": {Steps: []PipelineStep{
-			step("a", "ai.chat", map[string]string{"prompt": "trigger.args"}, ""),
-			step("b", "ai.chat", map[string]string{"prompt": "a.text"}, ""),
-			reply(map[string]string{"text": "b.text"}),
-		}},
-		"question from later work": {Steps: []PipelineStep{
-			step("a", "ai.chat", map[string]string{"prompt": "trigger.args"}, ""),
-			step("q", "message.question", map[string]string{"text": "a.text", "message": "trigger.message"}, ""),
-			reply(map[string]string{"text": "q.prompt"}),
+		"thread prompt from a later answer": {Steps: []PipelineStep{
+			step("first", "ai.chat", map[string]string{"prompt": "trigger.args"}, ""),
+			step("c", "context.thread", nil, ""),
+			step("a", "ai.chat", map[string]string{"prompt": "first.text", "context": "c.context"}, ""),
+			reply(map[string]string{"text": "a.text", "continues": "a.context"}),
 		}},
 		"thread not continued": {Steps: []PipelineStep{
 			step("c", "context.thread", nil, ""),
