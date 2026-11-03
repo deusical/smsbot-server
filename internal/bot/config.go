@@ -37,18 +37,21 @@ type Settings struct {
 	OwnerCommands bool `json:"owner_commands"`
 }
 type Command struct {
-	ExecutionMinutes     int         `json:"execution_minutes,omitempty"`
-	Name                 string      `json:"name"`
-	Description          string      `json:"description"`
-	Instructions         string      `json:"instructions"`
-	Type                 string      `json:"type"`
-	Enabled              bool        `json:"enabled"`
-	Model                string      `json:"model"`
-	ProfileID            string      `json:"profile_id"`
-	Memory               bool        `json:"memory"`
-	Approval             bool        `json:"approval"`
-	AllowedConversations []string    `json:"allowed_conversations"`
-	Generation           *Generation `json:"generation,omitempty"`
+	Kind                 string          `json:"kind,omitempty"`
+	Settings             json.RawMessage `json:"settings,omitempty"`
+	Revision             int             `json:"revision,omitempty"`
+	ExecutionMinutes     int             `json:"execution_minutes,omitempty"`
+	Name                 string          `json:"name"`
+	Description          string          `json:"description"`
+	Instructions         string          `json:"instructions"`
+	Type                 string          `json:"type"`
+	Enabled              bool            `json:"enabled"`
+	Model                string          `json:"model"`
+	ProfileID            string          `json:"profile_id"`
+	Memory               bool            `json:"memory"`
+	Approval             bool            `json:"approval"`
+	AllowedConversations []string        `json:"allowed_conversations"`
+	Generation           *Generation     `json:"generation,omitempty"`
 }
 type Profile struct {
 	ID           string `json:"id"`
@@ -105,7 +108,10 @@ func (c Configuration) Validate() error {
 	}
 	names := map[string]bool{}
 	for _, cmd := range c.Commands {
-		if cmd.ExecutionMinutes < 0 || cmd.ExecutionMinutes > 60 || !commandPattern.MatchString(cmd.Name) || strings.Contains("|ping|help|status|new|more|deepseek|", "|"+cmd.Name+"|") || names[cmd.Name] || len(cmd.Description) > 200 || len(cmd.Instructions) > 12000 || (cmd.Type != "ai" && cmd.Type != "fixed" && cmd.Type != "download") || len(cmd.Model) > 200 || len(cmd.AllowedConversations) > 100 || cmd.ProfileID != "" && !profiles[cmd.ProfileID] {
+		if err := normalizeCommand(&cmd); err != nil {
+			return err
+		}
+		if cmd.ExecutionMinutes < 0 || cmd.ExecutionMinutes > 60 || !commandPattern.MatchString(cmd.Name) || strings.Contains("|ping|help|status|new|more|deepseek|", "|"+cmd.Name+"|") || names[cmd.Name] || len(cmd.Description) > 200 || len(cmd.Instructions) > 12000 || commandKind(cmd) == "" || len(cmd.Model) > 200 || len(cmd.AllowedConversations) > 100 || cmd.ProfileID != "" && !profiles[cmd.ProfileID] {
 			return errors.New("invalid command")
 		}
 		if cmd.Generation != nil {
@@ -132,6 +138,9 @@ func (e *Engine) Configuration() (Configuration, error) {
 	if c.Settings.AIPhotoMaxMB == 0 {
 		c.Settings.AIPhotoMaxMB = defaultPhotoMB
 	}
+	if err := normalizeCommands(&c); err != nil {
+		return c, err
+	}
 	return c, c.Validate()
 }
 func (e *Engine) SetConfiguration(c Configuration) error {
@@ -147,6 +156,26 @@ func (e *Engine) SetConfiguration(c Configuration) error {
 	if err != nil {
 		return err
 	}
+	// During the transition an older editor can echo the new fields unchanged
+	// while modifying the flat fields. Preserve those edits before normalizing.
+	for i := range c.Commands {
+		for _, previous := range old.Commands {
+			current := &c.Commands[i]
+			if current.Name == previous.Name && current.Kind == previous.Kind && string(current.Settings) == string(previous.Settings) {
+				current.Settings = nil
+				if current.Type != previous.Type {
+					current.Kind = ""
+				}
+			}
+		}
+	}
+	if err := normalizeCommands(&c); err != nil {
+		return err
+	}
+	if err := c.Validate(); err != nil {
+		return err
+	}
+
 	if c.Settings.ModelGeneration == nil {
 		c.Settings.ModelGeneration = map[string]Generation{}
 	}
@@ -167,7 +196,7 @@ func (e *Engine) SetConfiguration(c Configuration) error {
 		}
 		consented := false
 		for _, current := range c.Commands {
-			if current.Name == previous.Name && current.Memory && current.Enabled && current.Type == previous.Type {
+			if current.Name == previous.Name && current.Memory && current.Enabled && commandKind(current) == commandKind(previous) {
 				consented = true
 				break
 			}

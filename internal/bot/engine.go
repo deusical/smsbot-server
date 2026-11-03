@@ -460,27 +460,40 @@ func (e *Engine) planCommand(ctx context.Context, m transport.Incoming, p *store
 	if !ok || !allowed(cmd, m.ConversationID) {
 		return "", false, nil
 	}
-	name = cmd.Name
-	if cmd.Type == "download" {
-		if parent != nil {
-			return "", false, nil
-		}
-		p.Approval = cmd.Approval
-		p.DownloadURL = downloadURL(input)
-		if p.DownloadURL != "" {
-			minutes := cmd.ExecutionMinutes
-			if minutes == 0 {
-				minutes = 15
-			}
-			p.ExecutionDeadline = e.now().Add(time.Duration(minutes) * time.Minute).UTC().Format(time.RFC3339Nano)
-		}
-		if p.DownloadURL == "" {
-			p.Reply = "Include one Douyin or Xiaohongshu video link after the command."
-		}
-		return name, true, nil
+	k, exists := kindRegistry[commandKind(cmd)]
+	if !exists {
+		return "", false, errors.New("invalid command kind")
 	}
+	p.Kind = k.ID
+	return k.plan(e, ctx, Input{Incoming: m, Arguments: input, Parent: parent}, p, cfg, cmd, model, instructions, g)
+}
+
+func planVideoKind(e *Engine, ctx context.Context, in Input, p *store.Plan, cfg Configuration, cmd Command, model, instructions string, g Generation) (string, bool, error) {
+	input, parent := in.Arguments, in.Parent
+	name := cmd.Name
+	if parent != nil {
+		return "", false, nil
+	}
+	p.Approval = cmd.Approval
+	p.DownloadURL = downloadURL(input)
+	if p.DownloadURL != "" {
+		minutes := cmd.ExecutionMinutes
+		if minutes == 0 {
+			minutes = 15
+		}
+		p.ExecutionDeadline = e.now().Add(time.Duration(minutes) * time.Minute).UTC().Format(time.RFC3339Nano)
+	}
+	if p.DownloadURL == "" {
+		p.Reply = "Include one Douyin or Xiaohongshu video link after the command."
+	}
+	return name, true, nil
+}
+
+func planReplyKind(e *Engine, ctx context.Context, in Input, p *store.Plan, cfg Configuration, cmd Command, model, instructions string, g Generation) (string, bool, error) {
+	m, input, parent := in.Incoming, in.Arguments, in.Parent
+	name := cmd.Name
 	// Only the canonical AI ask uses explicit threads. Other command memory stays unchanged.
-	threaded := cmd.Name == "ask" && cmd.Type == "ai"
+	threaded := cmd.Name == "ask" && kindThreads(cmd)
 	if parent != nil && (!threaded || !cmd.Memory) {
 		return "", false, nil
 	}
@@ -499,10 +512,14 @@ func (e *Engine) planCommand(ctx context.Context, m transport.Incoming, p *store
 	p.MemoryHours = cfg.Settings.MemoryHours
 	p.Approval = cmd.Approval
 	p.Input = input
-	if cmd.Type == "fixed" {
-		p.Reply = strings.ReplaceAll(instructions, "{input}", input)
-		return name, true, nil
-	}
+	return kindRegistry[commandKind(cmd)].reply(e, ctx, m, p, cfg, cmd, model, instructions, g, input, threaded, parent)
+}
+func planFixedReply(e *Engine, ctx context.Context, m transport.Incoming, p *store.Plan, cfg Configuration, cmd Command, model, instructions string, g Generation, input string, threaded bool, parent *store.AIParent) (string, bool, error) {
+	p.Reply = strings.ReplaceAll(instructions, "{input}", input)
+	return cmd.Name, true, nil
+}
+func planAIReply(e *Engine, ctx context.Context, m transport.Incoming, p *store.Plan, cfg Configuration, cmd Command, model, instructions string, g Generation, input string, threaded bool, parent *store.AIParent) (string, bool, error) {
+	name := cmd.Name
 	ok, err := e.planAI(ctx, m, p, cfg, cmd, model, instructions, g, input, threaded, parent)
 	if ok && err == nil && p.Shared && p.Model != "" {
 		// One conversation among several people: each question says who asked it.
@@ -833,7 +850,7 @@ func (e *Engine) check(ctx context.Context, j store.Job, p store.Plan) (Configur
 	}
 	if p.Thread != nil {
 		cmd, _, _, _, enabled := resolve(cfg, strings.TrimPrefix(j.Command, "!"))
-		if !enabled || cmd.Type != "ai" || !cmd.Memory {
+		if !enabled || !kindThreads(cmd) || !cmd.Memory {
 			return cfg, "thread_unavailable", nil
 		}
 		if err := e.Store.CheckAIThread(j.ConversationID, p.ThreadOwner(), j.Command, p, e.now(), cfg.Settings.MemoryHours, cfg.Settings.RetentionDays); errors.Is(err, store.ErrAIThreadUnavailable) {
@@ -884,7 +901,7 @@ func (e *Engine) Dispatch(ctx context.Context) error {
 		return e.dispatchReaction(ctx, j, p) // releases the lock
 	}
 	defer e.mu.Unlock()
-	if done, err := e.prepareDownload(ctx, j, &p); done {
+	if done, err := prepareKind(e, ctx, j, &p); done {
 		return err
 	}
 	history, err := e.memoryContext(j, cfg, &p)
@@ -1337,17 +1354,12 @@ func (e *Engine) Playground(name, input string) (map[string]any, error) {
 	if !ok {
 		return nil, errors.New("command_unavailable")
 	}
-	text := "Simulated AI response. No provider request was made."
-	if cmd.Type == "fixed" {
-		text = strings.ReplaceAll(instructions, "{input}", input)
+	k, exists := kindRegistry[commandKind(cmd)]
+	if !exists {
+		return nil, errors.New("invalid command kind")
 	}
-	if cmd.Type == "download" {
-		model = "Local"
-		text = "Include one Douyin or Xiaohongshu video link after the command."
-		if downloadURL(input) != "" {
-			text = "Video link recognized. A live command saves the original on the server and sends a video under 20 MB. No download or send was performed by this preview."
-		}
-	}
+	text, model := k.preview(instructions, input, model)
+
 	return map[string]any{"text": text, "model": model, "simulated": true}, nil
 }
 func (e *Engine) Run(ctx context.Context, report func(error)) {

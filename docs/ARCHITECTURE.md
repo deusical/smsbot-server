@@ -129,3 +129,21 @@ sends twice.
 - **State on disk:** the data directory holds `smsbot.db`, the encrypted Google session
   and archived files; the key lives elsewhere. A lock stops two processes from using
   the same directory.
+
+## Command kinds
+
+`internal/bot/kinds.go` registers `fixed.reply@1`, `ai.generate@1` and
+`media.video@1` in the bot package. Definitions expose settings form schemas,
+thread support, retry and resource classes. The registry owns planning and
+preview callbacks and the short preparation callback. Preparation can defer
+worker polling through `job_work`; it never submits messages. Dispatcher checks,
+persisted outbound intents and uncertain-send handling remain the send boundary.
+
+Command configuration retains the legacy flat fields alongside `kind`, raw
+`settings` and a reserved `revision`. Legacy recipes are accepted and normalized;
+unknown settings are rejected. Both forms are saved for downgrade compatibility.
+During migration an unchanged settings object echoed by a legacy editor permits
+flat-field edits, including switching type. Changed settings are authoritative.
+The incoming message passed to planning supplies arguments, quoted message and
+attachment references and the sender's own attachment; AI resolution and memory
+epoch handling continue to use the existing conversation access checks.

@@ -1576,6 +1576,32 @@ components:
       type: object
       additionalProperties: false
       properties:
+        kind:
+          type: string
+          enum: [fixed.reply, ai.generate, media.video]
+          description: Optional versioned kind identity; legacy type is retained for downgrade compatibility.
+        settings:
+          type: object
+          description: Kind settings. Unknown fields are rejected. Legacy flat fields remain supported.
+          additionalProperties: false
+          properties:
+            instructions:
+              type: string
+            model:
+              type: string
+            profile_id:
+              type: string
+            memory:
+              type: boolean
+            generation:
+              $ref: '#/components/schemas/Generation'
+            execution_minutes:
+              type: integer
+              minimum: 0
+              maximum: 60
+        revision:
+          type: integer
+          description: Reserved command revision for the registry migration.
         execution_minutes:
           type: integer
           minimum: 0
