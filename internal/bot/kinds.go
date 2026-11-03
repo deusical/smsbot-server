@@ -24,7 +24,7 @@ type KindDefinition struct {
 var kindRegistry = map[string]KindDefinition{
 	"fixed.reply": {ID: "fixed.reply", Title: "Fixed text", LegacyType: "fixed", Version: 1, RetryClass: "none", ResourceClass: "upload"},
 	"ai.generate": {ID: "ai.generate", Title: "AI", LegacyType: "ai", Version: 1, Threads: true, RetryClass: "none", ResourceClass: "provider"},
-	"media.video": {ID: "media.video", Title: "Download video", LegacyType: "download", Version: 1, RetryClass: "idempotent-poll", ResourceClass: "media"},
+	"media.video": {ID: "media.video", Title: "Download Douyin/Xiaohongshu video", LegacyType: "download", Version: 1, RetryClass: "idempotent-poll", ResourceClass: "media"},
 	"pipeline":    {ID: "pipeline", Title: "Custom steps", LegacyType: "fixed", Version: 1, RetryClass: "none", ResourceClass: "local"},
 }
 

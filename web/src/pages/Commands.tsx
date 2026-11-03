@@ -62,7 +62,7 @@ const templates: {
     },
   },
   {
-    label: "Download video",
+    label: "Download Douyin/Xiaohongshu video",
     detail: "Save on the server and send a video under 20 MB",
     command: {
       name: "download",

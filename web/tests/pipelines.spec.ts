@@ -41,8 +41,8 @@ test("a command built from steps saves, previews and runs offline", async ({
     await page.getByRole("button", { name: "Remove step 1" }).click();
     const add = page.getByLabel("Add a step");
     for (const title of [
-      "Find video link",
-      "Download video",
+      "Find Douyin/Xiaohongshu link",
+      "Download Douyin/Xiaohongshu video",
       "Compress video",
       "Text",
     ])

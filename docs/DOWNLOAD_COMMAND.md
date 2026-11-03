@@ -1,6 +1,6 @@
 ﻿# Server-local download command
 
-Create **Commands → New → Download video**, keep the name `download`, select who
+Create **Commands → New → Download Douyin/Xiaohongshu video**, keep the name `download`, select who
 can use it, enable it and save. Send `!download <share text containing one video
 link>`. One Douyin or Xiaohongshu video is supported per request; photo galleries
 and multiple distinct links are rejected. Preview recognizes links offline.

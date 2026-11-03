@@ -71,15 +71,15 @@ Commands are messages starting with `!`, sent by someone with bot replies on. Th
 built-ins are `!ping`, `!help`, `!status`, `!new` and `!more`. You can add your own.
 
 Every command is a list of **steps**, shown as a flow at the top of the editor
-(for example Command → Find video link → Download video → Compress video →
+(for example Command → Find Douyin/Xiaohongshu link → Download Douyin/Xiaohongshu video → Compress video →
 Reply). Each step runs one module:
 
 | Group | Modules |
 |---|---|
-| Text | **Text** (fixed text, `{input}` replaced by what's connected), **Find video link**, **Question** (the command text, its file and the messages it replies to) |
+| Text | **Text** (fixed text, `{input}` replaced by what's connected), **Find Douyin/Xiaohongshu link**, **Question** (the command text, its file and the messages it replies to) |
 | AI | **AI answer** (model, profile, instructions, generation settings) |
 | Memory | **No memory**, **Recent memory**, **Reply threads** |
-| Video | **Download video** (the original stays encrypted on the server), **Compress video** (a copy under the size limit) |
+| Video | **Download Douyin/Xiaohongshu video** (the original stays encrypted on the server), **Compress video** (a copy under the size limit) |
 | Send | **Reply**, always last: sends text and a file after the same checks as every reply |
 
 Each input connects to the command or to an earlier step's output; only outputs
@@ -93,7 +93,7 @@ steps open as the steps they already run and are stored as steps the first time
 you change one.
 
 **New** offers starting points (AI assistant, Quick reply, Translator, Download
-video, Blank), all ordinary steps; new commands start
+Douyin/Xiaohongshu video, Blank), all ordinary steps; new commands start
 disabled. **Try it** previews a command offline. Bot replies are limited per hour and per
 day, and AI spending per day; your own messages never count toward these limits. Quiet
 hours drop requests instead of delaying them. With **Commands from your phone** on, your
