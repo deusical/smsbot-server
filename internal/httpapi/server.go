@@ -102,7 +102,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		limit = 256 * 1024
 	}
 	if r.URL.Path == "/api/v1/config" || r.URL.Path == "/api/v1/recipes/import" {
-		limit = 2 * 1024 * 1024
+		// Commands retain both representations during the registry migration.
+		limit = 4 * 1024 * 1024
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, limit)
 	s.mux.ServeHTTP(w, r)

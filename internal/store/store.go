@@ -36,12 +36,13 @@ type Job struct {
 	RequestedReasoning string   `json:"requested_reasoning,omitempty"`
 }
 type Plan struct {
-	Kind              string        `json:"kind,omitempty"`
-	ExecutionDeadline string        `json:"execution_deadline,omitempty"`
-	DownloadURL       string        `json:"download_url,omitempty"`
-	DownloadUploaded  bool          `json:"download_uploaded,omitempty"`
-	DownloadMaxBytes  int64         `json:"download_max_bytes,omitempty"`
-	Thread            *AIThreadPlan `json:"thread,omitempty"`
+	KindSettings      json.RawMessage `json:"kind_settings,omitempty"`
+	Kind              string          `json:"kind,omitempty"`
+	ExecutionDeadline string          `json:"execution_deadline,omitempty"`
+	DownloadURL       string          `json:"download_url,omitempty"`
+	DownloadUploaded  bool            `json:"download_uploaded,omitempty"`
+	DownloadMaxBytes  int64           `json:"download_max_bytes,omitempty"`
+	Thread            *AIThreadPlan   `json:"thread,omitempty"`
 	// File is the attachment the AI command carries or quoted. Only the
 	// reference is planned; the bytes are read just before generation and never
 	// stored in the plan. The JSON name predates files other than photos.

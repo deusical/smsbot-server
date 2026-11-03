@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/deusical/smsbot-server/internal/media"
@@ -28,12 +30,23 @@ type DownloadProvider interface {
 type HTTPDownloader struct {
 	Endpoint, Token string
 	Client          *http.Client
+	Warning         func(string)
+	outdated        sync.Once
 }
 
 // PollDownload repeats preparation requests by durable job ID, never sends.
 func (d *HTTPDownloader) PollDownload(ctx context.Context, id, target string, limit int64, deadline time.Time) ([]byte, string, error) {
+	return d.pollDownload(ctx, id, target, limit, deadline, nil)
+}
+
+func (d *HTTPDownloader) pollDownload(ctx context.Context, id, target string, limit int64, deadline time.Time, settings *VideoSettings) ([]byte, string, error) {
 	endpoint := strings.TrimRight(d.Endpoint, "/") + "/jobs/" + id
-	body, _ := json.Marshal(map[string]any{"url": target, "max_bytes": limit, "deadline": deadline.Unix()})
+	payload := map[string]any{"url": target, "max_bytes": limit, "deadline": deadline.Unix()}
+	if settings != nil {
+		payload["protocol"] = 2
+		payload["settings"] = settings
+	}
+	body, _ := json.Marshal(payload)
 	request, err := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewReader(body))
 	if err != nil {
 		return nil, "", errors.New("download_failed")
@@ -94,6 +107,52 @@ func (d *HTTPDownloader) PollDownload(ctx context.Context, id, target string, li
 		return nil, "", errors.New("download_failed")
 	}
 	return data, "complete", nil
+}
+
+// Negotiate before job creation so an old worker checkpoints only its defaults.
+func (d *HTTPDownloader) PollDownloadSettings(ctx context.Context, id, target string, limit int64, deadline time.Time, settings VideoSettings) ([]byte, string, error) {
+	if err := settings.Validate(); err != nil {
+		return nil, "", errors.New("download_failed")
+	}
+	request, err := http.NewRequestWithContext(ctx, "GET", strings.TrimRight(d.Endpoint, "/")+"/capabilities", nil)
+	if err != nil {
+		return nil, "", errors.New("download_failed")
+	}
+	request.Header.Set("Authorization", "Bearer "+d.Token)
+	client := http.Client{}
+	if d.Client != nil {
+		client = *d.Client
+	}
+	client.Timeout = 5 * time.Second
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	response, err := client.Do(request)
+	if err != nil {
+		return nil, "waiting_worker", nil
+	}
+	defer response.Body.Close()
+	var support struct {
+		Protocol int `json:"protocol"`
+	}
+	supported := false
+	if response.StatusCode == 200 {
+		supported = json.NewDecoder(io.LimitReader(response.Body, 4096)).Decode(&support) == nil && support.Protocol == 2
+	} else if response.StatusCode == 503 {
+		return nil, "waiting_worker", nil
+	} else if response.StatusCode != 404 && response.StatusCode != 410 && response.StatusCode != 426 && response.StatusCode != 501 && response.StatusCode != 502 {
+		return nil, "", errors.New("download_failed")
+	}
+	if !supported {
+		d.outdated.Do(func() {
+			const code = "download_worker_outdated_using_defaults"
+			if d.Warning != nil {
+				d.Warning(code)
+			} else {
+				log.Print(code)
+			}
+		})
+		return d.pollDownload(ctx, id, target, limit, deadline, nil)
+	}
+	return d.pollDownload(ctx, id, target, limit, deadline, &settings)
 }
 
 var shareURL = regexp.MustCompile(`https?://[^\s<>"'，。；、]+`)
@@ -163,7 +222,21 @@ func (e *Engine) prepareDownload(ctx context.Context, j store.Job, p *store.Plan
 	e.pending[j.ID] = cancel
 	e.mu.Unlock()
 	requestctx, requestcancel := context.WithTimeout(workctx, 10*time.Second)
-	data, stage, workerr := e.Downloader.PollDownload(requestctx, j.ID, p.DownloadURL, limit, deadline)
+	var data []byte
+	var stage string
+	var workerr error
+	if provider, ok := e.Downloader.(interface {
+		PollDownloadSettings(context.Context, string, string, int64, time.Time, VideoSettings) ([]byte, string, error)
+	}); ok {
+		settings := DefaultVideoSettings()
+		if len(p.KindSettings) > 0 && json.Unmarshal(p.KindSettings, &settings) != nil {
+			workerr = errors.New("download_failed")
+		} else {
+			data, stage, workerr = provider.PollDownloadSettings(requestctx, j.ID, p.DownloadURL, limit, deadline, settings)
+		}
+	} else {
+		data, stage, workerr = e.Downloader.PollDownload(requestctx, j.ID, p.DownloadURL, limit, deadline)
+	}
 	requestcancel()
 	cancel()
 	e.mu.Lock()

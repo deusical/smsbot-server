@@ -108,6 +108,11 @@ type commandSettings struct {
 	Memory           bool        `json:"memory,omitempty"`
 	Generation       *Generation `json:"generation,omitempty"`
 	ExecutionMinutes int         `json:"execution_minutes,omitempty"`
+	Preset           *string     `json:"preset,omitempty"`
+	Passes           *int        `json:"passes,omitempty"`
+	MaxAttempts      *int        `json:"max_attempts,omitempty"`
+	CopyIfFits       *bool       `json:"copy_if_fits,omitempty"`
+	MaxMB            *float64    `json:"max_mb,omitempty"`
 }
 
 // normalizeCommand accepts either representation and writes both. A supplied
@@ -117,7 +122,7 @@ func normalizeCommand(c *Command) error {
 	if _, ok := kindRegistry[id]; !ok {
 		return errors.New("invalid command kind")
 	}
-	s := commandSettings{c.Instructions, c.Model, c.ProfileID, c.Memory, c.Generation, c.ExecutionMinutes}
+	s := commandSettings{Instructions: c.Instructions, Model: c.Model, ProfileID: c.ProfileID, Memory: c.Memory, Generation: c.Generation, ExecutionMinutes: c.ExecutionMinutes}
 	if len(c.Settings) > 0 {
 		if len(bytes.TrimSpace(c.Settings)) == 0 || bytes.TrimSpace(c.Settings)[0] != '{' {
 			return errors.New("invalid command settings")
@@ -128,6 +133,43 @@ func normalizeCommand(c *Command) error {
 		if d.Decode(&s) != nil || d.Decode(new(any)) != io.EOF {
 			return errors.New("invalid command settings")
 		}
+	}
+	if id == "media.video" {
+		v := DefaultVideoSettings()
+		if s.Preset != nil {
+			v.Preset = *s.Preset
+		}
+		if s.Passes != nil {
+			v.Passes = *s.Passes
+		}
+		if s.MaxAttempts != nil {
+			v.MaxAttempts = *s.MaxAttempts
+		}
+		if s.CopyIfFits != nil {
+			v.CopyIfFits = *s.CopyIfFits
+		}
+		if s.MaxMB != nil {
+			v.MaxMB = *s.MaxMB
+		}
+		if s.ExecutionMinutes != 0 {
+			v.ExecutionMinutes = s.ExecutionMinutes
+		}
+		var raw map[string]json.RawMessage
+		if len(c.Settings) > 0 {
+			_ = json.Unmarshal(c.Settings, &raw)
+			for _, key := range []string{"preset", "passes", "max_attempts", "copy_if_fits", "max_mb", "execution_minutes"} {
+				if value, ok := raw[key]; ok && (bytes.Equal(bytes.TrimSpace(value), []byte("null")) || key == "execution_minutes" && s.ExecutionMinutes == 0) {
+					return errors.New("invalid video settings")
+				}
+			}
+		}
+		if err := v.Validate(); err != nil {
+			return err
+		}
+		s.Preset, s.Passes, s.MaxAttempts, s.CopyIfFits, s.MaxMB = &v.Preset, &v.Passes, &v.MaxAttempts, &v.CopyIfFits, &v.MaxMB
+		s.ExecutionMinutes = v.ExecutionMinutes
+	} else if s.Preset != nil || s.Passes != nil || s.MaxAttempts != nil || s.CopyIfFits != nil || s.MaxMB != nil {
+		return errors.New("invalid command settings")
 	}
 	c.Kind = id
 	switch id {
@@ -153,15 +195,16 @@ func normalizeCommands(c *Configuration) error {
 
 // SettingsSchema is the small, bounded form vocabulary exposed to clients.
 type SettingsSchema struct {
-	Type       string                    `json:"type"`
-	Properties map[string]SettingsSchema `json:"properties,omitempty"`
-	Title      string                    `json:"title,omitempty"`
-	UI         string                    `json:"ui,omitempty"`
-	Default    any                       `json:"default,omitempty"`
-	Minimum    *float64                  `json:"minimum,omitempty"`
-	Maximum    *float64                  `json:"maximum,omitempty"`
-	Enum       []string                  `json:"enum,omitempty"`
-	Unit       string                    `json:"unit,omitempty"`
+	Type             string                    `json:"type"`
+	Properties       map[string]SettingsSchema `json:"properties,omitempty"`
+	Title            string                    `json:"title,omitempty"`
+	UI               string                    `json:"ui,omitempty"`
+	Default          any                       `json:"default,omitempty"`
+	Minimum          *float64                  `json:"minimum,omitempty"`
+	EffectiveMaximum *float64                  `json:"effective_maximum,omitempty"`
+	Maximum          *float64                  `json:"maximum,omitempty"`
+	Enum             []string                  `json:"enum,omitempty"`
+	Unit             string                    `json:"unit,omitempty"`
 }
 
 func bound(v float64) *float64 { return &v }
@@ -187,7 +230,15 @@ func kindSchema(id string) SettingsSchema {
 		}}
 	}
 	if id == "media.video" {
-		fields["execution_minutes"] = SettingsSchema{Type: "number", Title: "Execution deadline (minutes)", Default: 15, Minimum: bound(0), Maximum: bound(60), Unit: "minutes"}
+		fields["execution_minutes"] = SettingsSchema{Type: "number", Title: "Execution deadline (minutes)", Default: 15, Minimum: bound(1), Maximum: bound(60), Unit: "minutes"}
+	}
+	if id == "media.video" {
+		fields["preset"] = SettingsSchema{Type: "string", Title: "Encoding preset", Default: "slow", Enum: []string{"veryfast", "faster", "fast", "medium", "slow"}}
+		fields["passes"] = SettingsSchema{Type: "number", Title: "Passes", Default: 2, Minimum: bound(1), Maximum: bound(2)}
+		fields["max_attempts"] = SettingsSchema{Type: "number", Title: "Maximum attempts", Default: 3, Minimum: bound(1), Maximum: bound(3)}
+		fields["copy_if_fits"] = SettingsSchema{Type: "boolean", Title: "Copy original when it fits", Default: true}
+		fields["max_mb"] = SettingsSchema{Type: "number", Title: "Maximum video size (MB)", Default: 19.99, Minimum: bound(0.1), Maximum: bound(19.99), Unit: "MB"}
+		return SettingsSchema{Type: "object", UI: "video-cost", Properties: fields}
 	}
 	return SettingsSchema{Type: "object", Properties: fields}
 }

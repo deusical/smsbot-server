@@ -118,18 +118,31 @@ export function SchemaSettings({
         <Switch
           key={key}
           label={label}
+          hint={
+            schema.default !== undefined &&
+            value !== undefined &&
+            value !== schema.default
+              ? `Default: ${String(schema.default)}; configured: ${String(value)}`
+              : undefined
+          }
           checked={Boolean(value ?? schema.default)}
           onChange={update}
         />
       );
     const configured = value ?? schema.default ?? "";
-    const hint =
+    let hint =
       schema.ui !== "multiline" &&
       schema.default !== undefined &&
       value !== undefined &&
       JSON.stringify(value) !== JSON.stringify(schema.default)
         ? `Default: ${String(schema.default)}${schema.unit ? ` ${schema.unit}` : ""}; configured: ${String(value)}`
         : schema.unit;
+    if (
+      schema.effective_maximum !== undefined &&
+      Number(configured) > schema.effective_maximum
+    ) {
+      hint = `Default: ${String(schema.default)}; configured: ${String(configured)}; effective: ${schema.effective_maximum} ${schema.unit || ""} (host attachment limit)`;
+    }
     return (
       <Field key={key} label={label} hint={hint}>
         {schema.enum ? (
@@ -169,8 +182,27 @@ export function SchemaSettings({
       </Field>
     );
   }
+  const mediaCost = definition.schema.ui === "video-cost";
+  const setting = (key: string) =>
+    Number(values[key] ?? definition.schema.properties?.[key]?.default);
   return (
     <>
+      {mediaCost && (
+        <div className="muted">
+          <p>
+            Up to {setting("max_attempts")} attempts &times; {setting("passes")}{" "}
+            passes = {setting("max_attempts") * setting("passes")} encode passes
+            plus a verification decode. A long video can take tens of minutes;
+            deadline {setting("execution_minutes") || 15} min.
+          </p>
+          {(setting("execution_minutes") || 15) <
+            setting("max_attempts") * setting("passes") * 5 && (
+            <p role="note">
+              This deadline may be short for the selected encoding work.
+            </p>
+          )}
+        </div>
+      )}
       {Object.entries(definition.schema.properties || {}).map(([key, s]) =>
         render(key, s, values[key], (value) => change(key, value)),
       )}

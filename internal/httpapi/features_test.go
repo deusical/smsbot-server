@@ -3,8 +3,10 @@ package httpapi
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/deusical/smsbot-server/internal/bot"
@@ -161,5 +163,23 @@ func TestConfigRevisionAndKindAPI(t *testing.T) {
 	raw, _ = json.Marshal(c)
 	if w = req(s, "PUT", "/api/v1/config", string(raw), "fixture-client", ""); w.Code != 200 {
 		t.Fatal("legacy client rejected", w.Code)
+	}
+}
+
+func TestDualRepresentationConfigFitsRequestBudget(t *testing.T) {
+	s := apiSetup(t)
+	c := bot.DefaultConfiguration()
+	for i := 0; i < 90; i++ {
+		c.Commands = append(c.Commands, bot.Command{Name: fmt.Sprintf("cmd%02d", i), Type: "fixed", Instructions: strings.Repeat("x", 12000)})
+	}
+	if err := s.Engine.SetConfiguration(c); err != nil {
+		t.Fatal(err)
+	}
+	w := req(s, "GET", "/api/v1/config", "", "fixture-client", "")
+	if w.Code != 200 || w.Body.Len() <= 2<<20 {
+		t.Fatal("fixture must cover dual payload above old budget")
+	}
+	if saved := req(s, "PUT", "/api/v1/config", w.Body.String(), "fixture-client", ""); saved.Code != 200 {
+		t.Fatal("dual config cannot round-trip", saved.Code)
 	}
 }
