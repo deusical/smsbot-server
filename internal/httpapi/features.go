@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 
@@ -10,6 +11,8 @@ import (
 
 func (s *Server) featureRoutes() {
 	s.inboxRoutes()
+	s.mux.HandleFunc("GET /api/v1/command-kinds", s.protected(func(w http.ResponseWriter, r *http.Request) { s.json(w, 200, bot.KindDefinitions()) }))
+	s.mux.HandleFunc("GET /api/command-kinds", s.protected(func(w http.ResponseWriter, r *http.Request) { s.json(w, 200, bot.KindDefinitions()) }))
 	s.mux.HandleFunc("GET /api/v1/config", s.protected(s.config))
 	s.mux.HandleFunc("PUT /api/v1/config", s.protected(s.saveConfig))
 	s.mux.HandleFunc("GET /api/v1/models", s.protected(s.models))
@@ -56,6 +59,10 @@ func (s *Server) saveConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.Engine.SetConfiguration(c); err != nil {
+		if errors.Is(err, bot.ErrConfigurationConflict) {
+			s.bad(w, 409, "configuration_revision_conflict")
+			return
+		}
 		s.bad(w, 400, "invalid_configuration")
 		return
 	}

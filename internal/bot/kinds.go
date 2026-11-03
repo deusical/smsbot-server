@@ -14,6 +14,8 @@ import (
 // KindDefinition describes a versioned command implementation. Kinds build plans;
 // permission to submit remains exclusively with the dispatcher.
 type KindDefinition struct {
+	Title         string         `json:"title"`
+	LegacyType    string         `json:"legacy_type"`
 	ID            string         `json:"id"`
 	Version       int            `json:"version"`
 	Threads       bool           `json:"threads"`
@@ -42,13 +44,13 @@ var kindRegistry map[string]kind
 
 func init() {
 	kindRegistry = map[string]kind{
-		"fixed.reply": {KindDefinition: KindDefinition{ID: "fixed.reply", Version: 1, RetryClass: "none", ResourceClass: "upload"}, plan: planReplyKind, reply: planFixedReply, prepare: noKindWork, preview: func(instructions, input, model string) (string, string) {
+		"fixed.reply": {KindDefinition: KindDefinition{ID: "fixed.reply", Title: "Fixed text", LegacyType: "fixed", Version: 1, RetryClass: "none", ResourceClass: "upload"}, plan: planReplyKind, reply: planFixedReply, prepare: noKindWork, preview: func(instructions, input, model string) (string, string) {
 			return strings.ReplaceAll(instructions, "{input}", input), model
 		}},
-		"ai.generate": {KindDefinition: KindDefinition{ID: "ai.generate", Version: 1, Threads: true, RetryClass: "none", ResourceClass: "provider"}, plan: planReplyKind, reply: planAIReply, prepare: noKindWork, preview: func(_, _, model string) (string, string) {
+		"ai.generate": {KindDefinition: KindDefinition{ID: "ai.generate", Title: "AI", LegacyType: "ai", Version: 1, Threads: true, RetryClass: "none", ResourceClass: "provider"}, plan: planReplyKind, reply: planAIReply, prepare: noKindWork, preview: func(_, _, model string) (string, string) {
 			return "Simulated AI response. No provider request was made.", model
 		}},
-		"media.video": {KindDefinition: KindDefinition{ID: "media.video", Version: 1, RetryClass: "idempotent-poll", ResourceClass: "media"}, plan: planVideoKind, prepare: (*Engine).prepareDownload, preview: func(_, input, _ string) (string, string) {
+		"media.video": {KindDefinition: KindDefinition{ID: "media.video", Title: "Download video", LegacyType: "download", Version: 1, RetryClass: "idempotent-poll", ResourceClass: "media"}, plan: planVideoKind, prepare: (*Engine).prepareDownload, preview: func(_, input, _ string) (string, string) {
 			text := "Include one Douyin or Xiaohongshu video link after the command."
 			if downloadURL(input) != "" {
 				text = "Video link recognized. A live command saves the original on the server and sends a video under 20 MB. No download or send was performed by this preview."

@@ -77,6 +77,8 @@ func TestRepresentationPreservesMemoryAndLegacyEdits(t *testing.T) {
 	if before != after {
 		t.Fatal("representation invalidated memory")
 	}
+	c, _ = e.Configuration()
+	c.Commands[0].Settings = nil // Explicit legacy flat-field edit.
 	c.Commands[0].Memory = false
 	if err = e.SetConfiguration(c); err != nil {
 		t.Fatal(err)
@@ -118,6 +120,7 @@ func TestLegacyRenamedAndDuplicatedEdits(t *testing.T) {
 		t.Fatal(err)
 	}
 	c, _ = e.Configuration()
+	c.Revision = nil // Legacy editor does not understand optimistic revisions.
 	duplicate := c.Commands[0]
 	duplicate.Name = "copy"
 	duplicate.Instructions = "Goodbye {input}"
@@ -142,5 +145,48 @@ func TestKindDefinitions(t *testing.T) {
 		if d.ID == "" || d.Version != 1 || d.RetryClass == "" || d.ResourceClass == "" || len(d.Schema.Properties) == 0 {
 			t.Fatalf("incomplete definition: %+v", d)
 		}
+	}
+}
+
+func TestRevisionAwareSettingsAreAuthoritative(t *testing.T) {
+	e, _ := setup(t)
+	c := DefaultConfiguration()
+	c.Commands = []Command{{Name: "first", Type: "fixed", Instructions: "First"}, {Name: "second", Type: "fixed", Instructions: "Second"}}
+	if err := e.SetConfiguration(c); err != nil {
+		t.Fatal(err)
+	}
+	c, _ = e.Configuration()
+	c.Commands[0].Settings = json.RawMessage(`{"instructions":"Second"}`)
+	if err := e.SetConfiguration(c); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := e.Configuration()
+	if got.Commands[0].Instructions != "Second" {
+		t.Fatal("modern settings replaced by stale flat fields")
+	}
+}
+
+func TestRecipeRevisionsAreNotImported(t *testing.T) {
+	e, _ := setup(t)
+	c := DefaultConfiguration()
+	c.Commands = []Command{{Name: "hello", Type: "fixed", Instructions: "hello", Revision: 999}}
+	stale := int64(999)
+	c.Revision = &stale
+	if err := e.ImportRecipe(c); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := e.Configuration()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if *saved.Revision != 1 || saved.Commands[0].Revision != 1 || saved.Commands[0].Enabled {
+		t.Fatal("exported revision imported")
+	}
+	if err = e.ImportRecipe(c); err != nil {
+		t.Fatal(err)
+	}
+	saved, _ = e.Configuration()
+	if *saved.Revision != 2 {
+		t.Fatal("import did not create fresh revision")
 	}
 }

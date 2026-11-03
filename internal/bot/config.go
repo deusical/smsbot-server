@@ -60,6 +60,7 @@ type Profile struct {
 	Instructions string `json:"instructions"`
 }
 type Configuration struct {
+	Revision *int64    `json:"revision,omitempty"`
 	Settings Settings  `json:"settings"`
 	Commands []Command `json:"commands"`
 	Profiles []Profile `json:"profiles"`
@@ -130,10 +131,17 @@ func (e *Engine) Configuration() (Configuration, error) {
 		return c, err
 	}
 	if len(b) == 0 {
-		return DefaultConfiguration(), nil
+		c := DefaultConfiguration()
+		var revision int64
+		c.Revision = &revision
+		return c, nil
 	}
 	if json.Unmarshal(b, &c) != nil {
 		return c, errors.New("invalid saved configuration")
+	}
+	if c.Revision == nil {
+		var revision int64
+		c.Revision = &revision
 	}
 	if c.Settings.AIPhotoMaxMB == 0 {
 		c.Settings.AIPhotoMaxMB = defaultPhotoMB
@@ -153,12 +161,18 @@ func (e *Engine) SetConfiguration(c Configuration) error {
 	if err != nil {
 		return err
 	}
+	if c.Revision != nil && *c.Revision != *old.Revision {
+		return ErrConfigurationConflict
+	}
+	legacyRepresentation := c.Revision == nil
+	revision := *old.Revision + 1
+	c.Revision = &revision
 	// During the transition an older editor can echo the new fields unchanged
 	// while modifying the flat fields. Preserve those edits before normalizing.
 	for i := range c.Commands {
 		for _, previous := range old.Commands {
 			current := &c.Commands[i]
-			if current.Kind == previous.Kind && sameSettings(current.Settings, previous.Settings) {
+			if legacyRepresentation && current.Kind == previous.Kind && sameSettings(current.Settings, previous.Settings) {
 				current.Settings = nil
 				if current.Type != previous.Type {
 					current.Kind = ""
@@ -171,6 +185,9 @@ func (e *Engine) SetConfiguration(c Configuration) error {
 	}
 	if err := c.Validate(); err != nil {
 		return err
+	}
+	for i := range c.Commands {
+		c.Commands[i].Revision = int(revision)
 	}
 
 	if c.Settings.ModelGeneration == nil {
@@ -288,10 +305,12 @@ func (e *Engine) SetProviderKey(key string) error {
 
 // Recipe exports contain no identities or provider secrets. Imports start disabled.
 func CleanRecipe(c Configuration) Configuration {
+	c.Revision = nil
 	c.Commands = append([]Command{}, c.Commands...)
 	for i := range c.Commands {
 		c.Commands[i].AllowedConversations = []string{}
 		c.Commands[i].Enabled = false
+		c.Commands[i].Revision = 0
 	}
 	return c
 }
@@ -301,5 +320,10 @@ func (e *Engine) ImportRecipe(c Configuration) error {
 			return errors.New("recipes must not include sender identities")
 		}
 	}
+	if err := normalizeCommands(&c); err != nil {
+		return err
+	}
 	return e.SetConfiguration(CleanRecipe(c))
 }
+
+var ErrConfigurationConflict = errors.New("configuration_revision_conflict")
