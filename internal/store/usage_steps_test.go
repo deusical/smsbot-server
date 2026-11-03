@@ -62,7 +62,7 @@ func TestUsageStepsMigrationKeepsExistingUsage(t *testing.T) {
 	var version, n int
 	s.DB.QueryRow("PRAGMA user_version").Scan(&version)
 	s.DB.QueryRow("SELECT count(*) FROM usage_steps WHERE job='job-old' AND step='' AND cost=0.1").Scan(&n)
-	if version != 9 || n != 1 {
+	if version != 10 || n != 1 {
 		t.Fatal("existing usage not carried into steps", version, n)
 	}
 	// A later step adds to it instead of replacing it.
@@ -86,5 +86,19 @@ func TestRestoreRefusesLeftoverStepUsage(t *testing.T) {
 	}
 	if err = s.RestoreBackup(backup); err == nil || !strings.Contains(err.Error(), "fresh") {
 		t.Fatal("restore over leftover step usage", err)
+	}
+}
+
+func TestRestoreRefusesLeftoverJobSteps(t *testing.T) {
+	s := inboxStore(t)
+	if _, err := s.DB.Exec("INSERT INTO job_steps VALUES('orphan',1,'x','reply',0)"); err != nil {
+		t.Fatal(err)
+	}
+	backup, err := s.ExportBackup()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.RestoreBackup(backup); err == nil || !strings.Contains(err.Error(), "fresh") {
+		t.Fatal("restore over leftover job steps", err)
 	}
 }

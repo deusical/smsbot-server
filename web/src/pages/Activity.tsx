@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { api, type Conversation, type Job } from "../lib/api";
+import { moduleTitle, useModules } from "../lib/modules";
 import { Icon } from "../components/Icon";
 import { Segmented, timeAgo } from "../components/ui";
 
@@ -17,8 +18,7 @@ const stateLabels: Record<string, string> = {
   unknown_submission: "Uncertain",
   cancelled: "Cancelled",
 };
-const stateLabel = (s: string) =>
-  stateLabels[s] ?? s.replaceAll("_", " ");
+const stateLabel = (s: string) => stateLabels[s] ?? s.replaceAll("_", " ");
 function stateTone(s: string) {
   if (s === "awaiting_approval") return "wait";
   if (pendingStates.includes(s) || s === "submitting") return "busy";
@@ -48,6 +48,13 @@ export function ActivityFeed({
   compact?: boolean;
 }) {
   const [open, setOpen] = useState<string | null>(null);
+  const { modules } = useModules();
+  // The step a request is on: the first not yet finished. A request being
+  // sent is still on its last steps.
+  const running = (j: Job) =>
+    pendingStates.includes(j.state) || j.state === "submitting";
+  const current = (j: Job) =>
+    running(j) ? j.steps?.find((s) => !s.done) : undefined;
   const label = (id: string) =>
     conversations.find((c) => c.id === id)?.label ?? "Unknown conversation";
   return (
@@ -73,7 +80,15 @@ export function ActivityFeed({
                 >
                   {timeAgo(j.created_at)}
                 </time>
-                <span className="status">{stateLabel(j.state)}{pendingStates.includes(j.state) && j.preparation_stage ? ` / ${j.preparation_stage.replaceAll("_", " ")}` : ""}</span>
+                <span className="status">
+                  {stateLabel(j.state)}
+                  {current(j)
+                    ? ` · ${moduleTitle(modules, current(j)!.module)}`
+                    : ""}
+                  {pendingStates.includes(j.state) && j.preparation_stage
+                    ? ` / ${j.preparation_stage.replaceAll("_", " ")}`
+                    : ""}
+                </span>
               </button>
               {act && pendingStates.includes(j.state) && (
                 <span className="feed-actions">
@@ -150,6 +165,54 @@ export function ActivityFeed({
                       </dd>
                     </>
                   )}
+                  {!!j.steps?.length && (
+                    <>
+                      <dt>Steps</dt>
+                      <dd>
+                        <ol className="activity-steps" aria-label="Steps">
+                          {j.steps.map((s) => {
+                            const now = current(j)?.id === s.id;
+                            const state = s.done
+                              ? "done"
+                              : now
+                                ? "current"
+                                : running(j)
+                                  ? "waiting"
+                                  : "not-run";
+                            return (
+                              <li key={s.id} className={state}>
+                                <span className="mark" aria-hidden="true">
+                                  {s.done ? "✓" : now ? "●" : "○"}
+                                </span>
+                                <span>
+                                  {moduleTitle(modules, s.module)}{" "}
+                                  <code>{s.id}</code>
+                                  <span className="sr-only">
+                                    {" "}
+                                    ({state.replace("-", " ")})
+                                  </span>
+                                </span>
+                                {s.used && (
+                                  <small className="muted">
+                                    {s.model}
+                                    {" · "}
+                                    {(
+                                      (s.prompt_tokens ?? 0) +
+                                      (s.completion_tokens ?? 0)
+                                    ).toLocaleString()}{" "}
+                                    tokens ·{" "}
+                                    {s.cost === undefined
+                                      ? "cost unavailable"
+                                      : "$" + s.cost.toFixed(6)}
+                                  </small>
+                                )}
+                              </li>
+                            );
+                          })}
+                        </ol>
+                      </dd>
+                    </>
+                  )}
                   <dt>Request ID</dt>
                   <dd className="mono">{j.id}</dd>
                 </dl>
@@ -208,7 +271,9 @@ export function ActivityPage({
         </div>
         <div className="metric">
           <span>Uncertain</span>
-          <strong>{jobs.filter((j) => j.state === "unknown_submission").length}</strong>
+          <strong>
+            {jobs.filter((j) => j.state === "unknown_submission").length}
+          </strong>
         </div>
         <div className="metric">
           <span>Requests loaded</span>
@@ -236,10 +301,22 @@ export function ActivityPage({
             onChange={setFilter}
             options={[
               { value: "all", label: "All", count: count("all") },
-              { value: "review", label: "Needs approval", count: count("review") },
-              { value: "pending", label: "In progress", count: count("pending") },
+              {
+                value: "review",
+                label: "Needs approval",
+                count: count("review"),
+              },
+              {
+                value: "pending",
+                label: "In progress",
+                count: count("pending"),
+              },
               { value: "complete", label: "Sent", count: count("complete") },
-              { value: "attention", label: "Problems", count: count("attention") },
+              {
+                value: "attention",
+                label: "Problems",
+                count: count("attention"),
+              },
             ]}
           />
           <label className="search">
@@ -263,9 +340,7 @@ export function ActivityPage({
         ) : (
           <div className="empty">
             <strong>
-              {jobs.length
-                ? "Nothing matches this view"
-                : "No requests yet"}
+              {jobs.length ? "Nothing matches this view" : "No requests yet"}
             </strong>
             <p>
               {filter === "review" && !search

@@ -10,6 +10,7 @@ import {
   triggerOutputs,
 } from "../lib/pipeline";
 import { SchemaFields, VideoCost } from "./SchemaSettings";
+import { moduleGroup } from "../lib/modules";
 import { Field } from "./ui";
 import { Icon } from "./Icon";
 
@@ -85,8 +86,45 @@ export function PipelineEditor({
     (m) =>
       m.effect !== "sink" || !pipeline.steps.some((s) => s.module === m.id),
   );
+  const groups = ["Text", "AI", "Memory", "Video", "Send"];
+  const anchor = (i: number) => `step-${i + 1}`;
   return (
     <div className="pipeline" aria-label="Steps">
+      <ol className="flow-strip" aria-label="Step flow">
+        <li>
+          <span className="flow-chip trigger">Command</span>
+        </li>
+        {pipeline.steps.map((step, i) => {
+          const module = modules.find((m) => m.id === step.module);
+          return (
+            <li key={i}>
+              <span className="flow-arrow" aria-hidden="true">
+                →
+              </span>
+              <a
+                href={"#" + anchor(i)}
+                className={
+                  "flow-chip effect-" +
+                  (module?.effect ?? "pure") +
+                  ((issues[step.id] ?? []).length ? " has-problem" : "")
+                }
+                aria-invalid={(issues[step.id] ?? []).length > 0 || undefined}
+                onClick={(e) => {
+                  e.preventDefault();
+                  document
+                    .getElementById(anchor(i))
+                    ?.scrollIntoView({ behavior: "smooth", block: "start" });
+                }}
+              >
+                {module?.title ?? step.module}
+                {(issues[step.id] ?? []).length > 0 && (
+                  <span className="sr-only"> (needs attention)</span>
+                )}
+              </a>
+            </li>
+          );
+        })}
+      </ol>
       <ol className="pipeline-steps">
         <li className="pipeline-step trigger">
           <div className="step-head">
@@ -105,6 +143,7 @@ export function PipelineEditor({
           return (
             <li
               key={i}
+              id={anchor(i)}
               className="pipeline-step"
               aria-label={`Step ${i + 1}: ${step.id}`}
             >
@@ -126,10 +165,16 @@ export function PipelineEditor({
                   {!module && (
                     <option value={step.module}>{step.module}</option>
                   )}
-                  {modules.map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {m.title}
-                    </option>
+                  {groups.map((g) => (
+                    <optgroup key={g} label={g}>
+                      {modules
+                        .filter((m) => moduleGroup(m.id) === g)
+                        .map((m) => (
+                          <option key={m.id} value={m.id}>
+                            {m.title}
+                          </option>
+                        ))}
+                    </optgroup>
                   ))}
                 </select>
                 <input
@@ -269,10 +314,16 @@ export function PipelineEditor({
           onChange={(e) => add(e.target.value)}
         >
           <option value="">Choose a module…</option>
-          {addable.map((m) => (
-            <option key={m.id} value={m.id}>
-              {m.title}
-            </option>
+          {groups.map((g) => (
+            <optgroup key={g} label={g}>
+              {addable
+                .filter((m) => moduleGroup(m.id) === g)
+                .map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.title}
+                  </option>
+                ))}
+            </optgroup>
           ))}
         </select>
       </Field>

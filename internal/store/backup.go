@@ -391,6 +391,9 @@ func (s *Store) RestoreBackup(data []byte) error {
 		if schema >= 9 {
 			steps = "+(SELECT count(*) FROM usage_steps)"
 		}
+		if schema >= 10 {
+			steps += "+(SELECT count(*) FROM job_steps)"
+		}
 		if e = tx.QueryRow("SELECT (SELECT count(*) FROM usage)+(SELECT count(*) FROM memory)" + steps).Scan(&count); e != nil {
 			return e
 		}

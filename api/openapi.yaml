@@ -1564,6 +1564,21 @@ components:
         cost: &id004
           type: number
         requested_reasoning: *id002
+        steps:
+          type: array
+          description: The command's steps in order (for requests accepted since steps were recorded), whether each finished, and each AI step's own usage. The model, token and cost fields above are the request's totals; a request in progress is on its first unfinished step. Step names and modules are owner configuration; no message content.
+          items:
+            type: object
+            properties:
+              id: {type: string}
+              module: {type: string}
+              done: {type: boolean}
+              used: {type: boolean, description: The step made an AI request.}
+              model: {type: string}
+              prompt_tokens: {type: integer}
+              completion_tokens: {type: integer}
+              reasoning_tokens: {type: integer}
+              cost: {type: number, description: Absent while unknown.}
     Generation:
       type: object
       additionalProperties: false
