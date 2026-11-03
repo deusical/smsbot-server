@@ -288,6 +288,7 @@ class Jobs:
     def poll(self, job, request):
         settings = protocol_settings(request)
         if settings is not None:
+            settings["max_mb"] = min(settings["max_mb"], request["max_bytes"] / 1_000_000)
             request = {**request, "settings": settings}
         with self.lock:
             path = self.path(job)

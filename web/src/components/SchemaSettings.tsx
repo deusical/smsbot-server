@@ -190,7 +190,7 @@ export function SchemaSettings({
       {mediaCost && (
         <div className="muted">
           <p>
-            Up to {setting("max_attempts")} attempts ? {setting("passes")}{" "}
+            Up to {setting("max_attempts")} attempts &times; {setting("passes")}{" "}
             passes = {setting("max_attempts") * setting("passes")} encode passes
             plus a verification decode. A long video can take tens of minutes;
             deadline {setting("execution_minutes") || 15} min.

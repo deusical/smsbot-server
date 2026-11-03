@@ -149,3 +149,27 @@ func TestWorkerProtocolV2AndOutdatedFallback(t *testing.T) {
 		})
 	}
 }
+
+func TestWorkerCapabilitiesBusyYieldsWithoutFallback(t *testing.T) {
+	calls := 0
+	warned := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if !strings.HasSuffix(r.URL.Path, "/capabilities") {
+			t.Error("busy worker received a job")
+		}
+		w.WriteHeader(503)
+	}))
+	defer server.Close()
+	d := &HTTPDownloader{Endpoint: server.URL, Warning: func(string) { warned = true }}
+	data, stage, err := d.PollDownloadSettings(context.Background(), strings.Repeat("a", 64), "https://douyin.com/synthetic", 100000, time.Now().Add(time.Minute), DefaultVideoSettings())
+	if err != nil || len(data) != 0 || stage != "waiting_worker" || warned || calls != 1 {
+		t.Fatal("busy worker did not yield safely")
+	}
+}
+func TestVideoSettingsDeadlineUsesAuthoritativeSettings(t *testing.T) {
+	c := Command{ExecutionMinutes: 20, Settings: json.RawMessage(`{"execution_minutes":7}`)}
+	if videoSettings(c).ExecutionMinutes != 7 {
+		t.Fatal("flat execution value overrode settings")
+	}
+}

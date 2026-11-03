@@ -27,7 +27,7 @@ func (v VideoSettings) Validate() error {
 func videoSettings(c Command) VideoSettings {
 	v := DefaultVideoSettings()
 	_ = json.Unmarshal(c.Settings, &v)
-	if c.ExecutionMinutes > 0 {
+	if len(c.Settings) == 0 && c.ExecutionMinutes > 0 {
 		v.ExecutionMinutes = c.ExecutionMinutes
 	}
 	return v

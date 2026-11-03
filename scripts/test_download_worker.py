@@ -180,25 +180,26 @@ class ProtocolV2Tests(unittest.TestCase):
             root = Path(tmp); jobs = worker.Jobs(root, "synthetic-token"); job = "c"*64
             settings = {**worker.DEFAULT_SETTINGS, "preset": "fast", "passes": 1, "max_attempts": 2,
                         "copy_if_fits": False, "max_mb": 1, "execution_minutes": 5}
-            request = {"url": "https://xhslink.com/synthetic", "max_bytes": 1000000,
+            request = {"url": "https://xhslink.com/synthetic", "max_bytes": 500000,
                        "deadline": int(time.time())+300, "protocol": 2, "settings": settings}
             with mock.patch.object(worker.threading, "Thread"):
                 jobs.poll(job, request)
             path = jobs.path(job)
-            self.assertEqual(jobs.load(path)["settings"], settings)
+            effective = {**settings, "max_mb": .5}
+            self.assertEqual(jobs.load(path)["settings"], effective)
             source = root / "original.mp4"; source.write_bytes(b"synthetic-original")
             worker.seal_file(source, path / "original.enc", jobs.key); source.unlink()
             restarted = worker.Jobs(root, "synthetic-token")
             restarted.active[job] = time.monotonic()+30
             def compress(source, destination, limit, deadline, settings):
-                self.assertEqual(settings, request["settings"])
+                self.assertEqual(settings, effective)
                 destination.write_bytes(b"synthetic-result"); return destination
             with mock.patch.dict(worker.DEFAULT_SETTINGS, {"preset": "veryfast", "passes": 2}), \
                  mock.patch.object(worker, "compress", side_effect=compress), \
                  mock.patch.object(worker, "run", side_effect=AssertionError("redownloaded")):
                 restarted.execute(job)
             self.assertEqual(restarted.load(path)["stage"], "complete")
-            self.assertEqual(restarted.load(path)["settings"], settings)
+            self.assertEqual(restarted.load(path)["settings"], effective)
             with self.assertRaises(ValueError):
                 restarted.poll(job, {**request, "settings": {**settings, "preset": "slow"}})
 

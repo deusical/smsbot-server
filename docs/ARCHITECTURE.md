@@ -156,3 +156,7 @@ GET returns a whole-configuration revision; PUT with an obsolete revision return
 semantics. No settings merge is performed, and unknown settings fail validation.
 Recipe import intentionally starts a new configuration revision rather than using
 the exported revision. Command revisions identify the configuration that saved them.
+
+Configuration and recipe request bodies allow 4 MiB during dual representation
+storage so legacy configurations remain editable when settings duplicate flat
+command fields. The command/profile counts and per-field bounds remain enforced.

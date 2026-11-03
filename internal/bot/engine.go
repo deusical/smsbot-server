@@ -487,14 +487,7 @@ func planVideoKind(e *Engine, ctx context.Context, in Input, p *store.Plan, cfg 
 		p.DownloadMaxBytes = min(videoHostLimit(settings.FileLimits()), int64(math.Round(v.MaxMB*1e6)))
 		v.MaxMB = float64(p.DownloadMaxBytes) / 1e6
 		p.KindSettings, _ = json.Marshal(v)
-	}
-
-	if p.DownloadURL != "" {
-		minutes := cmd.ExecutionMinutes
-		if minutes == 0 {
-			minutes = 15
-		}
-		p.ExecutionDeadline = e.now().Add(time.Duration(minutes) * time.Minute).UTC().Format(time.RFC3339Nano)
+		p.ExecutionDeadline = e.now().Add(time.Duration(v.ExecutionMinutes) * time.Minute).UTC().Format(time.RFC3339Nano)
 	}
 	if p.DownloadURL == "" {
 		p.Reply = "Include one Douyin or Xiaohongshu video link after the command."

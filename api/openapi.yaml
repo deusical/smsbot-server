@@ -239,7 +239,7 @@ paths:
           description: State unavailable or expired
     put:
       description: Replace validated configuration; queued generation snapshots are
-        unchanged
+        unchanged. Request bodies allow 4 MiB to accommodate dual command representations.
       responses:
         '409':
           description: configuration_revision_conflict; reload and explicitly reapply edits. No merge or partial write.

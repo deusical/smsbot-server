@@ -51,11 +51,11 @@ request at a time.
 | Setting | Default | Allowed values |
 | --- | --- | --- |
 | `preset` | `slow` | `veryfast`, `faster`, `fast`, `medium`, `slow` |
-| `passes` | 2 | 1?2 |
-| `max_attempts` | 3 | 1?3 |
+| `passes` | 2 | 1-2 |
+| `max_attempts` | 3 | 1-3 |
 | `copy_if_fits` | true | boolean |
-| `max_mb` | 19.99 | 0.1?19.99 decimal MB, further capped by host attachment limits |
-| `execution_minutes` | 15 | 1?60 |
+| `max_mb` | 19.99 | 0.1-19.99 decimal MB, further capped by host attachment limits |
+| `execution_minutes` | 15 | 1-60 |
 
 Defaults preserve slow two-pass encoding, three attempts, copying an original
 that fits, and the existing 15-minute lifetime. The byte target is now explicitly
@@ -84,7 +84,7 @@ The deadline includes approval, queueing, preparation and upload. Approval still
 expires after two minutes. Editing settings cannot alter accepted jobs; a host
 limit reduction cancels a job whose snapshotted ceiling is no longer allowed.
 Legacy flat `execution_minutes` maps into settings; zero/absent in the legacy
-representation means 15. Explicit modern settings require 1?60 minutes.
+representation means 15. Explicit modern settings require 1-60 minutes.
 
 ## Worker protocol v2
 

@@ -149,4 +149,7 @@ it("uses media cost hint and shows the effective host cap", () => {
   ).toBeVisible();
   expect(screen.getByText(/effective: 10.48576 MB/)).toBeVisible();
   expect(screen.getByRole("note")).toHaveTextContent("deadline may be short");
+  expect(
+    screen.getByText(/6 encode passes plus a verification decode/),
+  ).toHaveTextContent(String.fromCharCode(215));
 });
