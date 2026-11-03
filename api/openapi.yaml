@@ -1771,7 +1771,7 @@ components:
         title: {type: string}
         types:
           type: array
-          items: {type: string, enum: [text, url, file, video, message, context]}
+          items: {type: string, enum: [text, url, file, video, stored_video, message, context]}
         required: {type: boolean}
     Pipeline:
       type: object

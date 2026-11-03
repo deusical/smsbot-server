@@ -263,7 +263,8 @@ func TestCustomVideoWithCaption(t *testing.T) {
 	c := DefaultConfiguration()
 	c.Commands = []Command{customCommand("grab", Pipeline{ExecutionMinutes: 5, Steps: []PipelineStep{
 		step("link", "text.extract_url", map[string]string{"text": "trigger.args"}, ""),
-		step("video", "video.download", map[string]string{"url": "link.url"}, `{"preset":"fast"}`),
+		step("source", "video.download", map[string]string{"url": "link.url"}, ""),
+		step("video", "video.compress", map[string]string{"source": "source.source"}, `{"preset":"fast"}`),
 		step("caption", "text.template", map[string]string{"input": "link.url"}, `{"template":"Here you go: {input}"}`),
 		reply(map[string]string{"text": "caption.text", "file": "video.video"}),
 	}})}
@@ -347,7 +348,8 @@ func TestPreviewTracesEachStep(t *testing.T) {
 	c := DefaultConfiguration()
 	c.Commands = []Command{customCommand("grab", Pipeline{Steps: []PipelineStep{
 		step("link", "text.extract_url", map[string]string{"text": "trigger.args"}, ""),
-		step("video", "video.download", map[string]string{"url": "link.url"}, ""),
+		step("source", "video.download", map[string]string{"url": "link.url"}, ""),
+		step("video", "video.compress", map[string]string{"source": "source.source"}, ""),
 		reply(map[string]string{"file": "video.video"}),
 	}})}
 	if err := e.SetConfiguration(c); err != nil {
@@ -358,7 +360,7 @@ func TestPreviewTracesEachStep(t *testing.T) {
 		t.Fatal(err)
 	}
 	steps := r["steps"].([]map[string]any)
-	if r["text"] != videoPreview || len(steps) != 3 || steps[0]["outputs"].(map[string]string)["url"] != "https://douyin.com/video/1" {
+	if r["text"] != videoPreview || len(steps) != 4 || steps[0]["outputs"].(map[string]string)["url"] != "https://douyin.com/video/1" {
 		t.Fatalf("preview %+v", r)
 	}
 	r, _ = e.Playground("grab", "no link")
@@ -407,7 +409,8 @@ func TestVideoLinkFromALaterStep(t *testing.T) {
 	c.Commands = append(c.Commands, customCommand("find", Pipeline{ExecutionMinutes: 5, Steps: []PipelineStep{
 		step("answer", "ai.chat", map[string]string{"prompt": "trigger.args"}, ""),
 		step("link", "text.extract_url", map[string]string{"text": "answer.text"}, ""),
-		step("video", "video.download", map[string]string{"url": "link.url"}, `{"max_mb":5}`),
+		step("source", "video.download", map[string]string{"url": "link.url"}, ""),
+		step("video", "video.compress", map[string]string{"source": "source.source"}, `{"max_mb":5}`),
 		reply(map[string]string{"file": "video.video"}),
 	}}))
 	if err := e.SetConfiguration(c); err != nil {

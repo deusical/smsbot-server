@@ -69,7 +69,7 @@ func (e *Engine) CommandModuleDefinitions() ([]ModuleDefinition, error) {
 	}
 	defs := ModuleDefinitions()
 	for i := range defs {
-		if field, ok := defs[i].Schema.Properties["max_mb"]; ok && defs[i].ID == "video.download" {
+		if field, ok := defs[i].Schema.Properties["max_mb"]; ok && defs[i].ID == "video.compress" {
 			props := map[string]SettingsSchema{}
 			for k, v := range defs[i].Schema.Properties {
 				props[k] = v

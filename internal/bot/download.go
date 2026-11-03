@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"log"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -32,6 +31,7 @@ type HTTPDownloader struct {
 	Client          *http.Client
 	Warning         func(string)
 	outdated        sync.Once
+	noV3            sync.Once
 }
 
 // PollDownload repeats preparation requests by durable job ID, never sends.
@@ -114,42 +114,12 @@ func (d *HTTPDownloader) PollDownloadSettings(ctx context.Context, id, target st
 	if err := settings.Validate(); err != nil {
 		return nil, "", errors.New("download_failed")
 	}
-	request, err := http.NewRequestWithContext(ctx, "GET", strings.TrimRight(d.Endpoint, "/")+"/capabilities", nil)
-	if err != nil {
-		return nil, "", errors.New("download_failed")
+	supported, waiting, err := d.protocols(ctx)
+	if err != nil || waiting {
+		return nil, "waiting_worker", err
 	}
-	request.Header.Set("Authorization", "Bearer "+d.Token)
-	client := http.Client{}
-	if d.Client != nil {
-		client = *d.Client
-	}
-	client.Timeout = 5 * time.Second
-	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	response, err := client.Do(request)
-	if err != nil {
-		return nil, "waiting_worker", nil
-	}
-	defer response.Body.Close()
-	var support struct {
-		Protocol int `json:"protocol"`
-	}
-	supported := false
-	if response.StatusCode == 200 {
-		supported = json.NewDecoder(io.LimitReader(response.Body, 4096)).Decode(&support) == nil && support.Protocol == 2
-	} else if response.StatusCode == 503 {
-		return nil, "waiting_worker", nil
-	} else if response.StatusCode != 404 && response.StatusCode != 410 && response.StatusCode != 426 && response.StatusCode != 501 && response.StatusCode != 502 {
-		return nil, "", errors.New("download_failed")
-	}
-	if !supported {
-		d.outdated.Do(func() {
-			const code = "download_worker_outdated_using_defaults"
-			if d.Warning != nil {
-				d.Warning(code)
-			} else {
-				log.Print(code)
-			}
-		})
+	if !supported[2] {
+		d.warn(&d.outdated, "download_worker_outdated_using_defaults")
 		return d.pollDownload(ctx, id, target, limit, deadline, nil)
 	}
 	return d.pollDownload(ctx, id, target, limit, deadline, &settings)
@@ -177,45 +147,19 @@ func downloadURL(input string) string {
 	return found
 }
 
-// videoState is what a video.download step fixed at acceptance.
-type videoState struct {
-	URL      string        `json:"url"`
-	MaxBytes int64         `json:"max_bytes"`
-	Settings VideoSettings `json:"settings"`
-}
-
-// runVideoDownload polls the local worker for one video.download step. Caller
-// holds the control lock. Release it during local download/encoding so pause
-// and enrollment changes can cancel work. Never send a result that became
-// stale or lost consent while it was being prepared.
-func (e *Engine) runVideoDownload(ctx context.Context, j store.Job, p *store.Plan, s *stepRun) (bool, error) {
-	var st videoState
-	if err := s.load(&st); err != nil || st.URL == "" {
-		return true, e.Store.Complete(j.ID, "failed", "download_failed")
-	}
+// pollWorker makes one bounded request to the local worker for a step. Caller
+// holds the control lock; it is released during the request so pause and
+// enrollment changes can cancel work. complete reports that the worker
+// finished: the job is then still "generating" and the caller records the
+// step's output and calls finishWorkerStep. Otherwise dispatch ends here:
+// the job was deferred until its next poll, or completed as failed.
+func (e *Engine) pollWorker(ctx context.Context, j store.Job, p *store.Plan, poll func(ctx context.Context, deadline time.Time) (string, error)) (complete bool, err error) {
 	if e.Downloader == nil {
-		return true, e.Store.Complete(j.ID, "failed", "download_worker_unavailable")
+		return false, e.Store.Complete(j.ID, "failed", "download_worker_unavailable")
 	}
-	settings, err := e.Collection.Settings()
-	if err != nil {
-		return true, err
-	}
-	limits := settings.FileLimits()
-	limit := videoHostLimit(limits)
-	if st.MaxBytes > limit {
-		return true, e.Store.Complete(j.ID, "cancelled", "attachment_limits_changed")
-	}
-	if st.MaxBytes == 0 {
-		st.MaxBytes = limit
-		s.save(st)
-		if err := e.Store.SavePlan(j.ID, *p); err != nil {
-			return true, err
-		}
-	}
-	limit = st.MaxBytes
 	ok, err := e.Store.Transition(j.ID, "queued", "generating")
 	if err != nil || !ok {
-		return true, err
+		return false, err
 	}
 	deadline, parseerr := time.Parse(time.RFC3339Nano, p.ExecutionDeadline)
 	if parseerr != nil {
@@ -226,61 +170,68 @@ func (e *Engine) runVideoDownload(ctx context.Context, j store.Job, p *store.Pla
 	e.pending[j.ID] = cancel
 	e.mu.Unlock()
 	requestctx, requestcancel := context.WithTimeout(workctx, 10*time.Second)
-	var data []byte
-	var stage string
-	var workerr error
-	if provider, ok := e.Downloader.(interface {
-		PollDownloadSettings(context.Context, string, string, int64, time.Time, VideoSettings) ([]byte, string, error)
-	}); ok {
-		data, stage, workerr = provider.PollDownloadSettings(requestctx, j.ID, st.URL, limit, deadline, st.Settings)
-	} else {
-		data, stage, workerr = e.Downloader.PollDownload(requestctx, j.ID, st.URL, limit, deadline)
-	}
+	stage, workerr := poll(requestctx, deadline)
 	requestcancel()
 	cancel()
 	e.mu.Lock()
 	delete(e.pending, j.ID)
 	current, _, loaderr := e.Store.JobPlan(j.ID)
 	if current.State != "" && current.State != "generating" {
-		return true, nil
+		return false, nil
 	}
 	if loaderr != nil {
-		return true, loaderr
+		return false, loaderr
 	}
 	if workerr == nil && stage != "complete" {
 		if err := e.Store.DeferWork(j.ID, stage, time.Now().Add(time.Second).UnixMilli()); err != nil {
-			return true, err
+			return false, err
 		}
 		_, err := e.Store.Transition(j.ID, "generating", "queued")
+		return false, err
+	}
+	if workerr != nil {
+		return false, e.Store.Complete(j.ID, "failed", "download_failed")
+	}
+	return true, nil
+}
+
+// finishWorkerStep saves the step's output and returns the job to the queue.
+func (e *Engine) finishWorkerStep(j store.Job, p *store.Plan) (bool, error) {
+	if err := e.Store.DeferWork(j.ID, "complete", 0); err != nil {
 		return true, err
 	}
-	if workerr != nil || len(data) == 0 || int64(len(data)) > limit {
-		return true, e.Store.Complete(j.ID, "failed", "download_failed")
+	if err := e.Store.SavePlan(j.ID, *p); err != nil {
+		return true, err
 	}
-	files, err := media.PrepareWithLimits([]media.Upload{{Name: "video.mp4", MIME: "video/mp4", Data: data}}, limits)
+	_, err := e.Store.Transition(j.ID, "generating", "queued")
+	return err != nil, err
+}
+
+// sendableVideo turns the worker's verified MP4 into the reply's attachment,
+// after the job passes every check again.
+func (e *Engine) sendableVideo(ctx context.Context, j store.Job, p *store.Plan, data []byte, limit int64) (*media.File, bool, error) {
+	settings, err := e.Collection.Settings()
+	if err != nil {
+		return nil, true, err
+	}
+	if len(data) == 0 || int64(len(data)) > limit {
+		return nil, true, e.Store.Complete(j.ID, "failed", "download_failed")
+	}
+	files, err := media.PrepareWithLimits([]media.Upload{{Name: "video.mp4", MIME: "video/mp4", Data: data}}, settings.FileLimits())
 	if err != nil || len(files) != 1 {
-		return true, e.Store.Complete(j.ID, "failed", "download_attachment_invalid")
+		return nil, true, e.Store.Complete(j.ID, "failed", "download_attachment_invalid")
 	}
 	_, code, err := e.check(ctx, j, *p)
 	if err != nil {
-		return true, err
+		return nil, true, err
 	}
 	if code != "" {
-		return true, e.Store.Complete(j.ID, "cancelled", code)
+		return nil, true, e.Store.Complete(j.ID, "cancelled", code)
 	}
 	if err := inboxLimitsAllow(e, files); err != nil {
-		return true, e.Store.Complete(j.ID, "cancelled", "attachment_limits_changed")
+		return nil, true, e.Store.Complete(j.ID, "cancelled", "attachment_limits_changed")
 	}
-	s.out("video", store.Value{Type: typeVideo, Media: &files[0]})
-	s.Done = true
-	if err = e.Store.DeferWork(j.ID, "complete", 0); err != nil {
-		return true, err
-	}
-	if err = e.Store.SavePlan(j.ID, *p); err != nil {
-		return true, err
-	}
-	_, err = e.Store.Transition(j.ID, "generating", "queued")
-	return err != nil, err
+	return &files[0], false, nil
 }
 
 // inboxLimitsAllow checks prepared files against the current attachment limits.
