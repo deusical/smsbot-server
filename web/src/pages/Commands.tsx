@@ -510,6 +510,7 @@ function CommandEditor({
           onChange={(id) => {
             const k = kinds.find((k) => k.id === id);
             if (!k || k.id === definition?.id) return;
+            setConverting("");
             if (k.id === "pipeline") toSteps();
             else
               onChange({ ...settingsForKind(command, k), pipeline: undefined });
