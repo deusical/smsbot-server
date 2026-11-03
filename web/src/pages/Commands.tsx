@@ -6,7 +6,7 @@ import {
   type Conversation,
   type CommandKind,
 } from "../lib/api";
-import { SchemaSettings } from "../components/SchemaSettings";
+import { SchemaSettings, settingsForKind } from "../components/SchemaSettings";
 import { Icon } from "../components/Icon";
 import { Field, ModelPicker, Segmented, Switch } from "../components/ui";
 import { failure, type Workspace } from "../lib/workspace";
@@ -461,12 +461,7 @@ function CommandEditor({
           options={kinds.map((k) => ({ value: k.id, label: k.title }))}
           onChange={(id) => {
             const k = kinds.find((k) => k.id === id);
-            if (k)
-              onChange({
-                kind: k.id,
-                type: k.legacy_type,
-                settings: undefined,
-              });
+            if (k) onChange(settingsForKind(command, k));
           }}
         />
       </div>

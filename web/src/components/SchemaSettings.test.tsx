@@ -1,6 +1,6 @@
 import { render, screen, fireEvent } from "@testing-library/react";
 import { describe, it, expect, vi } from "vitest";
-import { SchemaSettings } from "./SchemaSettings";
+import { SchemaSettings, settingsForKind } from "./SchemaSettings";
 import type { Workspace } from "../lib/workspace";
 import type { Command, CommandKind } from "../lib/api";
 
@@ -56,6 +56,7 @@ describe("schema settings", () => {
     );
     expect(screen.getByLabelText("Attempts")).toHaveAttribute("max", "3");
     expect(screen.getByLabelText("Toggle")).toBeChecked();
+    expect(screen.queryByText(/configured: hello/)).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Reply"), {
       target: { value: "edited" },
     });
@@ -69,4 +70,30 @@ describe("schema settings", () => {
       }),
     );
   });
+});
+
+it("kind switching clears incompatible fields", () => {
+  const c = {
+    instructions: "Reply",
+    model: "old-model",
+    memory: true,
+    generation: { tokens: 2048 },
+  } as Command;
+  const k = {
+    id: "fixed.reply",
+ title:"Fixed text", version:1,threads:false,retry_class:"none",resource_class:"upload",
+    legacy_type: "fixed",
+    schema: {
+      type: "object",
+      properties: { instructions: { type: "string", default: "" } },
+    },
+  } as CommandKind;
+  const changed = settingsForKind(c, k);
+  expect(changed).toMatchObject({
+    memory: false,
+    model: "",
+    instructions: "Reply",
+    settings: { instructions: "Reply" },
+  });
+  expect(changed.generation).toBeUndefined();
 });

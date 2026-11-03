@@ -124,6 +124,7 @@ export function SchemaSettings({
       );
     const configured = value ?? schema.default ?? "";
     const hint =
+      schema.ui !== "multiline" &&
       schema.default !== undefined &&
       value !== undefined &&
       JSON.stringify(value) !== JSON.stringify(schema.default)
@@ -175,4 +176,29 @@ export function SchemaSettings({
       )}
     </>
   );
+}
+
+// A kind switch is an explicit reset of kind-specific state. Common command
+// metadata remains in the caller, while only target-schema defaults survive.
+export function settingsForKind(
+  command: Command,
+  kind: CommandKind,
+): Partial<Command> {
+  const settings: Record<string, unknown> = {};
+  for (const [key, schema] of Object.entries(kind.schema.properties || {})) {
+    if (schema.default !== undefined) settings[key] = schema.default;
+  }
+  if (kind.schema.properties?.instructions)
+    settings.instructions = command.instructions;
+  return {
+    kind: kind.id,
+    type: kind.legacy_type,
+    settings,
+    instructions: String(settings.instructions || ""),
+    model: "",
+    profile_id: "",
+    memory: false,
+    generation: undefined,
+    execution_minutes: undefined,
+  };
 }

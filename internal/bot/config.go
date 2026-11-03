@@ -164,6 +164,7 @@ func (e *Engine) SetConfiguration(c Configuration) error {
 	if c.Revision != nil && *c.Revision != *old.Revision {
 		return ErrConfigurationConflict
 	}
+	legacyRepresentation := c.Revision == nil
 	revision := *old.Revision + 1
 	c.Revision = &revision
 	// During the transition an older editor can echo the new fields unchanged
@@ -171,7 +172,7 @@ func (e *Engine) SetConfiguration(c Configuration) error {
 	for i := range c.Commands {
 		for _, previous := range old.Commands {
 			current := &c.Commands[i]
-			if current.Kind == previous.Kind && sameSettings(current.Settings, previous.Settings) {
+			if legacyRepresentation && current.Kind == previous.Kind && sameSettings(current.Settings, previous.Settings) {
 				current.Settings = nil
 				if current.Type != previous.Type {
 					current.Kind = ""
@@ -318,6 +319,9 @@ func (e *Engine) ImportRecipe(c Configuration) error {
 		if len(cmd.AllowedConversations) > 0 {
 			return errors.New("recipes must not include sender identities")
 		}
+	}
+	if err := normalizeCommands(&c); err != nil {
+		return err
 	}
 	return e.SetConfiguration(CleanRecipe(c))
 }

@@ -143,7 +143,8 @@ Command configuration retains the legacy flat fields alongside `kind`, raw
 `settings` and an optional `revision`. Legacy recipes are accepted and normalized;
 unknown settings are rejected. Both forms are saved for downgrade compatibility.
 During migration an unchanged settings object echoed by a legacy editor permits
-flat-field edits, including switching type. Changed settings are authoritative.
+flat-field edits, including switching type. Changed settings are authoritative. Revision-aware requests always treat supplied
+settings as authoritative; legacy flat edits can omit settings.
 The incoming message passed to planning supplies arguments, quoted message and
 attachment references and the sender's own attachment; AI resolution and memory
 epoch handling continue to use the existing conversation access checks.

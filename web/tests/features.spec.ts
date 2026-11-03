@@ -175,13 +175,11 @@ test("settings preserve model defaults, provider key stays transient, recipe imp
     })),
   ).toEqual({ local: 0, session: 0 });
   await page.getByRole("button", { name: "Import & export" }).click();
-  await page
-    .getByLabel("Import recipe")
-    .setInputFiles({
-      name: "fixture-recipe.json",
-      mimeType: "application/json",
-      buffer: Buffer.from(JSON.stringify(initial)),
-    });
+  await page.getByLabel("Import recipe").setInputFiles({
+    name: "fixture-recipe.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(JSON.stringify(initial)),
+  });
   await expect(
     page.getByRole("status").filter({ hasText: "Commands are disabled" }),
   ).toBeVisible();
@@ -449,4 +447,30 @@ test("unsupported saved temperature can be removed and unknown reasoning is not 
   expect(
     saved.settings.model_generation["fixture/model"].temperature,
   ).toBeUndefined();
+});
+
+test("a stale command save keeps the draft and does not retry or merge", async ({
+  page,
+}) => {
+  const configuration = await setup(page);
+  let writes = 0;
+  await page.route("**/api/v1/config", (route) => {
+    if (route.request().method() !== "PUT") return route.fallback();
+    writes++;
+    return route.fulfill({
+      status: 409,
+      json: { error: "configuration_revision_conflict" },
+    });
+  });
+  await page.getByRole("button", { name: "Commands", exact: true }).click();
+  await page.getByLabel("Description", { exact: true }).fill("Unsaved draft");
+  await page.getByRole("button", { name: "Save changes" }).click();
+  await expect(page.getByRole("alert")).toContainText(
+    "configuration revision conflict",
+  );
+  await expect(page.getByLabel("Description", { exact: true })).toHaveValue(
+    "Unsaved draft",
+  );
+  expect(configuration().commands[0].description).not.toBe("Unsaved draft");
+  expect(writes).toBe(1);
 });

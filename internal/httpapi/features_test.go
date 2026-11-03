@@ -137,6 +137,9 @@ func TestNativeJSONMediaTypeSupportsUTF8Charset(t *testing.T) {
 
 func TestConfigRevisionAndKindAPI(t *testing.T) {
 	s := apiSetup(t)
+	if w := req(s, "GET", "/api/command-kinds", "", "fixture-client", ""); w.Code != 200 {
+		t.Fatal("kind alias unavailable")
+	}
 	w := req(s, "GET", "/api/v1/command-kinds", "", "fixture-client", "")
 	var defs []bot.KindDefinition
 	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &defs) != nil || len(defs) != 3 {

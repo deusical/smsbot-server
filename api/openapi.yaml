@@ -1594,7 +1594,7 @@ components:
           description: Optional versioned kind identity; legacy type is retained for downgrade compatibility.
         settings:
           type: object
-          description: Kind settings. Unknown fields are rejected. Legacy flat fields remain supported.
+          description: Kind settings. Authoritative for revision-aware clients. Unknown fields are rejected. Legacy flat fields remain supported when settings are omitted.
           additionalProperties: false
           properties:
             instructions:
@@ -1613,7 +1613,7 @@ components:
               maximum: 60
         revision:
           type: integer
-          description: Revision of the configuration that last saved this command. Echo Configuration.revision for concurrency protection.
+          description: Output metadata identifying the configuration that last saved this command. Concurrency protection uses only the top-level Configuration.revision.
         execution_minutes:
           type: integer
           minimum: 0
@@ -1724,7 +1724,7 @@ components:
         pricing_known: *id001
         input_modalities:
           type: array
-          description: What the provider's catalog says the model reads, such as text, image, audio and video. Informational only: files are sent to a model whatever it lists, and the chat is told if the provider refuses one.
+          description: "What the provider's catalog says the model reads, such as text, image, audio and video. Informational only: files are sent to a model whatever it lists, and the chat is told if the provider refuses one."
           items:
             type: string
     CompatibleProviderStatus:
