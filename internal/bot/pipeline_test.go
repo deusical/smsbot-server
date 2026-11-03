@@ -52,6 +52,11 @@ func TestPipelineValidation(t *testing.T) {
 			step("b", "ai.chat", map[string]string{"prompt": "a.text"}, ""),
 			reply(map[string]string{"text": "b.text"}),
 		}},
+		"question from later work": {Steps: []PipelineStep{
+			step("a", "ai.chat", map[string]string{"prompt": "trigger.args"}, ""),
+			step("q", "message.question", map[string]string{"text": "a.text", "message": "trigger.message"}, ""),
+			reply(map[string]string{"text": "q.prompt"}),
+		}},
 		"thread not continued": {Steps: []PipelineStep{
 			step("c", "context.thread", nil, ""),
 			step("a", "ai.chat", map[string]string{"prompt": "trigger.args", "context": "c.context"}, ""),
@@ -390,5 +395,54 @@ func TestConvertingToCustomStepsKeepsMemoryConsent(t *testing.T) {
 	}
 	if ok, err := e.Accept(context.Background(), threadPrompt("late", "More", "answer")); ok || err != nil {
 		t.Fatal("old thread continued after consent changed", ok, err)
+	}
+}
+
+// A link produced at dispatch (here by the AI) still gets the video step's
+// effective settings fixed before the worker is asked.
+func TestVideoLinkFromALaterStep(t *testing.T) {
+	e, fixture := setup(t)
+	arm(t, e)
+	c := configureAI(t, e, false, false)
+	c.Commands = append(c.Commands, customCommand("find", Pipeline{ExecutionMinutes: 5, Steps: []PipelineStep{
+		step("answer", "ai.chat", map[string]string{"prompt": "trigger.args"}, ""),
+		step("link", "text.extract_url", map[string]string{"text": "answer.text"}, ""),
+		step("video", "video.download", map[string]string{"url": "link.url"}, `{"max_mb":5}`),
+		reply(map[string]string{"file": "video.video"}),
+	}}))
+	if err := e.SetConfiguration(c); err != nil {
+		t.Fatal(err)
+	}
+	e.Provider = &transcriptProvider{}
+	asked := ""
+	var limit int64
+	e.Downloader = downloadFunc(func(_ context.Context, u string, max int64) ([]byte, error) {
+		asked, limit = u, max
+		return []byte("synthetic-video"), nil
+	})
+	m := incoming()
+	m.Text = "!find https://v.douyin.com/late/"
+	if ok, err := e.Accept(context.Background(), m); !ok || err != nil {
+		t.Fatal(ok, err)
+	}
+	id := store.Hash(m.ConversationID + string(rune(0)) + m.ID)
+	_, p, _ := e.Store.JobPlan(id)
+	if strings.Contains(string(videoStep(t, p).State), "late") {
+		t.Fatal("link known before the AI answered")
+	}
+	for i := 0; i < 3; i++ {
+		if err := e.Dispatch(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	finishDownloadUploads(t, e)
+	if err := e.Dispatch(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if asked != "https://v.douyin.com/late/" || limit != 5_000_000 {
+		t.Fatalf("worker asked for %q with limit %d", asked, limit)
+	}
+	if got := stateOf(t, e, id); got != "submitted" || len(fixture.Sent) != 1 {
+		t.Fatal("state", got)
 	}
 }

@@ -89,6 +89,9 @@ type module struct {
 	// settings decodes raw settings strictly, applies defaults and validates
 	// them, returning the normalized form saved with the command.
 	settings func(raw json.RawMessage, env pipelineEnv) (json.RawMessage, error)
+	// acceptOnly modules work only from what the command message provides, so
+	// every input must be known at acceptance.
+	acceptOnly bool
 	// admit, when set, runs for every step before any step is accepted: false
 	// declines the command, as when its AI model isn't usable.
 	admit  func(*Engine, *acceptRun, *stepRun) (bool, error)
@@ -189,7 +192,7 @@ func accepts(port Port, typ string) bool {
 // and versions in place. It runs whenever a command is saved or loaded.
 func validatePipeline(p *Pipeline, env pipelineEnv) error {
 	if p.ExecutionMinutes < 0 || p.ExecutionMinutes > 60 {
-		return pipelineErr("", "", "execution minutes must be between 1 and 60")
+		return pipelineErr("", "", "execution minutes must be between 1 and 60, or 0 for 15")
 	}
 	if len(p.Steps) == 0 {
 		return pipelineErr("", "", "add at least a reply step")
@@ -273,6 +276,9 @@ func validatePipeline(p *Pipeline, env pipelineEnv) error {
 		outputs[s.ID] = map[string]string{}
 		for _, o := range m.Outputs {
 			outputs[s.ID][o.Name] = o.Types[0]
+		}
+		if m.acceptOnly && !known {
+			return pipelineErr(s.ID, "", "this step needs inputs that are known when the command arrives")
 		}
 		immediate[s.ID] = known
 	}

@@ -88,7 +88,8 @@ func questionModule() module {
 			}
 			return stepDone, nil
 		},
-		run: pendingImmediate,
+		acceptOnly: true,
+		run:        pendingImmediate,
 		simulate: func(_ *simRun, s *stepRun) error {
 			s.out("prompt", store.Value{Type: typeText, Text: s.text("text")})
 			return nil
@@ -117,7 +118,8 @@ func contextModule(id, title, description, kind string) module {
 			set(s)
 			return stepDone, nil
 		},
-		run: pendingImmediate,
+		acceptOnly: true,
+		run:        pendingImmediate,
 		simulate: func(_ *simRun, s *stepRun) error {
 			set(s)
 			return nil
