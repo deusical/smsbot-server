@@ -1,7 +1,6 @@
 package bot
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -242,7 +241,8 @@ func upgradeVideoSteps(p *Pipeline) {
 }
 
 func combinedVideoStep(later []PipelineStep, s PipelineStep) bool {
-	if trimmed := bytes.TrimSpace(s.Settings); len(trimmed) > 0 && string(trimmed) != "{}" && string(trimmed) != "null" {
+	var settings map[string]any
+	if json.Unmarshal(s.Settings, &settings) == nil && len(settings) > 0 {
 		return true
 	}
 	for _, l := range later {

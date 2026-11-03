@@ -169,6 +169,16 @@ func TestCombinedVideoStepUpgrades(t *testing.T) {
 			}
 		}
 	}
+	// A new-style step with formatted empty settings is left alone.
+	current := Pipeline{Steps: []PipelineStep{
+		step("link", "text.extract_url", map[string]string{"text": "trigger.args"}, ""),
+		step("source", "video.download", map[string]string{"url": "link.url"}, "{  }"),
+		step("video", "video.compress", map[string]string{"source": "source.source"}, ""),
+		reply(map[string]string{"file": "video.video"}),
+	}}
+	if err := validatePipeline(&current, pipelineEnv{}); err != nil || len(current.Steps) != 4 || current.Steps[1].Version != 2 {
+		t.Fatal("new-style step rewritten", err)
+	}
 	if len(p.Steps) != 4 || p.Steps[1].Module != "video.download" || p.Steps[1].Version != 2 || p.Steps[2].ID != "video" || p.Steps[2].Module != "video.compress" || !strings.Contains(string(p.Steps[2].Settings), `"fast"`) {
 		t.Fatalf("not upgraded: %+v", p.Steps)
 	}
