@@ -36,6 +36,7 @@ type Job struct {
 	RequestedReasoning string   `json:"requested_reasoning,omitempty"`
 }
 type Plan struct {
+	Kind              string        `json:"kind,omitempty"`
 	ExecutionDeadline string        `json:"execution_deadline,omitempty"`
 	DownloadURL       string        `json:"download_url,omitempty"`
 	DownloadUploaded  bool          `json:"download_uploaded,omitempty"`

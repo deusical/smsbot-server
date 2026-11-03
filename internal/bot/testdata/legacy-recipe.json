@@ -1,0 +1,1 @@
+{"settings":{"default_model":"","hourly_limit":20,"daily_limit":100,"daily_budget":1,"quiet_start":22,"quiet_end":8,"timezone":"UTC","memory_hours":24,"retention_days":7,"max_chars":12000},"commands":[{"name":"hello","type":"fixed","instructions":"Hello {input}","enabled":true,"allowed_conversations":[]}],"profiles":[]}
