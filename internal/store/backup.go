@@ -387,7 +387,11 @@ func (s *Store) RestoreBackup(data []byte) error {
 		return errors.New("restore requires fresh bot state")
 	}
 	if schema >= 2 {
-		if e = tx.QueryRow("SELECT (SELECT count(*) FROM usage)+(SELECT count(*) FROM memory)").Scan(&count); e != nil {
+		steps := ""
+		if schema >= 9 {
+			steps = "+(SELECT count(*) FROM usage_steps)"
+		}
+		if e = tx.QueryRow("SELECT (SELECT count(*) FROM usage)+(SELECT count(*) FROM memory)" + steps).Scan(&count); e != nil {
 			return e
 		}
 		if count != 0 {

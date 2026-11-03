@@ -1804,9 +1804,11 @@ components:
         implicitly. Steps run in order; each input binds to trigger.<output> or
         an earlier <step>.<output> of a compatible type. At most 8 steps, and
         the last step is the reply. A conversation (context.rolling or
-        context.thread) feeds exactly one AI step whose answer the reply sends
-        and continues; with reply threads that step's prompt must be known when
-        the command arrives. Several AI steps, or a long-running step, give the
+        context.thread) feeds exactly one AI step, whose conversation the
+        reply continues; the conversation remembers the text the reply sends,
+        which may come from a later step (a translation, say). With reply
+        threads that step's prompt must be known when the command arrives. In a
+        group sharing one conversation, only that step's prompt says who asked. Several AI steps, or a long-running step, give the
         job the execution deadline. Accepted jobs snapshot the
         pipeline; later edits apply only to new requests. Invalid pipelines are
         rejected with 400 {error: invalid_pipeline, step, port, reason}.

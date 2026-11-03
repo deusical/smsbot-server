@@ -1,6 +1,7 @@
 package store
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -71,5 +72,19 @@ func TestUsageStepsMigrationKeepsExistingUsage(t *testing.T) {
 	jobs, _ := s.Jobs()
 	if jobs[0].PromptTokens != 4 || *jobs[0].Cost != 0.2 {
 		t.Fatalf("migrated usage replaced %+v", jobs[0])
+	}
+}
+
+func TestRestoreRefusesLeftoverStepUsage(t *testing.T) {
+	s := inboxStore(t)
+	if _, err := s.DB.Exec("INSERT INTO usage_steps VALUES('orphan','x','m',0,0,0,NULL)"); err != nil {
+		t.Fatal(err)
+	}
+	backup, err := s.ExportBackup()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.RestoreBackup(backup); err == nil || !strings.Contains(err.Error(), "fresh") {
+		t.Fatal("restore over leftover step usage", err)
 	}
 }

@@ -296,8 +296,9 @@ func aiChatModule() module {
 				st.History = history
 				st.Instructions += note
 			}
-			if p.Shared {
-				// One conversation among several people: each question says who asked it.
+			if p.Shared && turnStep(s.steps) == s.ID {
+				// One conversation among several people: each question says who
+				// asked it. Other AI steps (translating, extracting) don't need it.
 				st.Input = askerLabel(*p) + ": " + st.Input
 				st.Instructions += "\nThis conversation is shared by a group chat. Each question starts with who asked it; answer the one who asked."
 			}
@@ -320,7 +321,7 @@ func aiChatModule() module {
 				if f, ok := s.in("file"); ok {
 					st.File = f.File
 				}
-				if r.p.Shared {
+				if r.p.Shared && turnStep(s.steps) == s.ID {
 					st.Input = askerLabel(*r.p) + ": " + st.Input
 					st.Instructions += "\nThis conversation is shared by a group chat. Each question starts with who asked it; answer the one who asked."
 				}

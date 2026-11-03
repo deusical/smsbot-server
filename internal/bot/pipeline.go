@@ -316,12 +316,10 @@ func validatePipeline(p *Pipeline, env pipelineEnv) error {
 	if reply.Inputs["text"] == "" && reply.Inputs["file"] == "" {
 		return pipelineErr(reply.ID, "", "connect text or a file to send")
 	}
-	if b := reply.Inputs["continues"]; b != "" {
-		from, _, _ := strings.Cut(b, ".")
-		ai := stepByID(p.Steps, from)
-		if ai == nil || reply.Inputs["text"] != from+".text" {
-			return pipelineErr(reply.ID, "continues", "send the same AI step's answer as text")
-		}
+	// The conversation remembers what the reply sends, which may be the AI
+	// answer itself or a later step's version of it (a translation, say).
+	if reply.Inputs["continues"] != "" && reply.Inputs["text"] == "" {
+		return pipelineErr(reply.ID, "continues", "a reply that continues a conversation sends text")
 	}
 	return nil
 }

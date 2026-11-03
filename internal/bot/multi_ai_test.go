@@ -167,3 +167,76 @@ func TestOnlyTheConversationStepIsTheTurn(t *testing.T) {
 		t.Fatalf("conversation turn %+v", h)
 	}
 }
+
+// answer in a reply thread, then translate: the thread remembers what was
+// sent, and the translating step sees no thread history.
+func threadThenTranslate() Command {
+	return customCommand("tutor", Pipeline{Steps: []PipelineStep{
+		step("question", "message.question", map[string]string{"text": "trigger.args", "message": "trigger.message"}, `{"require_question":true}`),
+		step("conversation", "context.thread", nil, ""),
+		step("answer", "ai.chat", map[string]string{"prompt": "question.prompt", "context": "conversation.context"}, `{"instructions":"Teach."}`),
+		step("ask", "text.template", map[string]string{"input": "answer.text"}, `{"template":"Translate: {input}"}`),
+		step("translation", "ai.chat", map[string]string{"prompt": "ask.text"}, `{"instructions":"Translate."}`),
+		reply(map[string]string{"text": "translation.text", "continues": "answer.context"}),
+	}})
+}
+
+func TestAThreadWithALaterAIStepRemembersWhatWasSent(t *testing.T) {
+	e, fixture := setup(t)
+	arm(t, e)
+	c := configureAI(t, e, true, false)
+	c.Commands = append(c.Commands, threadThenTranslate())
+	if err := e.SetConfiguration(c); err != nil {
+		t.Fatal(err)
+	}
+	provider := &pricedProvider{}
+	e.Provider = provider
+	root := threadPrompt("root", "!tutor What is a prime?", "")
+	if p := threadAccept(t, e, root); p.Thread == nil || p.Input != "What is a prime?" {
+		t.Fatalf("thread turn not taken from the answering step: %+v", p)
+	}
+	if err := e.Dispatch(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	sent := ""
+	for _, text := range fixture.Sent {
+		sent = text
+	}
+	if sent != "AI(Translate: AI(What is a prime?))" || len(provider.histories[1]) != 0 {
+		t.Fatalf("sent %q", sent)
+	}
+	threadEcho(t, e, root, "answer")
+	p := threadAccept(t, e, threadPrompt("child", "And 7?", "answer"))
+	if len(p.Context) != 2 || p.Context[0].Content != "What is a prime?" || p.Context[1].Content != sent {
+		t.Fatalf("thread history %+v", p.Context)
+	}
+}
+
+// In a group sharing one conversation, only the conversation step says who
+// asked; a translating step gets the bare text.
+func TestTheAskerLabelStaysOnTheConversationStep(t *testing.T) {
+	e, _, roster := botGroup(t)
+	c := configureAI(t, e, true, false)
+	c.Commands = append(c.Commands, chainCommand(true))
+	if err := e.SetConfiguration(c); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.EnrollMember("demo-group", "demo-member-b", roster); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.SetGroupShared("demo-group", true); err != nil {
+		t.Fatal(err)
+	}
+	provider := &pricedProvider{}
+	e.Provider = provider
+	m := groupCommand("g-chain", "demo-member-a", "!chain hello")
+	if ok, err := e.Accept(context.Background(), m); !ok || err != nil {
+		t.Fatal(ok, err)
+	}
+	if err := e.Dispatch(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(provider.inputs) != 2 || provider.inputs[0] != "hello" || !strings.HasPrefix(provider.inputs[1], "Member ") {
+		t.Fatalf("labels %q", provider.inputs)
+	}
+}
