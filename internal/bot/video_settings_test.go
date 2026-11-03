@@ -65,7 +65,7 @@ func TestVideoSettingsSnapshotAndEffectiveCap(t *testing.T) {
 		t.Fatalf("bad effective snapshot %+v", snapshot)
 	}
 	deadline, _ := time.Parse(time.RFC3339Nano, p.ExecutionDeadline)
-	if delta := deadline.Sub(time.Now()); delta < 6*time.Minute || delta > 8*time.Minute {
+	if delta := time.Until(deadline); delta < 6*time.Minute || delta > 8*time.Minute {
 		t.Fatal("wrong deadline")
 	}
 	c, _ = e.Configuration()
