@@ -37,7 +37,7 @@ func TestKindSettingsRejectUnknownFields(t *testing.T) {
 }
 
 func TestThreadCapability(t *testing.T) {
-	if !kindThreads(Command{Type: "ai"}) || !kindThreads(Command{Kind: "ai.generate"}) || kindThreads(Command{Type: "fixed"}) || kindThreads(Command{Type: "download"}) {
+	if !commandThreads(Command{Name: "ask", Type: "ai", Memory: true}) || commandThreads(Command{Name: "ask", Type: "ai"}) || commandThreads(Command{Name: "other", Kind: "ai.generate", Memory: true}) || commandThreads(Command{Name: "ask", Type: "fixed", Memory: true}) || commandThreads(Command{Type: "download"}) {
 		t.Fatal("unexpected thread capability")
 	}
 }
@@ -138,10 +138,13 @@ func TestLegacyRenamedAndDuplicatedEdits(t *testing.T) {
 }
 func TestKindDefinitions(t *testing.T) {
 	defs := KindDefinitions()
-	if len(defs) != 3 {
+	if len(defs) != 4 {
 		t.Fatal("missing kinds")
 	}
 	for _, d := range defs {
+		if d.ID == "pipeline" {
+			continue
+		}
 		if d.ID == "" || d.Version != 1 || d.RetryClass == "" || d.ResourceClass == "" || len(d.Schema.Properties) == 0 {
 			t.Fatalf("incomplete definition: %+v", d)
 		}

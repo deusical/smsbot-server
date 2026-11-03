@@ -130,27 +130,50 @@ sends twice.
   and archived files; the key lives elsewhere. A lock stops two processes from using
   the same directory.
 
-## Command kinds
+## Commands are pipelines
 
-`internal/bot/kinds.go` registers `fixed.reply@1`, `ai.generate@1` and
-`media.video@1` in the bot package. Definitions expose settings form schemas,
-thread support, retry and resource classes. The registry owns planning and
-preview callbacks and the short preparation callback. Preparation can defer
-worker polling through `job_work`; it never submits messages. Dispatcher checks,
-persisted outbound intents and uncertain-send handling remain the send boundary.
+A command is configuration: the trigger (the command message) followed by a
+linear list of steps. Each step runs one registered module
+(`internal/bot/pipeline.go`, `modules_*.go`). A module declares typed input and
+output ports (`text`, `url`, `file`, `video`, `message`, `context`), a strict
+settings schema, an effect class and retry/resource classes. Each input is bound
+to `trigger.<output>` or an earlier `<step>.<output>` of a compatible type;
+saving checks every binding, setting and rule (at most 8 steps, one paid AI
+step, the reply last).
 
-Command configuration retains the legacy flat fields alongside `kind`, raw
-`settings` and an optional `revision`. Legacy recipes are accepted and normalized;
-unknown settings are rejected. Both forms are saved for downgrade compatibility.
-During migration an unchanged settings object echoed by a legacy editor permits
-flat-field edits, including switching type. Changed settings are authoritative. Revision-aware requests always treat supplied
-settings as authoritative; legacy flat edits can omit settings.
-The incoming message passed to planning supplies arguments, quoted message and
-attachment references and the sender's own attachment; AI resolution and memory
-epoch handling continue to use the existing conversation access checks.
+| Module | Does |
+|---|---|
+| `text.template` | Fixed text with `{input}` |
+| `text.extract_url` | The one Douyin/Xiaohongshu link, or a usage reply |
+| `message.question` | Question from the command text, its file and the messages it replies to |
+| `context.none` / `context.rolling` / `context.thread` | Which AI conversation the request belongs to |
+| `ai.chat` | One provider request; with a conversation, reads it and outputs it to continue |
+| `video.download` | Server-local worker download and compression |
+| `reply` | The only sink: text and file to send, and the conversation it continues |
 
-The owner API exposes definitions at `/api/v1/command-kinds` (also available at
-`/api/command-kinds`). The editor chooses controls from schema UI hints. Config
+Acceptance snapshots the pipeline into the encrypted plan and runs the steps
+whose inputs are known then (`immediate` modules); a step can decline the command
+(no usable model) or end it early with a reply (no link, unreadable file,
+expired thread). Dispatch runs the remaining steps in order; long steps yield
+through `job_work`. Modules never send. The reply step only fills the plan's
+text and attachments; uploads, every pre-send check, the persisted outbound
+intent and uncertain-send handling stay in the dispatcher.
+
+An AI conversation is a value: a context module names it, `ai.chat` loads its
+earlier turns with its own model and budget, and the reply's `continues` input
+records the new turn only after submission. A native reply to an AI answer
+continues the command that answered (the thread records its command).
+Changing a command's conversation kind or turning memory off withdraws consent.
+
+`internal/bot/kinds.go` keeps the built-in templates `fixed.reply@1`,
+`ai.generate@1` and `media.video@1`: settings forms whose pipelines reproduce the
+original commands exactly. Kind `pipeline` is configured by its steps and is
+saved with legacy type `fixed` and no text, which older servers never send.
+Legacy flat fields and recipes are still accepted and normalized; unknown
+settings are rejected.
+
+The owner API exposes templates at `/api/v1/command-kinds` and modules at
+`/api/v1/command-modules` (also under `/api/`). The editor chooses controls from schema UI hints. Config
 GET returns a whole-configuration revision; PUT with an obsolete revision returns
 409 atomically. Revisionless legacy clients retain full-replacement last-writer-wins
 semantics. No settings merge is performed, and unknown settings fail validation.

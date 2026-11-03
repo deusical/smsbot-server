@@ -52,6 +52,9 @@ type Command struct {
 	Approval             bool            `json:"approval"`
 	AllowedConversations []string        `json:"allowed_conversations"`
 	Generation           *Generation     `json:"generation,omitempty"`
+	// Pipeline is the steps the command runs. For a template kind it is derived
+	// from the kind's settings; for kind "pipeline" it is the configuration.
+	Pipeline *Pipeline `json:"pipeline,omitempty"`
 }
 type Profile struct {
 	ID           string `json:"id"`
@@ -117,6 +120,12 @@ func (c Configuration) Validate() error {
 		}
 		if cmd.Generation != nil {
 			if err := validateGeneration(*cmd.Generation); err != nil {
+				return err
+			}
+		}
+		if cmd.Pipeline != nil {
+			pl := clonePipeline(*cmd.Pipeline)
+			if err := validatePipeline(&pl, pipelineEnv{profiles: profiles}); err != nil {
 				return err
 			}
 		}
@@ -210,7 +219,7 @@ func (e *Engine) SetConfiguration(c Configuration) error {
 		}
 		consented := false
 		for _, current := range c.Commands {
-			if current.Name == previous.Name && current.Memory && current.Enabled && commandKind(current) == commandKind(previous) {
+			if current.Name == previous.Name && current.Memory && current.Enabled && memoryKind(current) == memoryKind(previous) {
 				consented = true
 				break
 			}

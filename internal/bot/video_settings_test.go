@@ -57,11 +57,12 @@ func TestVideoSettingsSnapshotAndEffectiveCap(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var snapshot VideoSettings
-	if err = json.Unmarshal(p.KindSettings, &snapshot); err != nil {
+	var state videoState
+	if err = json.Unmarshal(videoStep(t, p).State, &state); err != nil {
 		t.Fatal(err)
 	}
-	if p.DownloadMaxBytes != 2<<20 || snapshot.MaxMB != float64(2<<20)/1e6 || snapshot.Preset != "fast" {
+	snapshot := state.Settings
+	if state.MaxBytes != 2<<20 || snapshot.MaxMB != float64(2<<20)/1e6 || snapshot.Preset != "fast" || snapshot.ExecutionMinutes != 7 {
 		t.Fatalf("bad effective snapshot %+v", snapshot)
 	}
 	deadline, _ := time.Parse(time.RFC3339Nano, p.ExecutionDeadline)
@@ -77,7 +78,7 @@ func TestVideoSettingsSnapshotAndEffectiveCap(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, after, _ := e.Store.JobPlan(id)
-	if string(after.KindSettings) != string(p.KindSettings) || after.ExecutionDeadline != p.ExecutionDeadline {
+	if string(videoStep(t, after).State) != string(videoStep(t, p).State) || after.ExecutionDeadline != p.ExecutionDeadline {
 		t.Fatal("mutable accepted settings")
 	}
 	defs, err := e.CommandKindDefinitions()
@@ -172,4 +173,18 @@ func TestVideoSettingsDeadlineUsesAuthoritativeSettings(t *testing.T) {
 	if videoSettings(c).ExecutionMinutes != 7 {
 		t.Fatal("flat execution value overrode settings")
 	}
+}
+
+func videoStep(t *testing.T, p store.Plan) store.StepRun {
+	t.Helper()
+	if p.Pipeline == nil {
+		t.Fatal("no pipeline snapshot")
+	}
+	for _, s := range p.Pipeline.Steps {
+		if s.Module == "video.download" {
+			return s
+		}
+	}
+	t.Fatal("no video step")
+	return store.StepRun{}
 }

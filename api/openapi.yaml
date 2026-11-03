@@ -219,6 +219,19 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/CommandKind'
+  /command-modules:
+    get:
+      summary: Modules commands are built from
+      description: Every registered module with its typed input and output ports, settings form schema (with effective bounds for this server), effect class and retry/resource classes. A command's pipeline connects these modules; only the reply module (effect sink) leads to a send, through the dispatcher's checks.
+      responses:
+        '200':
+          description: Registered modules
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CommandModule'
   /config:
     get:
       description: Encrypted server bot configuration
@@ -508,6 +521,18 @@ paths:
                   simulated:
                     type: boolean
                     const: true
+                  steps:
+                    type: array
+                    description: Each simulated step in order, with its outputs as preview text. A step that ends the command early (for example, no video link) is the last one listed.
+                    items:
+                      type: object
+                      additionalProperties: false
+                      properties:
+                        id: {type: string}
+                        module: {type: string}
+                        outputs:
+                          type: object
+                          additionalProperties: {type: string}
         '400':
           description: Invalid bounded request
         '401':
@@ -1590,8 +1615,11 @@ components:
       properties:
         kind:
           type: string
-          enum: [fixed.reply, ai.generate, media.video]
-          description: Optional versioned kind identity; legacy type is retained for downgrade compatibility.
+          enum: [fixed.reply, ai.generate, media.video, pipeline]
+          description: Optional versioned kind identity; legacy type is retained for downgrade compatibility. Template kinds (fixed.reply, ai.generate, media.video) are configured by settings and run a fixed pipeline. Kind pipeline is configured by its pipeline steps; it is saved with legacy type fixed and empty instructions, which older servers never send.
+        pipeline:
+          $ref: '#/components/schemas/Pipeline'
+
         settings:
           type: object
           description: Kind settings. Authoritative for revision-aware clients. Unknown fields are rejected. Legacy flat fields remain supported when settings are omitted.
@@ -1706,6 +1734,87 @@ components:
         schema:
           type: object
           description: Recursive form schema (type, properties, title, ui, default, minimum, maximum, effective_maximum, enum, unit). Effective bounds reflect host attachment limits. UI hints select multiline, model, profile and optional generation controls.
+    CommandModule:
+      type: object
+      properties:
+        id: {type: string, example: video.download}
+        version: {type: integer}
+        title: {type: string}
+        description: {type: string}
+        inputs:
+          type: array
+          items:
+            $ref: '#/components/schemas/ModulePort'
+        outputs:
+          type: array
+          items:
+            $ref: '#/components/schemas/ModulePort'
+        effect:
+          type: string
+          enum: [pure, local, paid, sink]
+          description: sink is the reply, the only module that leads to a send. A command may use one paid step.
+        retry_class: {type: string, enum: [none, idempotent-poll, local-repeatable]}
+        resource_class: {type: string}
+        immediate:
+          type: boolean
+          description: Finishes when the command is accepted, from values known then; its outputs are fixed in the accepted plan.
+        long_running:
+          type: boolean
+          description: Gives the job the pipeline's execution deadline instead of the two-minute freshness window.
+        settings:
+          type: object
+          description: Recursive form schema, as for command kinds.
+    ModulePort:
+      type: object
+      properties:
+        name: {type: string}
+        title: {type: string}
+        types:
+          type: array
+          items: {type: string, enum: [text, url, file, video, message, context]}
+        required: {type: boolean}
+    Pipeline:
+      type: object
+      additionalProperties: false
+      description: >-
+        A command's steps. The trigger (outputs args and message) comes first
+        implicitly. Steps run in order; each input binds to trigger.<output> or
+        an earlier <step>.<output> of a compatible type. At most 8 steps, at
+        most one paid (AI) step, and the last step is the reply. A conversation
+        (context.rolling or context.thread) feeds exactly one AI step whose
+        answer the reply sends and continues. Accepted jobs snapshot the
+        pipeline; later edits apply only to new requests. Invalid pipelines are
+        rejected with 400 {error: invalid_pipeline, step, port, reason}.
+      properties:
+        execution_minutes:
+          type: integer
+          minimum: 0
+          maximum: 60
+          description: Lifetime of a job with a long-running step, from acceptance to send. Zero means 15.
+        steps:
+          type: array
+          minItems: 1
+          maxItems: 8
+          items:
+            type: object
+            additionalProperties: false
+            required: [id, module]
+            properties:
+              id:
+                type: string
+                pattern: ^[a-z][a-z0-9_]{0,23}$
+              module: {type: string}
+              version:
+                type: integer
+                description: Module version; omitted means the current one, which is then pinned.
+              inputs:
+                type: object
+                additionalProperties:
+                  type: string
+                  pattern: ^[a-z][a-z0-9_]{0,23}\.[a-z_]+$
+              settings:
+                type: object
+                description: Module settings, validated strictly against the module's schema.
     Configuration:
       type: object
       additionalProperties: false

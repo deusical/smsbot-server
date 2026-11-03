@@ -144,7 +144,7 @@ func TestConfigRevisionAndKindAPI(t *testing.T) {
 	}
 	w := req(s, "GET", "/api/v1/command-kinds", "", "fixture-client", "")
 	var defs []bot.KindDefinition
-	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &defs) != nil || len(defs) != 3 {
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &defs) != nil || len(defs) != 4 {
 		t.Fatal("kind definitions unavailable")
 	}
 	w = req(s, "GET", "/api/v1/config", "", "fixture-client", "")
@@ -181,5 +181,31 @@ func TestDualRepresentationConfigFitsRequestBudget(t *testing.T) {
 	}
 	if saved := req(s, "PUT", "/api/v1/config", w.Body.String(), "fixture-client", ""); saved.Code != 200 {
 		t.Fatal("dual config cannot round-trip", saved.Code)
+	}
+}
+
+func TestCommandModulesAndPipelineErrors(t *testing.T) {
+	s := apiSetup(t)
+	for _, path := range []string{"/api/command-modules", "/api/v1/command-modules"} {
+		w := req(s, "GET", path, "", "fixture-client", "")
+		var defs []bot.ModuleDefinition
+		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &defs) != nil || len(defs) == 0 {
+			t.Fatal("modules unavailable", path, w.Code)
+		}
+	}
+	w := req(s, "GET", "/api/v1/config", "", "fixture-client", "")
+	var c bot.Configuration
+	if json.Unmarshal(w.Body.Bytes(), &c) != nil {
+		t.Fatal("config")
+	}
+	c.Commands = []bot.Command{{Name: "bad", Kind: "pipeline", Enabled: true, Pipeline: &bot.Pipeline{Steps: []bot.PipelineStep{
+		{ID: "video", Module: "video.download", Inputs: map[string]string{"url": "trigger.args"}},
+		{ID: "reply", Module: "reply", Inputs: map[string]string{"file": "video.video"}},
+	}}}}
+	raw, _ := json.Marshal(c)
+	w = req(s, "PUT", "/api/v1/config", string(raw), "fixture-client", "")
+	var e map[string]string
+	if w.Code != 400 || json.Unmarshal(w.Body.Bytes(), &e) != nil || e["error"] != "invalid_pipeline" || e["step"] != "video" || e["port"] != "url" || e["reason"] == "" {
+		t.Fatal("pipeline error not explained", w.Code, w.Body.String())
 	}
 }

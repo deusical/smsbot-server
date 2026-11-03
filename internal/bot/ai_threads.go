@@ -8,48 +8,45 @@ import (
 )
 
 // planAIThread snapshots only the selected ancestor path. Discovery and history
-// collection never supply implicit context for a new ask.
-func (e *Engine) planAIThread(m transport.Incoming, p *store.Plan, parent *store.AIParent, model Model, g Generation, settings Settings) error {
+// collection never supply implicit context for a new request. It returns the
+// thread the job adds a turn to, the earlier turns, a note for the instructions
+// and, when the request can't continue, the reply that says why.
+func (e *Engine) planAIThread(m transport.Incoming, p *store.Plan, parent *store.AIParent, command string, model Model, g Generation, settings Settings, input, instructions string, file *store.FileRef) (*store.AIThreadPlan, []store.Turn, string, string, error) {
 	budget := 8192
 	if model.ContextLength > 0 {
-		available := model.ContextLength - len(p.Input) - len(p.Instructions) - g.Tokens - 1024
-		if p.File != nil {
-			available -= fileTokens(p.File)
+		available := model.ContextLength - len(input) - len(instructions) - g.Tokens - 1024
+		if file != nil {
+			available -= fileTokens(file)
 		}
 		if available < 0 {
-			p.Model = ""
-			p.Memory = false
-			p.Reply = "This question is too large for the selected model's context. Shorten it or choose a larger-context model."
-			return nil
+			return nil, nil, "", "This question is too large for the selected model's context. Shorten it or choose a larger-context model.", nil
 		}
 		budget = min(budget, available)
 	}
-	p.Thread = &store.AIThreadPlan{ID: store.ID(), RetentionDays: settings.RetentionDays}
+	thread := &store.AIThreadPlan{ID: store.ID(), RetentionDays: settings.RetentionDays}
+	var history []store.Turn
+	note := ""
 	if parent != nil {
-		history, omitted, err := e.Store.AIHistory(*parent, m.ConversationID, p.ThreadOwner(), "!ask", p.MemoryEpoch, e.now(), settings.MemoryHours, settings.RetentionDays, budget)
+		turns, omitted, err := e.Store.AIHistory(*parent, m.ConversationID, p.ThreadOwner(), command, p.MemoryEpoch, e.now(), settings.MemoryHours, settings.RetentionDays, budget)
 		if errors.Is(err, store.ErrAIThreadUnavailable) {
-			p.Thread = nil
-			p.Memory = false
-			p.Model = ""
-			p.Reply = "That AI conversation has expired or was cleared. Send !ask to start a new one."
-			return nil
+			return nil, nil, "", "That AI conversation has expired or was cleared. Send " + command + " to start a new one.", nil
 		}
 		if err != nil {
-			return err
+			return nil, nil, "", "", err
 		}
-		p.Thread.ID = parent.Thread
-		p.Thread.Parent = parent.Exchange
-		p.Context = history
+		thread.ID = parent.Thread
+		thread.Parent = parent.Exchange
+		history = turns
 		if omitted {
-			p.Instructions += "\nEarlier exchanges were omitted to fit the context budget. Do not claim to remember them."
+			note = "\nEarlier exchanges were omitted to fit the context budget. Do not claim to remember them."
 		}
 	}
 	if m.Interaction != nil && m.Interaction.UpstreamID == m.ID && strings.Contains(strings.ToUpper(m.Interaction.Protocol), "RCS") {
 		if _, ok := e.Transport.(transport.ReplySender); ok {
-			p.Thread.ReplyWire = m.ID
+			thread.ReplyWire = m.ID
 		}
 	}
-	return nil
+	return thread, history, note, "", nil
 }
 
 // recordAIAnswer runs on the serialized event consumer, not libgm's callback.

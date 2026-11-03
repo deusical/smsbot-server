@@ -36,13 +36,14 @@ type Job struct {
 	RequestedReasoning string   `json:"requested_reasoning,omitempty"`
 }
 type Plan struct {
-	KindSettings      json.RawMessage `json:"kind_settings,omitempty"`
-	Kind              string          `json:"kind,omitempty"`
-	ExecutionDeadline string          `json:"execution_deadline,omitempty"`
-	DownloadURL       string          `json:"download_url,omitempty"`
-	DownloadUploaded  bool            `json:"download_uploaded,omitempty"`
-	DownloadMaxBytes  int64           `json:"download_max_bytes,omitempty"`
-	Thread            *AIThreadPlan   `json:"thread,omitempty"`
+	// Pipeline is the snapshotted command recipe and its step progress.
+	Pipeline *PipelineRun `json:"pipeline,omitempty"`
+	// ExecutionDeadline bounds a long-running job from acceptance to send; a job
+	// without one must send within two minutes of its message.
+	ExecutionDeadline string `json:"execution_deadline,omitempty"`
+	// FilesUploaded marks the reply's files as uploaded by the background lane.
+	FilesUploaded bool          `json:"download_uploaded,omitempty"`
+	Thread        *AIThreadPlan `json:"thread,omitempty"`
 	// File is the attachment the AI command carries or quoted. Only the
 	// reference is planned; the bytes are read just before generation and never
 	// stored in the plan. The JSON name predates files other than photos.
