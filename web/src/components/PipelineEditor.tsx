@@ -108,6 +108,7 @@ export function PipelineEditor({
                   (module?.effect ?? "pure") +
                   ((issues[step.id] ?? []).length ? " has-problem" : "")
                 }
+                aria-invalid={(issues[step.id] ?? []).length > 0 || undefined}
                 onClick={(e) => {
                   e.preventDefault();
                   document
@@ -116,6 +117,9 @@ export function PipelineEditor({
                 }}
               >
                 {module?.title ?? step.module}
+                {(issues[step.id] ?? []).length > 0 && (
+                  <span className="sr-only"> (needs attention)</span>
+                )}
               </a>
             </li>
           );

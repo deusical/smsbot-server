@@ -49,9 +49,12 @@ export function ActivityFeed({
 }) {
   const [open, setOpen] = useState<string | null>(null);
   const { modules } = useModules();
-  // The step a request is on: the first not yet finished.
+  // The step a request is on: the first not yet finished. A request being
+  // sent is still on its last steps.
+  const running = (j: Job) =>
+    pendingStates.includes(j.state) || j.state === "submitting";
   const current = (j: Job) =>
-    pendingStates.includes(j.state) ? j.steps?.find((s) => !s.done) : undefined;
+    running(j) ? j.steps?.find((s) => !s.done) : undefined;
   const label = (id: string) =>
     conversations.find((c) => c.id === id)?.label ?? "Unknown conversation";
   return (
@@ -173,7 +176,7 @@ export function ActivityFeed({
                               ? "done"
                               : now
                                 ? "current"
-                                : pendingStates.includes(j.state)
+                                : running(j)
                                   ? "waiting"
                                   : "not-run";
                             return (

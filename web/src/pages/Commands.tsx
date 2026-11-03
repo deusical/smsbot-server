@@ -113,19 +113,18 @@ export function CommandsPage({
   // Commands saved before they were steps run the same steps; the server says
   // which. They are stored as steps the first time they're edited.
   const [derived, setDerived] = useState<Record<string, Pipeline>>({});
+  // Each command's steps are asked for once, however often the list renders.
+  const requested = useRef(new Set<string>());
   useEffect(() => {
-    let active = true;
     for (const c of config?.commands ?? []) {
-      if (c.kind === "pipeline" || derived[stepsKey(c)]) continue;
       const key = stepsKey(c);
+      if (c.kind === "pipeline" || requested.current.has(key)) continue;
+      requested.current.add(key);
       api<Pipeline>("/command-pipeline", "POST", c)
-        .then((p) => active && setDerived((d) => ({ ...d, [key]: p })))
-        .catch(() => undefined);
+        .then((p) => setDerived((d) => ({ ...d, [key]: p })))
+        .catch(() => requested.current.delete(key));
     }
-    return () => {
-      active = false;
-    };
-  }, [config?.commands, derived]);
+  }, [config?.commands]);
   function stepsOf(c: Command): Pipeline | undefined {
     return c.kind === "pipeline" ? c.pipeline : derived[stepsKey(c)];
   }

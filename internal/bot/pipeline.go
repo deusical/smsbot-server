@@ -561,6 +561,8 @@ func (e *Engine) acceptPipeline(ctx context.Context, m transport.Incoming, p *st
 		case stepDecline:
 			return false, nil
 		case stepHalt:
+			// The step ran and ended the command with its reply.
+			s.Done = true
 			haltPlan(p, a.halt)
 			p.ExecutionDeadline = ""
 			return true, nil

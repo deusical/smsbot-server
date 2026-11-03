@@ -445,3 +445,26 @@ func TestVideoLinkFromALaterStep(t *testing.T) {
 		t.Fatal("state", got)
 	}
 }
+
+// A step that ends the command at acceptance counts as having run.
+func TestAHaltingStepIsRecordedAsRun(t *testing.T) {
+	e, _ := setup(t)
+	arm(t, e)
+	c := DefaultConfiguration()
+	c.Commands = []Command{{Name: "download", Type: "download", Enabled: true}}
+	if err := e.SetConfiguration(c); err != nil {
+		t.Fatal(err)
+	}
+	m := incoming()
+	m.Text = "!download no link here"
+	if ok, err := e.Accept(context.Background(), m); !ok || err != nil {
+		t.Fatal(ok, err)
+	}
+	jobs, err := e.Store.Jobs()
+	if err != nil || len(jobs) != 1 || len(jobs[0].Steps) != 4 {
+		t.Fatal(err, jobs)
+	}
+	if s := jobs[0].Steps; !s[0].Done || s[1].Done || s[3].Done {
+		t.Fatalf("steps %+v", s)
+	}
+}

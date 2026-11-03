@@ -103,8 +103,9 @@ own messages can run commands too.
 
 - `!ask question` starts a new conversation with the AI.
 - **Continue it** by using your phone's Reply on the AI's answer; you don't need `!ask`
-  again. Replying to an older answer continues from that point. This needs **Remember
-  the conversation** on for the command.
+  again. Replying to an older answer continues from that point. This needs a **Reply
+  threads** step in the command's steps (the AI assistant starting point has one); a
+  reply continues whichever command gave the answer.
 - **Ask about a message** by replying to it with `!ask question`. The AI sees that
   message and, if it was itself a reply, the messages it replied to, up the chain: up to
   8 messages and about 6,000 characters, newest kept first (2,000 characters each). It
