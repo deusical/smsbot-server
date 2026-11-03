@@ -109,6 +109,31 @@ service log; Activity continues to show the sanitized preparation stage. The
 original deadline, byte ceiling and every dispatcher safety check still apply.
 Network failures yield another poll and do not bypass authorization.
 
+## Worker protocol v3: separate download and compression
+
+The download command is a pipeline: `text.extract_url` → `video.download` →
+`video.compress` → `reply`. With protocol 3 these are separate worker jobs, so
+the original can feed other steps later. Capabilities now answer
+`{"protocol":2,"protocols":[1,2,3]}`; `protocol` stays 2 for bots that compare
+it exactly. Job IDs are `sha256(<bot job> + NUL + <step id>)`; `scope` is the bot job.
+
+```json
+{"protocol":3,"op":"download","scope":"<bot job>","url":"https://douyin.com/example","deadline":1800000000}
+{"protocol":3,"op":"compress","scope":"<bot job>","source":"<download job>","max_bytes":19990000,"deadline":1800000000,"settings":{"preset":"slow","passes":2,"max_attempts":3,"copy_if_fits":true,"max_mb":19.99,"execution_minutes":15}}
+```
+
+A download job keeps only the encrypted original and has no result. A compress
+job is refused unless its `source` is a completed download job of the same
+`scope`, so one bot job can never read another's original; only job IDs cross
+the boundary, never paths. The compress job checkpoints its effective settings
+and resumes with them after a restart, like protocol 2.
+
+If the worker doesn't list protocol 3, the bot logs only
+`download_worker_v3_unavailable_using_v2` once and runs download and compression
+as one protocol-2 job with the same settings (falling back further to the
+legacy defaults, with the warning above, when protocol 2 is missing too).
+Upgrade both together for the separate jobs.
+
 The bot stores its job ID and encrypted plan immediately. Dispatch enqueues or
 polls preparation with short HTTP calls and yields between polls, so other
 commands can run. Activity shows the last preparation stage: queued, downloading,

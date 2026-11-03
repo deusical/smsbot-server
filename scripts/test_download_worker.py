@@ -159,7 +159,7 @@ class ProtocolV2Tests(unittest.TestCase):
             try:
                 req = urllib.request.Request(base + "/capabilities", headers={"Authorization": "Bearer " + token})
                 with opener.open(req) as response:
-                    self.assertEqual(json.loads(response.read()), {"protocol": 2})
+                    self.assertEqual(json.loads(response.read()), {"protocol": 2, "protocols": [1, 2, 3]})
                 value = {"url": "https://douyin.com/synthetic", "max_bytes": 100000,
                          "deadline": int(time.time())+600, "protocol": 2, "settings": {"execution_minutes": 1}}
                 def call(value):
@@ -251,3 +251,111 @@ class ProtocolV2Tests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ProtocolV3Tests(unittest.TestCase):
+    scope = "d"*64
+    download = "1"*64
+    compress_job = "2"*64
+
+    def jobs(self):
+        folder = tempfile.TemporaryDirectory(); self.addCleanup(folder.cleanup)
+        root = Path(folder.name)
+        return root, worker.Jobs(root, "synthetic-token")
+
+    def download_request(self, **extra):
+        return {"protocol": 3, "op": "download", "scope": self.scope,
+                "url": "https://v.douyin.com/synthetic/", "deadline": int(time.time())+600, **extra}
+
+    def compress_request(self, **extra):
+        return {"protocol": 3, "op": "compress", "scope": self.scope, "source": self.download,
+                "max_bytes": 500000, "deadline": int(time.time())+600,
+                "settings": {"preset": "fast", "passes": 1, "execution_minutes": 15}, **extra}
+
+    def finish_download(self, root, jobs):
+        with mock.patch.object(worker.threading, "Thread"):
+            self.assertEqual(jobs.poll(self.download, self.download_request()), {"stage": "queued", "protocol": 3})
+        path = jobs.path(self.download)
+        jobs.active[self.download] = time.monotonic()+30
+        def run(args, deadline, **kwargs):
+            out = Path(args[args.index("--output")+1]); receipt = Path(args[args.index("--receipt")+1])
+            (out / "video.mp4").write_bytes(b"synthetic-original")
+            receipt.write_text(json.dumps({"files": [str(out / "video.mp4")]}))
+        with mock.patch.object(worker, "run", side_effect=run), \
+             mock.patch.object(worker, "compress", side_effect=AssertionError("download job compressed")):
+            jobs.execute(self.download)
+        return path
+
+    def test_parsing(self):
+        self.assertIsNone(worker.protocol_settings(self.download_request()))
+        self.assertEqual(worker.protocol_settings(self.compress_request())["preset"], "fast")
+        for bad in (self.download_request(op="encode"), self.download_request(scope="../x"),
+                    self.download_request(max_bytes=100000), self.download_request(settings={}),
+                    self.compress_request(source="/etc/passwd"), self.compress_request(url="https://douyin.com/x"),
+                    self.compress_request(settings={"encoder": "x"})):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                worker.protocol_settings(bad)
+
+    def test_download_keeps_only_the_original(self):
+        root, jobs = self.jobs()
+        path = self.finish_download(root, jobs)
+        state = jobs.load(path)
+        self.assertEqual(state["stage"], "complete")
+        self.assertTrue((path / "original.enc").exists())
+        self.assertFalse((path / "result.enc").exists())
+        self.assertNotIn(b"synthetic-original", (path / "original.enc").read_bytes())
+        with self.assertRaises(ValueError):
+            jobs.result(self.download, root / "nothing.mp4")
+
+    def test_compress_reads_the_scoped_source_and_resumes_with_its_settings(self):
+        root, jobs = self.jobs()
+        # No source yet: rejected before any job is created.
+        with self.assertRaises(ValueError):
+            jobs.poll(self.compress_job, self.compress_request())
+        self.finish_download(root, jobs)
+        # Another bot job's scope can't use this original.
+        with self.assertRaises(ValueError):
+            jobs.poll(self.compress_job, self.compress_request(scope="e"*64))
+        with mock.patch.object(worker.threading, "Thread"):
+            self.assertEqual(jobs.poll(self.compress_job, self.compress_request())["stage"], "queued")
+        restarted = worker.Jobs(root, "synthetic-token")
+        restarted.active[self.compress_job] = time.monotonic()+30
+        seen = {}
+        def compress(source, destination, limit, deadline, settings):
+            seen.update(source=source.read_bytes(), settings=settings)
+            destination.write_bytes(b"synthetic-send-copy"); return destination
+        with mock.patch.dict(worker.DEFAULT_SETTINGS, {"preset": "veryfast"}), \
+             mock.patch.object(worker, "compress", side_effect=compress), \
+             mock.patch.object(worker, "run", side_effect=AssertionError("redownloaded")):
+            restarted.execute(self.compress_job)
+        self.assertEqual(seen["source"], b"synthetic-original")
+        self.assertEqual((seen["settings"]["preset"], seen["settings"]["passes"]), ("fast", 1))
+        restarted.result(self.compress_job, root / "send.mp4")
+        self.assertEqual((root / "send.mp4").read_bytes(), b"synthetic-send-copy")
+        with self.assertRaises(ValueError):
+            restarted.poll(self.compress_job, self.compress_request(settings={"preset": "slow", "execution_minutes": 15}))
+
+    def test_http_v3_shapes(self):
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(worker.Jobs, "execute"):
+            token = "SYNTHETIC_TOKEN_FOR_OFFLINE_TEST_ONLY"
+            server = worker.create_server(Path(tmp), token, 0)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            base = "http://127.0.0.1:%s/download/jobs/" % server.server_port
+            def call(job, value):
+                req = urllib.request.Request(base + job, data=json.dumps(value).encode(),
+                    headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"})
+                try:
+                    with opener.open(req) as response:
+                        return response.status, json.loads(response.read())
+                except urllib.error.HTTPError as error:
+                    return error.code, None
+            try:
+                self.assertEqual(call(self.download, self.download_request()), (200, {"stage": "queued", "protocol": 3}))
+                self.assertEqual(call(self.download, self.download_request(url="http://127.0.0.1/x"))[0], 502)
+                # The source download isn't complete: compress is refused.
+                self.assertEqual(call(self.compress_job, self.compress_request())[0], 502)
+                self.assertEqual(call(self.compress_job, self.compress_request(max_bytes=20000000))[0], 502)
+            finally:
+                server.shutdown(); server.server_close(); thread.join(timeout=3)

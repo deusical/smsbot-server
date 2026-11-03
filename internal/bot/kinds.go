@@ -65,7 +65,8 @@ func templatePipeline(c Command) Pipeline {
 		v := videoSettings(c)
 		return Pipeline{ExecutionMinutes: v.ExecutionMinutes, Steps: []PipelineStep{
 			{ID: "link", Module: "text.extract_url", Inputs: map[string]string{"text": "trigger.args"}},
-			{ID: "video", Module: "video.download", Inputs: map[string]string{"url": "link.url"}, Settings: raw(videoStepSettings{v.Preset, v.Passes, v.MaxAttempts, v.CopyIfFits, v.MaxMB})},
+			{ID: "source", Module: "video.download", Inputs: map[string]string{"url": "link.url"}},
+			{ID: "video", Module: "video.compress", Inputs: map[string]string{"source": "source.source"}, Settings: raw(videoStepSettings{v.Preset, v.Passes, v.MaxAttempts, v.CopyIfFits, v.MaxMB})},
 			{ID: "reply", Module: "reply", Inputs: map[string]string{"file": "video.video"}},
 		}}
 	case "pipeline":

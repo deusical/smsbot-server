@@ -25,12 +25,15 @@ import (
 
 // Value types passed between steps.
 const (
-	typeText    = "text"
-	typeURL     = "url"
-	typeFile    = "file"
-	typeVideo   = "video"
-	typeMessage = "message"
-	typeContext = "context"
+	typeText  = "text"
+	typeURL   = "url"
+	typeFile  = "file"
+	typeVideo = "video"
+	// typeStoredVideo is an original kept by the worker; only a later step of
+	// the same job can read it.
+	typeStoredVideo = "stored_video"
+	typeMessage     = "message"
+	typeContext     = "context"
 )
 
 // Module effect classes. Only a sink can lead to a send, and a pipeline has one.
@@ -194,6 +197,7 @@ func validatePipeline(p *Pipeline, env pipelineEnv) error {
 	if p.ExecutionMinutes < 0 || p.ExecutionMinutes > 60 {
 		return pipelineErr("", "", "execution minutes must be between 1 and 60, or 0 for 15")
 	}
+	upgradeVideoSteps(p)
 	if len(p.Steps) == 0 {
 		return pipelineErr("", "", "add at least a reply step")
 	}
@@ -611,7 +615,7 @@ func previewValue(v store.Value) string {
 	switch v.Type {
 	case typeText, typeURL:
 		return v.Text
-	case typeVideo, typeFile:
+	case typeVideo, typeFile, typeStoredVideo:
 		return "(" + v.Type + ")"
 	case typeContext:
 		if v.Context != nil {

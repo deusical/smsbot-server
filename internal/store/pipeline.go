@@ -36,8 +36,11 @@ type StepRun struct {
 // Value is one typed value passed between steps. Large file bytes travel only
 // as the produced media.File the dispatcher later uploads.
 type Value struct {
-	Type    string           `json:"type"`
-	Text    string           `json:"text,omitempty"`
+	Type string `json:"type"`
+	Text string `json:"text,omitempty"`
+	// Handle names a worker-held file (a stored video): a job-scoped worker
+	// job ID, never a path.
+	Handle  string           `json:"handle,omitempty"`
 	File    *FileRef         `json:"file,omitempty"`
 	Media   *media.File      `json:"media,omitempty"`
 	Message *MessageRef      `json:"message,omitempty"`

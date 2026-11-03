@@ -135,7 +135,7 @@ sends twice.
 A command is configuration: the trigger (the command message) followed by a
 linear list of steps. Each step runs one registered module
 (`internal/bot/pipeline.go`, `modules_*.go`). A module declares typed input and
-output ports (`text`, `url`, `file`, `video`, `message`, `context`), a strict
+output ports (`text`, `url`, `file`, `video`, `stored_video`, `message`, `context`), a strict
 settings schema, an effect class and retry/resource classes. Each input is bound
 to `trigger.<output>` or an earlier `<step>.<output>` of a compatible type;
 saving checks every binding, setting and rule (at most 8 steps, one paid AI
@@ -148,7 +148,8 @@ step, the reply last).
 | `message.question` | Question from the command text, its file and the messages it replies to |
 | `context.none` / `context.rolling` / `context.thread` | Which AI conversation the request belongs to |
 | `ai.chat` | One provider request; with a conversation, reads it and outputs it to continue |
-| `video.download` | Server-local worker download and compression |
+| `video.download` | Server-local worker download; the original stays on the worker (`stored_video`) |
+| `video.compress` | Send copy of a stored original, within the size ceiling |
 | `reply` | The only sink: text and file to send, and the conversation it continues |
 
 Acceptance snapshots the pipeline into the encrypted plan and runs the steps

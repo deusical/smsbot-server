@@ -57,7 +57,7 @@ func TestVideoSettingsSnapshotAndEffectiveCap(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var state videoState
+	var state compressState
 	if err = json.Unmarshal(videoStep(t, p).State, &state); err != nil {
 		t.Fatal(err)
 	}
@@ -181,7 +181,7 @@ func videoStep(t *testing.T, p store.Plan) store.StepRun {
 		t.Fatal("no pipeline snapshot")
 	}
 	for _, s := range p.Pipeline.Steps {
-		if s.Module == "video.download" {
+		if s.Module == "video.compress" {
 			return s
 		}
 	}

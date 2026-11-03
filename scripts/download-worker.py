@@ -47,10 +47,30 @@ def validate_settings(value):
     return result
 
 
+JOB = re.compile(r"[a-f0-9]{64}")
+
+
 def protocol_settings(request):
     protocol = request.get("protocol", 1)
-    if type(protocol) is not int or protocol not in (1, 2):
+    if type(protocol) is not int or protocol not in (1, 2, 3):
         raise ValueError("unsupported_protocol")
+    if protocol == 3:
+        # v3 splits one bot video into separate jobs: "download" keeps the
+        # original here; "compress" makes a send copy from a download job of
+        # the same bot job (scope). Only job IDs cross the boundary, never paths.
+        op = request.get("op")
+        if not isinstance(request.get("scope"), str) or not JOB.fullmatch(request["scope"]):
+            raise ValueError("invalid_request")
+        if op == "download":
+            if set(request) - {"protocol", "op", "scope", "url", "deadline"}:
+                raise ValueError("invalid_request")
+            return None
+        if op == "compress":
+            if (set(request) - {"protocol", "op", "scope", "source", "max_bytes", "deadline", "settings"} or
+                    not isinstance(request.get("source"), str) or not JOB.fullmatch(request["source"])):
+                raise ValueError("invalid_request")
+            return validate_settings(request.get("settings"))
+        raise ValueError("invalid_request")
     if protocol == 2:
         if set(request) - {"url", "max_bytes", "deadline", "protocol", "settings"}:
             raise ValueError("invalid_request")
@@ -291,12 +311,12 @@ class Jobs:
             settings["max_mb"] = min(settings["max_mb"], request["max_bytes"] / 1_000_000)
             request = {**request, "settings": settings}
         with self.lock:
+            if request.get("op") == "compress":
+                self.source(request["source"], request["scope"], job)
             path = self.path(job)
             if (path / "state.enc").exists():
                 state = self.load(path)
-                if any(state[k] != request[k] for k in ("url", "max_bytes", "deadline")):
-                    raise ValueError("immutable_job")
-                if settings is not None and (state.get("protocol") != 2 or state["settings"] != settings):
+                if any(state.get(k) != request.get(k) for k in set(state) | set(request) if k not in ("stage",)):
                     raise ValueError("immutable_job")
             else:
                 state = {**request, "stage": "queued"}
@@ -312,7 +332,17 @@ class Jobs:
                     threading.Thread(target=self.execute, args=(job,), daemon=True).start()
                 else:
                     raise RuntimeError("busy")
-            return {"stage": state["stage"], **({"protocol": 2} if state.get("protocol") == 2 else {})}
+            return {"stage": state["stage"], **({"protocol": state["protocol"]} if state.get("protocol") in (2, 3) else {})}
+
+    def source(self, source, scope, job):
+        """The completed download job of the same bot job that a compress job reads."""
+        if source == job or not (self.directory / source / "state.enc").exists():
+            raise ValueError("source_unavailable")
+        state = self.load(self.directory / source)
+        if (state.get("op") != "download" or state.get("scope") != scope or state["stage"] != "complete" or
+                time.time() >= state["deadline"] or not (self.directory / source / "original.enc").exists()):
+            raise ValueError("source_unavailable")
+        return self.directory / source
 
     def execute(self, job):
         state, path = None, None
@@ -338,7 +368,11 @@ class Jobs:
                     deadline = time.monotonic() + max(0, state["deadline"] - time.time())
                     original = folder / "original.mp4"
                     checkpoint = path / "original.enc"
-                    if checkpoint.exists():
+                    if state.get("op") == "compress":
+                        with self.lock:
+                            source = self.source(state["source"], state["scope"], job)
+                        open_file(source / "original.enc", original, self.key)
+                    elif checkpoint.exists():
                         open_file(checkpoint, original, self.key)
                     else:
                         stage("downloading")
@@ -354,8 +388,12 @@ class Jobs:
                             raise ValueError("single_video_required")
                         files[0].replace(original)
                         seal_file(original, checkpoint, self.key)
+                    if state.get("op") == "download":
+                        # The original stays here for a compress job to read.
+                        stage("complete")
+                        return
                     stage("compressing")
-                    options = {"settings": state["settings"]} if state.get("protocol") == 2 else {}
+                    options = {"settings": state["settings"]} if state.get("protocol") in (2, 3) else {}
                     output = compress(original, folder / "send.mp4", state["max_bytes"], deadline, **options)
                     if not alive():
                         raise LeaseExpired()
@@ -380,7 +418,7 @@ class Jobs:
         with self.lock:
             path = self.path(job)
             state = self.load(path)
-            if state["stage"] != "complete" or time.time() >= state["deadline"]:
+            if state["stage"] != "complete" or time.time() >= state["deadline"] or state.get("op") == "download":
                 raise ValueError("result_unavailable")
             open_file(path / "result.enc", destination, self.key)
             if not 0 < destination.stat().st_size <= state["max_bytes"]:
@@ -401,7 +439,8 @@ def create_server(root, token, port, output_root=None):
                 return
             try:
                 if self.command == "GET" and self.path == "/download/capabilities":
-                    data = b'{"protocol":2}'
+                    # protocol stays 2 for bots that compare it exactly.
+                    data = b'{"protocol":2,"protocols":[1,2,3]}'
                     self.send_response(200)
                     self.send_header("Content-Type", "application/json")
                     self.send_header("Content-Length", str(len(data)))
@@ -418,8 +457,13 @@ def create_server(root, token, port, output_root=None):
                     if not 0 < length <= 16384:
                         raise ValueError()
                     request = json.loads(self.rfile.read(length))
-                    if (not valid_url(request.get("url")) or type(request.get("max_bytes")) is not int or
-                        not 100000 <= request["max_bytes"] <= LIMIT or type(request.get("deadline")) is not int or
+                    if not isinstance(request, dict):
+                        raise ValueError()
+                    op = request.get("op") if request.get("protocol") == 3 else None
+                    if ((op != "compress" and not valid_url(request.get("url"))) or
+                        (op != "download" and (type(request.get("max_bytes")) is not int or
+                                               not 100000 <= request["max_bytes"] <= LIMIT)) or
+                        type(request.get("deadline")) is not int or
                         not time.time()-5 < request["deadline"] <= time.time()+3600):
                         raise ValueError()
                     settings = protocol_settings(request)
