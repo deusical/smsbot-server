@@ -134,3 +134,29 @@ func TestNativeJSONMediaTypeSupportsUTF8Charset(t *testing.T) {
 		}
 	}
 }
+
+func TestConfigRevisionAndKindAPI(t *testing.T) {
+	s := apiSetup(t)
+	w := req(s, "GET", "/api/v1/command-kinds", "", "fixture-client", "")
+	var defs []bot.KindDefinition
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &defs) != nil || len(defs) != 3 {
+		t.Fatal("kind definitions unavailable")
+	}
+	w = req(s, "GET", "/api/v1/config", "", "fixture-client", "")
+	var c bot.Configuration
+	if json.Unmarshal(w.Body.Bytes(), &c) != nil || c.Revision == nil {
+		t.Fatal("missing revision")
+	}
+	raw, _ := json.Marshal(c)
+	if w = req(s, "PUT", "/api/v1/config", string(raw), "fixture-client", ""); w.Code != 200 {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	if w = req(s, "PUT", "/api/v1/config", string(raw), "fixture-client", ""); w.Code != 409 {
+		t.Fatal("stale save accepted", w.Code)
+	}
+	c.Revision = nil
+	raw, _ = json.Marshal(c)
+	if w = req(s, "PUT", "/api/v1/config", string(raw), "fixture-client", ""); w.Code != 200 {
+		t.Fatal("legacy client rejected", w.Code)
+	}
+}

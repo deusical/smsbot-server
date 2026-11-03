@@ -77,6 +77,7 @@ func TestRepresentationPreservesMemoryAndLegacyEdits(t *testing.T) {
 	if before != after {
 		t.Fatal("representation invalidated memory")
 	}
+	c, _ = e.Configuration()
 	c.Commands[0].Memory = false
 	if err = e.SetConfiguration(c); err != nil {
 		t.Fatal(err)

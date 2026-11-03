@@ -37,7 +37,8 @@ export function failure(e: unknown) {
     : "Could not reach the server.";
 }
 
-const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+const same = (a: unknown, b: unknown) =>
+  JSON.stringify(a) === JSON.stringify(b);
 
 /** Returns a reason the draft cannot be saved, or "" when it looks valid. */
 function validate(c: Configuration): string {
@@ -48,7 +49,7 @@ function validate(c: Configuration): string {
       return `${label}: names start with a lowercase letter and use a–z, 0–9, _ or - (24 max).`;
     if (names.has(command.name)) return `${label} is defined twice.`;
     names.add(command.name);
-    if (!command.instructions.trim())
+    if (!command.instructions.trim() && command.type !== "download")
       return `${label} needs ${command.type === "fixed" ? "a reply" : "instructions"}.`;
   }
   for (const [i, p] of c.profiles.entries())
@@ -63,7 +64,10 @@ function validate(c: Configuration): string {
     ["max_chars", "Reply length"],
   ] as const)
     if (!(s[key] >= 1)) return `${label} must be at least 1.`;
-  if (s.ai_photo_max_mb !== undefined && !(s.ai_photo_max_mb >= 1 && s.ai_photo_max_mb <= 25))
+  if (
+    s.ai_photo_max_mb !== undefined &&
+    !(s.ai_photo_max_mb >= 1 && s.ai_photo_max_mb <= 25)
+  )
     return "Photo size limit must be between 1 and 25 MB.";
   if (!(s.daily_budget >= 0)) return "Daily AI budget cannot be negative.";
   return "";
@@ -140,7 +144,8 @@ export function useWorkspace(
     );
   }, [inboxSaved]);
   const configDirty = !!config && !!saved && !same(config, saved);
-  const inboxDirty = !!inboxDraft && !!inboxSaved && !same(inboxDraft, inboxSaved);
+  const inboxDirty =
+    !!inboxDraft && !!inboxSaved && !same(inboxDraft, inboxSaved);
   const edit = useCallback((fn: (c: Configuration) => Configuration) => {
     setSaveError("");
     setConfig((c) => (c ? fn(c) : c));
@@ -182,7 +187,11 @@ export function useWorkspace(
         setConfig(value);
       }
       if (inboxDirty && inboxDraft) {
-        const s = await api<InboxSettings>("/inbox/settings", "PUT", inboxDraft);
+        const s = await api<InboxSettings>(
+          "/inbox/settings",
+          "PUT",
+          inboxDraft,
+        );
         lastInbox.current = s;
         setInboxDraft(s);
         onInboxSaved(s);

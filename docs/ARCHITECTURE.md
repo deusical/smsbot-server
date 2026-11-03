@@ -140,10 +140,18 @@ worker polling through `job_work`; it never submits messages. Dispatcher checks,
 persisted outbound intents and uncertain-send handling remain the send boundary.
 
 Command configuration retains the legacy flat fields alongside `kind`, raw
-`settings` and a reserved `revision`. Legacy recipes are accepted and normalized;
+`settings` and an optional `revision`. Legacy recipes are accepted and normalized;
 unknown settings are rejected. Both forms are saved for downgrade compatibility.
 During migration an unchanged settings object echoed by a legacy editor permits
 flat-field edits, including switching type. Changed settings are authoritative.
 The incoming message passed to planning supplies arguments, quoted message and
 attachment references and the sender's own attachment; AI resolution and memory
 epoch handling continue to use the existing conversation access checks.
+
+The owner API exposes definitions at `/api/v1/command-kinds` (also available at
+`/api/command-kinds`). The editor chooses controls from schema UI hints. Config
+GET returns a whole-configuration revision; PUT with an obsolete revision returns
+409 atomically. Revisionless legacy clients retain full-replacement last-writer-wins
+semantics. No settings merge is performed, and unknown settings fail validation.
+Recipe import intentionally starts a new configuration revision rather than using
+the exported revision. Command revisions identify the configuration that saved them.

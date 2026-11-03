@@ -207,6 +207,18 @@ paths:
           description: Accepted boolean and fixture message ID
         '404':
           description: Unavailable in live mode
+  /command-kinds:
+    get:
+      summary: Versioned command definitions and settings form schemas
+      responses:
+        '200':
+          description: Registered kinds with capabilities, defaults, bounds and UI hints
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CommandKind'
   /config:
     get:
       description: Encrypted server bot configuration
@@ -229,6 +241,8 @@ paths:
       description: Replace validated configuration; queued generation snapshots are
         unchanged
       responses:
+        '409':
+          description: configuration_revision_conflict; reload and explicitly reapply edits. No merge or partial write.
         '200':
           description: Replace validated configuration; queued generation snapshots
             are unchanged
@@ -242,8 +256,6 @@ paths:
           description: Authentication required
         '403':
           description: Access denied
-        '409':
-          description: State unavailable or expired
       requestBody:
         required: true
         content:
@@ -1601,7 +1613,7 @@ components:
               maximum: 60
         revision:
           type: integer
-          description: Reserved command revision for the registry migration.
+          description: Revision of the configuration that last saved this command. Echo Configuration.revision for concurrency protection.
         execution_minutes:
           type: integer
           minimum: 0
@@ -1650,10 +1662,28 @@ components:
       required:
       - id
       - name
+    CommandKind:
+      type: object
+      properties:
+        id: {type: string}
+        title: {type: string}
+        legacy_type: {type: string, enum: [fixed, ai, download]}
+        version: {type: integer}
+        threads: {type: boolean}
+        retry_class: {type: string, enum: [none, idempotent-poll, local-repeatable]}
+        resource_class: {type: string, enum: [media, provider, upload]}
+        schema:
+          type: object
+          description: Recursive form schema (type, properties, title, ui, default, minimum, maximum, enum, unit). UI hints select multiline, model, profile and optional generation controls.
     Configuration:
       type: object
       additionalProperties: false
       properties:
+        revision:
+          type: integer
+          minimum: 0
+          description: Optimistic revision of the entire configuration. Echo the current GET revision on PUT. Stale saves return 409 without changes. Legacy clients omitting revision retain full-replacement last-writer-wins behavior; no field merge is performed. Unknown settings are rejected rather than dropped.
+
         settings:
           $ref: '#/components/schemas/Settings'
         commands:

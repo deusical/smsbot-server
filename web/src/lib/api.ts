@@ -1,6 +1,16 @@
 export type CaptureGap = {
- conversation: string; since: string; until: string; reason: string;
- state: string; checked_at?: string; retry_at?: string; kind?: string; observed_at?: string; pages?: number; checked?: number; last_progress_at?: string;
+  conversation: string;
+  since: string;
+  until: string;
+  reason: string;
+  state: string;
+  checked_at?: string;
+  retry_at?: string;
+  kind?: string;
+  observed_at?: string;
+  pages?: number;
+  checked?: number;
+  last_progress_at?: string;
 };
 export type State = {
   api_version: number;
@@ -17,7 +27,7 @@ export type State = {
   capabilities: string[];
 };
 export type Conversation = {
- archived?: boolean;
+  archived?: boolean;
   id: string;
   participant_id: string;
   label: string;
@@ -56,22 +66,40 @@ export type Job = {
   requested_reasoning?: string;
 };
 export type Attachment = {
- preview_only?: boolean;
- archive_state?: string;
- archive_error?: string;
+  preview_only?: boolean;
+  archive_state?: string;
+  archive_error?: string;
   id: string;
   name: string;
   mime: string;
   size: number;
 };
-export type MessageCapabilities = {reply: boolean; react: boolean; edit: boolean; version: string; pending?: string; reason?: string; edit_reason: string};
-export type Quote = {id?: string; text: string; direction?: string; available: boolean};
+export type MessageCapabilities = {
+  reply: boolean;
+  react: boolean;
+  edit: boolean;
+  version: string;
+  pending?: string;
+  reason?: string;
+  edit_reason: string;
+};
+export type Quote = {
+  id?: string;
+  text: string;
+  direction?: string;
+  available: boolean;
+};
 export type Message = {
- pending_action?: string;
- protocol?: string;
- reactions?: {emoji: string; count: number; mine: boolean; unsupported?: boolean}[];
- quote?: Quote;
- revision?: number;
+  pending_action?: string;
+  protocol?: string;
+  reactions?: {
+    emoji: string;
+    count: number;
+    mine: boolean;
+    unsupported?: boolean;
+  }[];
+  quote?: Quote;
+  revision?: number;
   attachments?: Attachment[];
   id: string;
   direction: string;
@@ -93,7 +121,7 @@ export const defaultAttachmentLimits: AttachmentLimits = {
   max_total_mb: 20,
 };
 export type InboxSettings = {
- archive_retention_days?: number;
+  archive_retention_days?: number;
   attachment_limits?: AttachmentLimits;
   enabled: boolean;
   scope: "all" | "selected";
@@ -145,7 +173,31 @@ export type CompatibleProviderStatus = {
   base_url: string;
   configured: boolean;
 };
+export type KindSchema = {
+  type: string;
+  title?: string;
+  ui?: string;
+  default?: unknown;
+  minimum?: number;
+  maximum?: number;
+  enum?: string[];
+  unit?: string;
+  properties?: Record<string, KindSchema>;
+};
+export type CommandKind = {
+  id: string;
+  title: string;
+  legacy_type: Command["type"];
+  version: number;
+  threads: boolean;
+  retry_class: string;
+  resource_class: string;
+  schema: KindSchema;
+};
 export type Command = {
+  kind?: string;
+  settings?: Record<string, unknown>;
+  revision?: number;
   execution_minutes?: number;
   name: string;
   description: string;
@@ -183,11 +235,16 @@ export type Settings = {
   owner_commands?: boolean;
 };
 export type Configuration = {
+  revision?: number;
   settings: Settings;
   commands: Command[];
   profiles: Profile[];
 };
-export type History = { messages: Message[]; next_cursor?: string; change_cursor?: number };
+export type History = {
+  messages: Message[];
+  next_cursor?: string;
+  change_cursor?: number;
+};
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -204,7 +261,8 @@ export async function api<T>(
 ): Promise<T> {
   const response = await fetch("/api/v1" + path, {
     method,
-    signal: signal ?? (method === "GET" ? AbortSignal.timeout(25000) : undefined),
+    signal:
+      signal ?? (method === "GET" ? AbortSignal.timeout(25000) : undefined),
     credentials: "same-origin",
     headers: body === undefined ? {} : { "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),

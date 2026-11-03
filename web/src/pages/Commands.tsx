@@ -1,9 +1,15 @@
 import { useEffect, useRef, useState } from "react";
-import { api, ApiError, type Command, type Conversation } from "../lib/api";
-import { GenerationEditor } from "../components/Generation";
+import {
+  api,
+  ApiError,
+  type Command,
+  type Conversation,
+  type CommandKind,
+} from "../lib/api";
+import { SchemaSettings } from "../components/SchemaSettings";
 import { Icon } from "../components/Icon";
-import { Field, ModelPicker, modelName, Segmented, Switch } from "../components/ui";
-import { defaultGeneration, failure, type Workspace } from "../lib/workspace";
+import { Field, ModelPicker, Segmented, Switch } from "../components/ui";
+import { failure, type Workspace } from "../lib/workspace";
 
 const builtins = [
   { name: "ping", detail: "Check the bot is listening" },
@@ -12,11 +18,19 @@ const builtins = [
   { name: "new", detail: "Start a fresh memory" },
   { name: "more", detail: "Continue the last reply" },
 ];
-const templates: { label: string; detail: string; command: Partial<Command> }[] = [
+const templates: {
+  label: string;
+  detail: string;
+  command: Partial<Command>;
+}[] = [
   {
     label: "Download video",
     detail: "Save on the server and send a video under 20 MB",
-    command: { name: "download", description: "Download a Douyin or Xiaohongshu video", type: "download" },
+    command: {
+      name: "download",
+      description: "Download a Douyin or Xiaohongshu video",
+      type: "download",
+    },
   },
   {
     label: "Blank",
@@ -74,6 +88,27 @@ export function CommandsPage({
     [search, setSearch] = useState(""),
     [menu, setMenu] = useState(false),
     [mobileDetail, setMobileDetail] = useState(false);
+  const [kinds, setKinds] = useState<CommandKind[]>([]);
+  const [kindsError, setKindsError] = useState("");
+  useEffect(() => {
+    let active = true;
+    api<CommandKind[]>("/command-kinds")
+      .then((v) => {
+        if (active) setKinds(v);
+      })
+      .catch((e) => {
+        if (active) setKindsError(failure(e));
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+  function definition(c: Command) {
+    return (
+      kinds.find((k) => k.id === c.kind) ||
+      kinds.find((k) => k.legacy_type === c.type)
+    );
+  }
   const menuRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!menu) return;
@@ -226,11 +261,11 @@ export function CommandsPage({
                   >
                     <code className="bang">!{c.name || "untitled"}</code>
                     <small>
-                      {c.description || (c.type === "ai" ? "AI command" : c.type === "download" ? "Download video" : "Fixed reply")}
+                      {c.description || definition(c)?.title || "Command"}
                     </small>
                   </button>
                   <span className={"type-tag " + c.type}>
-                    {c.type === "ai" ? "AI" : c.type === "download" ? "Video" : "Text"}
+                    {definition(c)?.title || "Command"}
                   </span>
                   <Switch
                     label={`Enable !${c.name || "untitled"}`}
@@ -270,11 +305,15 @@ export function CommandsPage({
               <CommandEditor
                 key={index}
                 index={index}
+                kinds={kinds}
+                kindsError={kindsError}
                 command={command}
                 workspace={workspace}
                 conversations={conversations}
                 busy={busy}
-                savedCommand={saved?.commands.find((c) => c.name === command.name)}
+                savedCommand={saved?.commands.find(
+                  (c) => c.name === command.name,
+                )}
                 onChange={(values) => change(index, values)}
                 onBack={() => setMobileDetail(false)}
                 onDuplicate={() =>
@@ -297,13 +336,15 @@ export function CommandsPage({
                 <Icon name="commands" size={30} />
                 <strong>Create your first command</strong>
                 <p>
-                  Someone texts <code className="bang">!ask</code> followed by
-                  a question, and the bot replies. Start with a template.
+                  Someone texts <code className="bang">!ask</code> followed by a
+                  question, and the bot replies. Start with a template.
                 </p>
                 <button
                   type="button"
                   className="primary"
-                  onClick={() => addCommand(structuredClone(templates[2].command))}
+                  onClick={() =>
+                    addCommand(structuredClone(templates[2].command))
+                  }
                 >
                   <Icon name="plus" size={16} />
                   Add AI assistant
@@ -318,6 +359,8 @@ export function CommandsPage({
 }
 
 function CommandEditor({
+  kinds,
+  kindsError,
   index,
   command,
   savedCommand,
@@ -329,6 +372,8 @@ function CommandEditor({
   onDelete,
   onBack,
 }: {
+  kinds: CommandKind[];
+  kindsError: string;
   index: number;
   command: Command;
   savedCommand?: Command;
@@ -343,14 +388,9 @@ function CommandEditor({
   const { config, models } = workspace;
   const settings = config!.settings;
   const enrolled = conversations.filter((c) => c.enrolled);
-  const defaultModel = models.find((m) => m.id === settings.default_model);
-  const effectiveModel = models.find(
-    (m) =>
-      m.id ===
-      (command.model ||
-        config!.profiles.find((p) => p.id === command.profile_id)?.model ||
-        settings.default_model),
-  );
+  const definition =
+    kinds.find((k) => k.id === command.kind) ||
+    kinds.find((k) => k.legacy_type === command.type);
   const unsaved = JSON.stringify(savedCommand) !== JSON.stringify(command);
   return (
     <div className="editor" aria-label={`Edit command ${index + 1}`}>
@@ -372,7 +412,9 @@ function CommandEditor({
             placeholder="name"
             value={command.name}
             onChange={(e) =>
-              onChange({ name: e.target.value.toLowerCase().replace(/\s/g, "") })
+              onChange({
+                name: e.target.value.toLowerCase().replace(/\s/g, ""),
+              })
             }
           />
         </label>
@@ -415,39 +457,28 @@ function CommandEditor({
         <span className="label">Reply with</span>
         <Segmented
           label="Command type"
-          value={command.type}
-          onChange={(type) => onChange({ type })}
-          options={[
-            { value: "fixed", label: "Fixed text" },
-            { value: "ai", label: "AI" },
-            { value: "download", label: "Download video" },
-          ]}
+          value={definition?.id || ""}
+          options={kinds.map((k) => ({ value: k.id, label: k.title }))}
+          onChange={(id) => {
+            const k = kinds.find((k) => k.id === id);
+            if (k)
+              onChange({
+                kind: k.id,
+                type: k.legacy_type,
+                settings: undefined,
+              });
+          }}
         />
       </div>
-      {command.type === "download" && <p className="muted">Paste a Douyin or Xiaohongshu share message after the command. The original stays on the server; a video under 20 MB is sent here.</p>}
-      {command.type === "download" && <Field label="Execution deadline (minutes)" hint="Accepted jobs have this long to download, verify and send. Defaults to 15 minutes; maximum 60.">
-        <input type="number" min={1} max={60} value={command.execution_minutes || 15}
-          onChange={(event) => onChange({ execution_minutes: Number(event.target.value) })} />
-      </Field>}
-      {command.type !== "download" && <Field
-        label={command.type === "fixed" ? "Reply" : "Instructions"}
-        hint={
-          command.type === "fixed" ? (
-            <>
-              <code>{"{input}"}</code> is replaced with whatever follows the
-              command.
-            </>
-          ) : (
-            "Tell the model how to answer. The text after the command is the request."
-          )
-        }
-      >
-        <textarea
-          rows={command.type === "fixed" ? 3 : 5}
-          value={command.instructions}
-          onChange={(e) => onChange({ instructions: e.target.value })}
+      {kindsError && <p role="alert">{kindsError}</p>}
+      {definition && (
+        <SchemaSettings
+          definition={definition}
+          command={command}
+          workspace={workspace}
+          onChange={onChange}
         />
-      </Field>}
+      )}
       <div className="editor-section">
         <h3>Behavior</h3>
         <Switch
@@ -456,59 +487,7 @@ function CommandEditor({
           checked={command.approval}
           onChange={(approval) => onChange({ approval })}
         />
-        {command.type === "ai" && (
-          <Switch
-            label="Remember the conversation"
-            hint={command.name === "ask" ? `Reply to an AI answer to continue its thread (up to ${settings.memory_hours}h inactive). A new !ask starts fresh.` : `Sends recent messages with this command (last ${settings.memory_hours}h).`}
-            checked={command.memory}
-            onChange={(memory) => onChange({ memory })}
-          />
-        )}
       </div>
-      {command.type === "ai" && (
-        <div className="editor-section">
-          <h3>Model</h3>
-          <div className="form-grid">
-            <ModelPicker
-              label="Model"
-              value={command.model}
-              models={models}
-              favorites={settings.favorites}
-              defaultLabel={`Default${defaultModel ? ` (${modelName(defaultModel)})` : ""}`}
-              onChange={(model) => onChange({ model })}
-            />
-            <Field label="Profile">
-              <select
-                value={command.profile_id}
-                onChange={(e) => onChange({ profile_id: e.target.value })}
-              >
-                <option value="">None</option>
-                {config!.profiles.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name || "Untitled profile"}
-                  </option>
-                ))}
-              </select>
-            </Field>
-          </div>
-          <Switch
-            label="Custom generation settings"
-            hint="Otherwise uses the model’s settings from Settings → AI models."
-            checked={!!command.generation}
-            onChange={(on) =>
-              onChange({ generation: on ? { ...defaultGeneration } : undefined })
-            }
-          />
-          {command.generation && (
-            <GenerationEditor
-              label="Command generation"
-              value={command.generation}
-              model={effectiveModel}
-              onChange={(generation) => onChange({ generation })}
-            />
-          )}
-        </div>
-      )}
       <div className="editor-section">
         <h3>Who can use it</h3>
         <p className="muted">
@@ -528,7 +507,9 @@ function CommandEditor({
                 onClick={() =>
                   onChange({
                     allowed_conversations: on
-                      ? command.allowed_conversations.filter((id) => id !== c.id)
+                      ? command.allowed_conversations.filter(
+                          (id) => id !== c.id,
+                        )
                       : [...command.allowed_conversations, c.id],
                   })
                 }
@@ -575,7 +556,8 @@ function TryIt({
           input,
         })
           .then((r) => {
-            if (!r.simulated) throw new ApiError(502, "simulation_not_confirmed");
+            if (!r.simulated)
+              throw new ApiError(502, "simulation_not_confirmed");
             setResult(r.text);
           })
           .catch((e) => setError(failure(e)))
@@ -647,7 +629,12 @@ function Profiles({ workspace }: { workspace: Workspace }) {
               ...c,
               profiles: [
                 ...c.profiles,
-                { id: crypto.randomUUID(), name: "", model: "", instructions: "" },
+                {
+                  id: crypto.randomUUID(),
+                  name: "",
+                  model: "",
+                  instructions: "",
+                },
               ],
             }))
           }
@@ -687,7 +674,13 @@ function Profiles({ workspace }: { workspace: Workspace }) {
                     profiles: c.profiles.filter((x) => x.id !== p.id),
                     commands: c.commands.map((command) =>
                       command.profile_id === p.id
-                        ? { ...command, profile_id: "" }
+                        ? {
+                            ...command,
+                            profile_id: "",
+                            settings: command.settings
+                              ? { ...command.settings, profile_id: "" }
+                              : undefined,
+                          }
                         : command,
                     ),
                   }))
