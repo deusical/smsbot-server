@@ -68,29 +68,32 @@ use commands.
 ![Commands](images/commands.png)
 
 Commands are messages starting with `!`, sent by someone with bot replies on. The
-built-ins are `!ping`, `!help`, `!status`, `!new` and `!more`. You can add your own:
+built-ins are `!ping`, `!help`, `!status`, `!new` and `!more`. You can add your own.
 
-- **Fixed** commands reply with set text, where `{input}` is replaced by whatever
-  follows the command.
-- **AI** commands send the input to a model you choose. They can require your approval
-  before replying, and can be limited to certain conversations.
-- **Download video** commands extract one Douyin or Xiaohongshu link from share
-  text, keep an encrypted original on the server and send a video strictly below
-  20 MB. Add the **Download video** template to create `!download`. The server-local
-  worker must be configured first; see [Download command setup](DOWNLOAD_COMMAND.md).
+Every command is a list of **steps**, shown as a flow at the top of the editor
+(for example Command → Find video link → Download video → Compress video →
+Reply). Each step runs one module:
 
-- **Custom steps** commands are built from modules, one step after another. Each
-  step's inputs connect to the command message or to an earlier step's output, and
-  only outputs of a fitting kind are offered. For example: **Find video link** →
-  **Download video** → **Compress video** → **Text** ("Here you go: {input}") →
-  **Reply** with that text and the video. The last step is always **Reply**, the
-  only one that sends, after the same checks as every reply. A command can use
-  several AI steps, such as summarize and then translate; each request counts
-  toward the AI spending limit. With a conversation step, one AI step remembers
-  recent exchanges or continues reply threads. Choosing **Custom steps** on an existing command starts from the steps it
-  already runs. **Try it** lists what each step produced.
+| Group | Modules |
+|---|---|
+| Text | **Text** (fixed text, `{input}` replaced by what's connected), **Find video link**, **Question** (the command text, its file and the messages it replies to) |
+| AI | **AI answer** (model, profile, instructions, generation settings) |
+| Memory | **No memory**, **Recent memory**, **Reply threads** |
+| Video | **Download video** (the original stays encrypted on the server), **Compress video** (a copy under the size limit) |
+| Send | **Reply**, always last: sends text and a file after the same checks as every reply |
 
-**New** offers templates (Quick reply, AI assistant, Translator, Custom steps); new commands start
+Each input connects to the command or to an earlier step's output; only outputs
+of a fitting kind are offered, and problems show on the step before you save. A
+command can use several AI steps, such as summarize and then translate; each
+request counts toward the AI spending limit. With a memory step, one AI step
+remembers recent exchanges or continues reply threads, and the conversation
+remembers what the reply actually sent. Download commands need the server-local
+worker; see [Download command setup](DOWNLOAD_COMMAND.md). Commands made before
+steps open as the steps they already run and are stored as steps the first time
+you change one.
+
+**New** offers starting points (AI assistant, Quick reply, Translator, Download
+video, Blank), all ordinary steps; new commands start
 disabled. **Try it** previews a command offline. Bot replies are limited per hour and per
 day, and AI spending per day; your own messages never count toward these limits. Quiet
 hours drop requests instead of delaying them. With **Commands from your phone** on, your
@@ -143,8 +146,10 @@ never retried. On SMS, send a new `!ask` with everything in it.
 
 ## Activity
 
-Every request, filterable by state and searchable. Expand a row to see the model, usage
-and cost, and approve or cancel from here.
+Every request, filterable by state and searchable. A request in progress shows the
+step it's on (for example "Writing reply · Compress video / compressing"). Expand a
+row to see each step, done or not, with each AI step's model, tokens and cost, the
+request's totals, and approve or cancel from here.
 
 ## Archive
 

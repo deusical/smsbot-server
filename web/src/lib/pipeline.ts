@@ -178,3 +178,85 @@ export function starterPipeline(): Pipeline {
     ],
   };
 }
+
+/** A short "Find video link → Download video → …" summary of the steps. */
+export function flowSummary(
+  pipeline: Pipeline | undefined,
+  modules: CommandModule[],
+): string {
+  if (!pipeline) return "";
+  return pipeline.steps
+    .filter((s) => s.module !== "context.none")
+    .map((s) => modules.find((m) => m.id === s.module)?.title ?? s.module)
+    .join(" → ");
+}
+
+const question = (require: boolean): PipelineStep => ({
+  id: "question",
+  module: "message.question",
+  inputs: { text: "trigger.args", message: "trigger.message" },
+  settings: { require_question: require },
+});
+const answer = (
+  instructions: string,
+  context: string | null,
+): PipelineStep => ({
+  id: "answer",
+  module: "ai.chat",
+  inputs: {
+    prompt: "question.prompt",
+    file: "question.file",
+    ...(context ? { context: context + ".context" } : {}),
+  },
+  settings: { instructions },
+});
+
+/** Starting points for new commands; each is ordinary steps. */
+export const starters = {
+  quickReply: (text: string): Pipeline => ({
+    steps: [
+      {
+        id: "text",
+        module: "text.template",
+        inputs: { input: "trigger.args" },
+        settings: { template: text },
+      },
+      { id: "reply", module: "reply", inputs: { text: "text.text" } },
+    ],
+  }),
+  assistant: (instructions: string): Pipeline => ({
+    steps: [
+      question(true),
+      { id: "conversation", module: "context.thread" },
+      answer(instructions, "conversation"),
+      {
+        id: "reply",
+        module: "reply",
+        inputs: { text: "answer.text", continues: "answer.context" },
+      },
+    ],
+  }),
+  oneShot: (instructions: string): Pipeline => ({
+    steps: [
+      question(false),
+      answer(instructions, null),
+      { id: "reply", module: "reply", inputs: { text: "answer.text" } },
+    ],
+  }),
+  download: (): Pipeline => ({
+    steps: [
+      {
+        id: "link",
+        module: "text.extract_url",
+        inputs: { text: "trigger.args" },
+      },
+      { id: "source", module: "video.download", inputs: { url: "link.url" } },
+      {
+        id: "video",
+        module: "video.compress",
+        inputs: { source: "source.source" },
+      },
+      { id: "reply", module: "reply", inputs: { file: "video.video" } },
+    ],
+  }),
+};

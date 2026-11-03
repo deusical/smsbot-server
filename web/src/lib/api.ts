@@ -64,6 +64,19 @@ export type Job = {
   reasoning_tokens?: number;
   cost?: number;
   requested_reasoning?: string;
+  /** The command's steps and their progress, with each AI step's usage. */
+  steps?: JobStep[];
+};
+export type JobStep = {
+  id: string;
+  module: string;
+  done: boolean;
+  used?: boolean;
+  model?: string;
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  reasoning_tokens?: number;
+  cost?: number;
 };
 export type Attachment = {
   preview_only?: boolean;

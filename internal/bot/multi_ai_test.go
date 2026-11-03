@@ -105,8 +105,26 @@ func TestSeveralAIStepsRunInOrderAndEachIsAccounted(t *testing.T) {
 	}
 	jobs, _ := e.Store.Jobs()
 	for _, j := range jobs {
-		if j.ID == job && (j.Cost == nil || *j.Cost != 0.02 || j.Model != "fixture/model") {
+		if j.ID != job {
+			continue
+		}
+		if j.Cost == nil || *j.Cost != 0.02 || j.Model != "fixture/model" {
 			t.Fatalf("job total %+v", j)
+		}
+		// Activity lists every step, finished, with each AI step's own usage.
+		got := []string{}
+		for _, st := range j.Steps {
+			if !st.Done {
+				t.Fatalf("step %s not done", st.ID)
+			}
+			cost := ""
+			if st.Used && st.Cost != nil {
+				cost = "$"
+			}
+			got = append(got, st.ID+":"+st.Module+cost)
+		}
+		if strings.Join(got, ",") != "summary:ai.chat$,ask:text.template,translation:ai.chat$,reply:reply" {
+			t.Fatal("steps", got)
 		}
 	}
 }

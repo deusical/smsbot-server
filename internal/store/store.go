@@ -34,6 +34,9 @@ type Job struct {
 	ReasoningTokens    int      `json:"reasoning_tokens,omitempty"`
 	Cost               *float64 `json:"cost,omitempty"`
 	RequestedReasoning string   `json:"requested_reasoning,omitempty"`
+	// Steps are the job's pipeline steps and their progress, for commands
+	// accepted since steps were recorded.
+	Steps []JobStep `json:"steps,omitempty"`
 }
 type Plan struct {
 	// Pipeline is the snapshotted command recipe and its step progress.
@@ -144,11 +147,14 @@ func (s *Store) migrateSchema() error {
 	if e := s.DB.QueryRow("PRAGMA user_version").Scan(&version); e != nil {
 		return e
 	}
-	if version > 9 {
+	if version > 10 {
 		return errors.New("database is newer than this service")
 	}
-	if version == 9 {
+	if version == 10 {
 		return nil
+	}
+	if version == 9 {
+		return s.migrateJobSteps()
 	}
 	if version == 8 {
 		return s.migrateUsageSteps()
@@ -376,6 +382,11 @@ func (s *Store) Enqueue(id, conv, command string, p Plan) (bool, error) {
 			return false, err
 		}
 	}
+	if n == 1 {
+		if err := recordSteps(tx, id, p); err != nil {
+			return false, err
+		}
+	}
 	if n == 1 && p.Mutation != nil {
 		b, err := json.Marshal(p.Mutation)
 		if err != nil {
@@ -464,7 +475,11 @@ func (s *Store) Jobs() ([]Job, error) {
 		}
 		list = append(list, j)
 	}
-	return list, rows.Err()
+	if e = rows.Err(); e != nil {
+		return nil, e
+	}
+	rows.Close()
+	return list, s.attachSteps(list)
 }
 func (s *Store) AddCredential(token, label, kind string, expires int64) error {
 	_, e := s.DB.Exec("INSERT INTO credentials VALUES(?,?,?,?)", Hash(token), label, kind, expires)

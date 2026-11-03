@@ -62,7 +62,7 @@ func TestUsageStepsMigrationKeepsExistingUsage(t *testing.T) {
 	var version, n int
 	s.DB.QueryRow("PRAGMA user_version").Scan(&version)
 	s.DB.QueryRow("SELECT count(*) FROM usage_steps WHERE job='job-old' AND step='' AND cost=0.1").Scan(&n)
-	if version != 9 || n != 1 {
+	if version != 10 || n != 1 {
 		t.Fatal("existing usage not carried into steps", version, n)
 	}
 	// A later step adds to it instead of replacing it.

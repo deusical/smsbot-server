@@ -73,8 +73,19 @@ func (s *Store) SavePlan(id string, p Plan) error {
 	if err != nil {
 		return err
 	}
-	_, err = s.DB.Exec("UPDATE jobs SET plan=? WHERE id=?", enc, id)
-	return err
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.Exec("UPDATE jobs SET plan=? WHERE id=?", enc, id); err != nil {
+		return err
+	}
+	// Every step's progress passes through here, so Activity stays current.
+	if err = syncSteps(tx, id, p); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 func (s *Store) Transition(id, from, to string) (bool, error) {
 	r, err := s.DB.Exec("UPDATE jobs SET state=? WHERE id=? AND state=?", to, id, from)

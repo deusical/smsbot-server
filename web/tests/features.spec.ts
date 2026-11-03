@@ -98,26 +98,38 @@ test("natural command forms save AI controls and playground remains offline", as
     });
   });
   await page.getByRole("button", { name: "Commands", exact: true }).click();
-  await page
-    .getByRole("group", { name: "Command type" })
-    .getByRole("button", { name: "AI", exact: true })
-    .click();
+  // An existing command opens as its steps.
+  await expect(page.getByRole("list", { name: "Step flow" })).toContainText(
+    "Text",
+  );
+  await expect(page.locator(".command-item").first()).toContainText(
+    "Text → Reply",
+  );
+  // A new AI assistant is steps too; its AI settings live on the AI step.
+  await page.getByRole("button", { name: "New", exact: true }).click();
+  await page.getByRole("menuitem", { name: /AI assistant/ }).click();
+  await page.getByLabel("Module for step 2").selectOption("context.rolling");
   await page
     .getByLabel("Instructions", { exact: true })
     .fill("Answer the synthetic input.");
-  await page.getByLabel("Remember the conversation").check();
-  await page.getByLabel("Ask me before replying").check();
   await page.getByLabel("Custom generation settings").check();
   await page.getByLabel("Reasoning", { exact: true }).selectOption("high");
   await page.getByLabel("Temperature", { exact: true }).fill("0.3");
   await page.getByRole("button", { name: "Save changes" }).click();
   await expect(page.getByRole("status")).toContainText("Changes saved");
-  expect(configuration().commands[0]).toMatchObject({
-    type: "ai",
-    memory: true,
-    approval: true,
+  const ask = configuration().commands[1];
+  expect(ask).toMatchObject({ name: "ask", kind: "pipeline", approval: true });
+  expect(ask.pipeline!.steps.map((s) => s.module)).toEqual([
+    "message.question",
+    "context.rolling",
+    "ai.chat",
+    "reply",
+  ]);
+  expect(ask.pipeline!.steps[2].settings).toMatchObject({
+    instructions: "Answer the synthetic input.",
     generation: { reasoning: "high", temperature: 0.3 },
   });
+  await page.getByRole("button", { name: /!hello/ }).click();
   await page.getByLabel("Preview input").fill("Offline sample");
   await page.getByRole("button", { name: "Preview", exact: true }).click();
   await expect(

@@ -34,7 +34,7 @@ test("a command built from steps saves, previews and runs offline", async ({
   try {
     await page.getByRole("button", { name: "Commands", exact: true }).click();
     await page.getByRole("button", { name: "New", exact: true }).click();
-    await page.getByRole("menuitem", { name: /Custom steps/ }).click();
+    await page.getByRole("menuitem", { name: /Blank/ }).click();
     await page.getByLabel("Command name").fill("grab");
 
     // Replace the starter text with the video steps.
@@ -145,6 +145,14 @@ test("a command built from steps saves, previews and runs offline", async ({
         { timeout: 30000 },
       )
       .toBe("submitted");
+    // Activity lists the request's steps, all finished.
+    await page.getByRole("button", { name: "Activity", exact: true }).click();
+    const row = page.locator(".feed-row").filter({ hasText: "!grab" }).first();
+    await row.locator(".feed-main").click();
+    const steps = row.getByRole("list", { name: "Steps" });
+    await expect(steps).toContainText("Compress video");
+    await expect(steps.locator("li.done")).toHaveCount(5);
+    await page.screenshot({ path: "test-results/activity-steps.png" });
   } finally {
     await page.request.post("/api/v1/pause", {
       headers,
@@ -196,16 +204,20 @@ test("converting an AI command to steps keeps its reply threads", async ({
   try {
     await page.getByRole("button", { name: "Commands", exact: true }).click();
     await page.getByRole("button", { name: /!tutor/ }).click();
-    await page
-      .getByRole("group", { name: "Command type" })
-      .getByRole("button", { name: "Custom steps", exact: true })
-      .click();
+    // It opens as the steps it already runs; editing a step stores it as steps.
+    await expect(page.getByRole("list", { name: "Step flow" })).toContainText(
+      "Recent memory",
+    );
     await expect(page.getByLabel("Module for step 2")).toHaveValue(
       "context.rolling",
     );
     await expect(page.getByLabel("Instructions", { exact: true })).toHaveValue(
       "Teach briefly.",
     );
+    await page
+      .getByLabel("Instructions", { exact: true })
+      .fill("Teach briefly and kindly.");
+
     await expect(
       page.getByLabel("Continues conversation for step 4"),
     ).toHaveValue("answer.context");

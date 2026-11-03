@@ -4,14 +4,13 @@ import {
   ApiError,
   type Command,
   type Conversation,
-  type CommandKind,
   type CommandModule,
   type Pipeline,
   type PreviewStep,
 } from "../lib/api";
-import { SchemaSettings, settingsForKind } from "../components/SchemaSettings";
 import { PipelineEditor } from "../components/PipelineEditor";
-import { starterPipeline } from "../lib/pipeline";
+import { flowSummary, starterPipeline, starters } from "../lib/pipeline";
+import { useModules } from "../lib/modules";
 import { Icon } from "../components/Icon";
 import { Field, ModelPicker, Segmented, Switch } from "../components/ui";
 import { failure, type Workspace } from "../lib/workspace";
@@ -23,34 +22,22 @@ const builtins = [
   { name: "new", detail: "Start a fresh memory" },
   { name: "more", detail: "Continue the last reply" },
 ];
+// Starting points for new commands. Each is ordinary steps you can change.
+const assistantInstructions =
+  "Answer the request clearly and concisely. Preserve exact facts and constraints.";
 const templates: {
   label: string;
   detail: string;
   command: Partial<Command>;
 }[] = [
   {
-    label: "Download video",
-    detail: "Save on the server and send a video under 20 MB",
+    label: "AI assistant",
+    detail: "Answers questions; replying to an answer continues it",
     command: {
-      name: "download",
-      description: "Download a Douyin or Xiaohongshu video",
-      type: "download",
-    },
-  },
-  {
-    label: "Blank",
-    detail: "Start from scratch",
-    command: {},
-  },
-  {
-    label: "Custom steps",
-    detail: "Connect modules: links, videos, AI, text",
-    command: {
-      name: "custom",
-      description: "Built from steps",
-      kind: "pipeline",
-      type: "fixed",
-      pipeline: starterPipeline(),
+      name: "ask",
+      description: "A helpful assistant",
+      approval: true,
+      pipeline: starters.assistant(assistantInstructions),
     },
   },
   {
@@ -59,20 +46,7 @@ const templates: {
     command: {
       name: "hello",
       description: "A simple greeting",
-      instructions: "Hello! {input}",
-      type: "fixed",
-    },
-  },
-  {
-    label: "AI assistant",
-    detail: "Answers questions, asks you first",
-    command: {
-      name: "ask",
-      description: "A helpful assistant",
-      instructions:
-        "Answer the request clearly and concisely. Preserve exact facts and constraints.",
-      type: "ai",
-      approval: true,
+      pipeline: starters.quickReply("Hello! {input}"),
     },
   },
   {
@@ -81,13 +55,43 @@ const templates: {
     command: {
       name: "translate",
       description: "Translate text",
-      instructions:
-        "Translate the input into the language requested. Return only the translation.",
-      type: "ai",
       approval: true,
+      pipeline: starters.oneShot(
+        "Translate the input into the language requested. Return only the translation.",
+      ),
     },
   },
+  {
+    label: "Download video",
+    detail: "Save on the server and send a video under 20 MB",
+    command: {
+      name: "download",
+      description: "Download a Douyin or Xiaohongshu video",
+      pipeline: starters.download(),
+    },
+  },
+  {
+    label: "Blank",
+    detail: "Start from a text step and add what you need",
+    command: { pipeline: starterPipeline() },
+  },
 ];
+
+/** The fields a template command's steps are derived from. */
+function stepsKey(c: Command): string {
+  return JSON.stringify([
+    c.name,
+    c.kind,
+    c.type,
+    c.instructions,
+    c.model,
+    c.profile_id,
+    c.memory,
+    c.generation,
+    c.settings,
+    c.execution_minutes,
+  ]);
+}
 
 export function CommandsPage({
   workspace,
@@ -104,34 +108,26 @@ export function CommandsPage({
     [search, setSearch] = useState(""),
     [menu, setMenu] = useState(false),
     [mobileDetail, setMobileDetail] = useState(false);
-  const [kinds, setKinds] = useState<CommandKind[]>([]);
-  const [kindsError, setKindsError] = useState("");
-  const [modules, setModules] = useState<CommandModule[]>([]);
+  const { modules, error: modulesError } = useModules();
+  const kindsError = modulesError ? failure(modulesError) : "";
+  // Commands saved before they were steps run the same steps; the server says
+  // which. They are stored as steps the first time they're edited.
+  const [derived, setDerived] = useState<Record<string, Pipeline>>({});
   useEffect(() => {
     let active = true;
-    api<CommandKind[]>("/command-kinds")
-      .then((v) => {
-        if (active) setKinds(v);
-      })
-      .catch((e) => {
-        if (active) setKindsError(failure(e));
-      });
-    api<CommandModule[]>("/command-modules")
-      .then((v) => {
-        if (active) setModules(v);
-      })
-      .catch((e) => {
-        if (active) setKindsError(failure(e));
-      });
+    for (const c of config?.commands ?? []) {
+      if (c.kind === "pipeline" || derived[stepsKey(c)]) continue;
+      const key = stepsKey(c);
+      api<Pipeline>("/command-pipeline", "POST", c)
+        .then((p) => active && setDerived((d) => ({ ...d, [key]: p })))
+        .catch(() => undefined);
+    }
     return () => {
       active = false;
     };
-  }, []);
-  function definition(c: Command) {
-    return (
-      kinds.find((k) => k.id === c.kind) ||
-      kinds.find((k) => k.legacy_type === c.type)
-    );
+  }, [config?.commands, derived]);
+  function stepsOf(c: Command): Pipeline | undefined {
+    return c.kind === "pipeline" ? c.pipeline : derived[stepsKey(c)];
   }
   const menuRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -179,11 +175,13 @@ export function CommandsPage({
           description: "",
           instructions: "",
           type: "fixed",
+          kind: "pipeline",
           model: "",
           profile_id: "",
           memory: false,
           approval: false,
           allowed_conversations: [],
+          pipeline: starterPipeline(),
           ...template,
           ...(template.name ? { name: uniqueName(template.name) } : {}),
           enabled: false,
@@ -284,13 +282,11 @@ export function CommandsPage({
                     }}
                   >
                     <code className="bang">!{c.name || "untitled"}</code>
-                    <small>
-                      {c.description || definition(c)?.title || "Command"}
+                    <small>{c.description || "Command"}</small>
+                    <small className="flow-summary">
+                      {flowSummary(stepsOf(c), modules)}
                     </small>
                   </button>
-                  <span className={"type-tag " + c.type}>
-                    {definition(c)?.title || "Command"}
-                  </span>
                   <Switch
                     label={`Enable !${c.name || "untitled"}`}
                     hideLabel
@@ -329,9 +325,9 @@ export function CommandsPage({
               <CommandEditor
                 key={index}
                 index={index}
-                kinds={kinds}
                 modules={modules}
                 kindsError={kindsError}
+                steps={stepsOf(command)}
                 command={command}
                 workspace={workspace}
                 conversations={conversations}
@@ -368,7 +364,7 @@ export function CommandsPage({
                   type="button"
                   className="primary"
                   onClick={() =>
-                    addCommand(structuredClone(templates[2].command))
+                    addCommand(structuredClone(templates[0].command))
                   }
                 >
                   <Icon name="plus" size={16} />
@@ -384,9 +380,9 @@ export function CommandsPage({
 }
 
 function CommandEditor({
-  kinds,
   modules,
   kindsError,
+  steps,
   index,
   command,
   savedCommand,
@@ -398,9 +394,9 @@ function CommandEditor({
   onDelete,
   onBack,
 }: {
-  kinds: CommandKind[];
   modules: CommandModule[];
   kindsError: string;
+  steps?: Pipeline;
   index: number;
   command: Command;
   savedCommand?: Command;
@@ -415,30 +411,20 @@ function CommandEditor({
   const { config, models } = workspace;
   const settings = config!.settings;
   const enrolled = conversations.filter((c) => c.enrolled);
-  const definition =
-    kinds.find((k) => k.id === command.kind) ||
-    kinds.find((k) => k.legacy_type === command.type);
   const unsaved = JSON.stringify(savedCommand) !== JSON.stringify(command);
-  const [converting, setConverting] = useState("");
-  const custom = definition?.id === "pipeline";
-  // Switching to custom steps starts from the steps the command already runs.
-  function toSteps() {
-    setConverting("");
-    api<Pipeline>("/command-pipeline", "POST", command)
-      .then((pipeline) =>
-        onChange({
-          kind: "pipeline",
-          type: "fixed",
-          settings: undefined,
-          instructions: "",
-          model: "",
-          profile_id: "",
-          generation: undefined,
-          execution_minutes: pipeline.execution_minutes,
-          pipeline,
-        }),
-      )
-      .catch((e) => setConverting(failure(e)));
+  // Editing a command saved before steps stores it as steps from then on.
+  function setSteps(pipeline: Pipeline) {
+    onChange({
+      kind: "pipeline",
+      type: "fixed",
+      settings: undefined,
+      instructions: "",
+      model: "",
+      profile_id: "",
+      generation: undefined,
+      execution_minutes: pipeline.execution_minutes,
+      pipeline,
+    });
   }
   return (
     <div className="editor" aria-label={`Edit command ${index + 1}`}>
@@ -501,50 +487,25 @@ function CommandEditor({
           onChange={(e) => onChange({ description: e.target.value })}
         />
       </Field>
-      <div className="field">
-        <span className="label">Reply with</span>
-        <Segmented
-          label="Command type"
-          value={definition?.id || ""}
-          options={kinds.map((k) => ({ value: k.id, label: k.title }))}
-          onChange={(id) => {
-            const k = kinds.find((k) => k.id === id);
-            if (!k || k.id === definition?.id) return;
-            setConverting("");
-            if (k.id === "pipeline") toSteps();
-            else
-              onChange({ ...settingsForKind(command, k), pipeline: undefined });
-          }}
-        />
-      </div>
-      {kindsError && <p role="alert">{kindsError}</p>}
-      {converting && (
-        <p role="alert" className="inline-alert">
-          {converting}
+      <div className="editor-section">
+        <h3>Steps</h3>
+        <p className="muted">
+          Runs each step in order when someone sends{" "}
+          <code className="bang">!{command.name || "name"}</code>. Connect each
+          input to the command or an earlier step; the Reply step sends.
         </p>
-      )}
-      {custom ? (
-        <PipelineEditor
-          pipeline={command.pipeline ?? { steps: [] }}
-          modules={modules}
-          workspace={workspace}
-          onChange={(pipeline) =>
-            onChange({
-              pipeline,
-              execution_minutes: pipeline.execution_minutes,
-            })
-          }
-        />
-      ) : (
-        definition && (
-          <SchemaSettings
-            definition={definition}
-            command={command}
+        {kindsError && <p role="alert">{kindsError}</p>}
+        {steps ? (
+          <PipelineEditor
+            pipeline={steps}
+            modules={modules}
             workspace={workspace}
-            onChange={onChange}
+            onChange={setSteps}
           />
-        )
-      )}
+        ) : (
+          <p className="muted">Loading steps…</p>
+        )}
+      </div>
       <div className="editor-section">
         <h3>Behavior</h3>
         <Switch
@@ -671,7 +632,7 @@ function TryIt({
           </small>
         </div>
       )}
-      {result && command.kind === "pipeline" && steps.length > 0 && (
+      {result && steps.length > 0 && (
         <ol className="preview-steps" aria-label="Preview steps">
           {steps.map((s) => (
             <li key={s.id}>
