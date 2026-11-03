@@ -226,6 +226,8 @@ func (e *Engine) sendableVideo(ctx context.Context, j store.Job, p *store.Plan, 
 		return nil, true, err
 	}
 	if code != "" {
+		// As before the split: a video that finished after its job stopped
+		// being sendable is cancelled with the reason code.
 		return nil, true, e.Store.Complete(j.ID, "cancelled", code)
 	}
 	if err := inboxLimitsAllow(e, files); err != nil {

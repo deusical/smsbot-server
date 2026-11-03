@@ -200,7 +200,8 @@ func TestCommandModulesAndPipelineErrors(t *testing.T) {
 	}
 	c.Commands = []bot.Command{{Name: "bad", Kind: "pipeline", Enabled: true, Pipeline: &bot.Pipeline{Steps: []bot.PipelineStep{
 		{ID: "video", Module: "video.download", Inputs: map[string]string{"url": "trigger.args"}},
-		{ID: "reply", Module: "reply", Inputs: map[string]string{"file": "video.video"}},
+		{ID: "small", Module: "video.compress", Inputs: map[string]string{"source": "video.source"}},
+		{ID: "reply", Module: "reply", Inputs: map[string]string{"file": "small.video"}},
 	}}}}
 	raw, _ := json.Marshal(c)
 	w = req(s, "PUT", "/api/v1/config", string(raw), "fixture-client", "")

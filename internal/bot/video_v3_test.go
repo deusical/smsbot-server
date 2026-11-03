@@ -155,6 +155,20 @@ func TestCombinedVideoStepUpgrades(t *testing.T) {
 	if err := validatePipeline(&p, pipelineEnv{}); err != nil {
 		t.Fatal(err)
 	}
+	// Long ids are shortened at the end, keeping a valid id; an unpinned step
+	// with compression settings or a ".video" reader is the old kind too.
+	for _, id := range []string{"douyin_video_downloader", "x"} {
+		for _, version := range []int{1, 0} {
+			long := Pipeline{Steps: []PipelineStep{
+				step("link", "text.extract_url", map[string]string{"text": "trigger.args"}, ""),
+				{ID: id, Module: "video.download", Version: version, Inputs: map[string]string{"url": "link.url"}},
+				reply(map[string]string{"file": id + ".video"}),
+			}}
+			if err := validatePipeline(&long, pipelineEnv{}); err != nil || long.Steps[2].Module != "video.compress" {
+				t.Fatal(id, version, err)
+			}
+		}
+	}
 	if len(p.Steps) != 4 || p.Steps[1].Module != "video.download" || p.Steps[1].Version != 2 || p.Steps[2].ID != "video" || p.Steps[2].Module != "video.compress" || !strings.Contains(string(p.Steps[2].Settings), `"fast"`) {
 		t.Fatalf("not upgraded: %+v", p.Steps)
 	}

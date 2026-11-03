@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -218,21 +219,38 @@ func prepareCompressState(e *Engine, minutes int, s *stepRun) error {
 // upgradeVideoSteps rewrites a saved video.download@1 step, which downloaded
 // and compressed together, as video.download@2 plus video.compress@1. The
 // compress step keeps the old step's id and settings, so bindings to
-// "<id>.video" still work.
+// "<id>.video" still work. An unpinned step is the old kind when it has
+// compression settings or a later step reads its "video" output.
 func upgradeVideoSteps(p *Pipeline) {
 	steps := []PipelineStep{}
-	for _, s := range p.Steps {
-		if s.Module != "video.download" || s.Version != 1 {
+	for i, s := range p.Steps {
+		if s.Module != "video.download" || s.Version != 1 && (s.Version != 0 || !combinedVideoStep(p.Steps[i+1:], s)) {
 			steps = append(steps, s)
 			continue
 		}
-		source := s.ID + "_source"
-		if len(source) > 24 {
-			source = source[len(source)-24:]
+		// Shorten the id itself, so the new id still starts with a letter.
+		base := s.ID
+		if len(base) > 24-len("_source") {
+			base = base[:24-len("_source")]
 		}
+		source := base + "_source"
 		steps = append(steps,
 			PipelineStep{ID: source, Module: "video.download", Version: 2, Inputs: s.Inputs},
 			PipelineStep{ID: s.ID, Module: "video.compress", Version: 1, Inputs: map[string]string{"source": source + ".source"}, Settings: s.Settings})
 	}
 	p.Steps = steps
+}
+
+func combinedVideoStep(later []PipelineStep, s PipelineStep) bool {
+	if trimmed := bytes.TrimSpace(s.Settings); len(trimmed) > 0 && string(trimmed) != "{}" && string(trimmed) != "null" {
+		return true
+	}
+	for _, l := range later {
+		for _, binding := range l.Inputs {
+			if binding == s.ID+".video" {
+				return true
+			}
+		}
+	}
+	return false
 }
