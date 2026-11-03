@@ -57,6 +57,10 @@ func init() {
 		}},
 	}
 
+	for id, k := range kindRegistry {
+		k.Schema = kindSchema(id)
+		kindRegistry[id] = k
+	}
 }
 
 func noKindWork(*Engine, context.Context, store.Job, *store.Plan) (bool, error) { return false, nil }
@@ -96,7 +100,7 @@ func commandKind(c Command) string {
 func kindThreads(c Command) bool { return kindRegistry[commandKind(c)].Threads }
 
 type commandSettings struct {
-	Instructions     string      `json:"instructions"`
+	Instructions     string      `json:"instructions,omitempty"`
 	Model            string      `json:"model,omitempty"`
 	ProfileID        string      `json:"profile_id,omitempty"`
 	Memory           bool        `json:"memory,omitempty"`
@@ -181,7 +185,7 @@ func kindSchema(id string) SettingsSchema {
 		}}
 	}
 	if id == "media.video" {
-		fields["execution_minutes"] = SettingsSchema{Type: "number", Title: "Execution deadline (minutes)", Default: 15, Minimum: bound(1), Maximum: bound(60), Unit: "minutes"}
+		fields["execution_minutes"] = SettingsSchema{Type: "number", Title: "Execution deadline (minutes)", Default: 15, Minimum: bound(0), Maximum: bound(60), Unit: "minutes"}
 	}
 	return SettingsSchema{Type: "object", Properties: fields}
 }
@@ -189,8 +193,17 @@ func KindDefinitions() []KindDefinition {
 	out := []KindDefinition{}
 	for _, id := range []string{"fixed.reply", "ai.generate", "media.video"} {
 		d := kindRegistry[id].KindDefinition
-		d.Schema = kindSchema(id)
 		out = append(out, d)
 	}
 	return out
+}
+
+func sameSettings(a, b json.RawMessage) bool {
+	var x, y any
+	if json.Unmarshal(a, &x) != nil || json.Unmarshal(b, &y) != nil {
+		return false
+	}
+	ax, _ := json.Marshal(x)
+	by, _ := json.Marshal(y)
+	return bytes.Equal(ax, by)
 }

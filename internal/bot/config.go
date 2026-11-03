@@ -144,9 +144,6 @@ func (e *Engine) Configuration() (Configuration, error) {
 	return c, c.Validate()
 }
 func (e *Engine) SetConfiguration(c Configuration) error {
-	if err := c.Validate(); err != nil {
-		return err
-	}
 	if c.Settings.AIPhotoMaxMB == 0 {
 		c.Settings.AIPhotoMaxMB = defaultPhotoMB
 	}
@@ -161,7 +158,7 @@ func (e *Engine) SetConfiguration(c Configuration) error {
 	for i := range c.Commands {
 		for _, previous := range old.Commands {
 			current := &c.Commands[i]
-			if current.Name == previous.Name && current.Kind == previous.Kind && string(current.Settings) == string(previous.Settings) {
+			if current.Kind == previous.Kind && sameSettings(current.Settings, previous.Settings) {
 				current.Settings = nil
 				if current.Type != previous.Type {
 					current.Kind = ""

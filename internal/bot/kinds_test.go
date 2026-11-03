@@ -109,3 +109,38 @@ func TestKindPreviewsUnchanged(t *testing.T) {
 		}
 	}
 }
+
+func TestLegacyRenamedAndDuplicatedEdits(t *testing.T) {
+	e, _ := setup(t)
+	c := DefaultConfiguration()
+	c.Commands = []Command{{Name: "hello", Type: "fixed", Instructions: "Hello {input}"}}
+	if err := e.SetConfiguration(c); err != nil {
+		t.Fatal(err)
+	}
+	c, _ = e.Configuration()
+	duplicate := c.Commands[0]
+	duplicate.Name = "copy"
+	duplicate.Instructions = "Goodbye {input}"
+	duplicate.Settings = json.RawMessage(`{ "instructions" : "Hello {input}" }`)
+	c.Commands[0].Name = "renamed"
+	c.Commands[0].Instructions = "Changed {input}"
+	c.Commands = append(c.Commands, duplicate)
+	if err := e.SetConfiguration(c); err != nil {
+		t.Fatal(err)
+	}
+	c, _ = e.Configuration()
+	if c.Commands[0].Instructions != "Changed {input}" || c.Commands[1].Instructions != "Goodbye {input}" {
+		t.Fatal("legacy edits lost")
+	}
+}
+func TestKindDefinitions(t *testing.T) {
+	defs := KindDefinitions()
+	if len(defs) != 3 {
+		t.Fatal("missing kinds")
+	}
+	for _, d := range defs {
+		if d.ID == "" || d.Version != 1 || d.RetryClass == "" || d.ResourceClass == "" || len(d.Schema.Properties) == 0 {
+			t.Fatalf("incomplete definition: %+v", d)
+		}
+	}
+}
