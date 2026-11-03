@@ -365,7 +365,16 @@
 }
 
 
-/* Step editor: a command's modules in order. */
+/* Step editor: a command's modules in order. Grid children may shrink, so
+   a long flow scrolls instead of widening the page. */
+.editor,
+.editor-section,
+.pipeline,
+.pipeline-steps,
+.flow-strip {
+  min-width: 0;
+  max-width: 100%;
+}
 .pipeline-steps {
   list-style: none;
   margin: 0 0 12px;
@@ -378,6 +387,7 @@
   border-radius: 10px;
   padding: 10px 12px;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 8px;
   min-width: 0;
 }
@@ -393,8 +403,65 @@
   gap: 8px;
   flex-wrap: wrap;
 }
-.step-head select {
-  flex: 1 1 140px;
+.step-head {
+  flex-wrap: nowrap;
+}
+/* The row you tap to open a step: number, title, name and what feeds it. */
+.step-toggle {
+  flex: 1 1 0;
+  overflow: hidden;
+  white-space: normal;
+  min-width: 0;
+  width: auto;
+  height: auto;
+  display: flex;
+  justify-content: flex-start;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 2px 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.step-title {
+  min-width: 0;
+  display: block;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.step-actions {
+  flex: none;
+}
+.step-title code {
+  font-size: 12px;
+  color: var(--faint);
+}
+.step-summary {
+  display: block;
+  max-width: 100%;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.step-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+  padding-top: 6px;
+  border-top: 1px solid var(--line);
+  min-width: 0;
+}
+.step-module {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.step-module select {
+  flex: 1 1 200px;
   min-width: 0;
 }
 .step-number {
@@ -409,7 +476,7 @@
   flex: none;
 }
 .step-id {
-  flex: 0 1 140px;
+  flex: 1 1 120px;
   min-width: 0;
   font-family: var(--mono, monospace);
 }
@@ -514,4 +581,37 @@
 }
 .activity-steps .not-run {
   color: var(--faint);
+}
+
+.pipeline > .field + .field {
+  margin-top: 12px;
+}
+@media (max-width: 520px) {
+  /* One scrollable line keeps the flow readable on a phone. */
+  .flow-strip {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding-bottom: 4px;
+    scrollbar-width: thin;
+  }
+  .flow-strip li {
+    flex: none;
+  }
+  .pipeline-step {
+    padding: 8px 10px;
+  }
+  .step-actions .icon {
+    width: 32px;
+    height: 32px;
+  }
+  .try-row {
+    flex-wrap: wrap;
+  }
+  .try-row input {
+    flex: 1 1 100%;
+    order: 3;
+  }
+  .try-row button {
+    margin-left: auto;
+  }
 }

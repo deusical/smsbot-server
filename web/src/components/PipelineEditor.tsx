@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import type { CommandModule, Pipeline, PipelineStep } from "../lib/api";
 import type { Workspace } from "../lib/workspace";
 import {
@@ -7,7 +8,6 @@ import {
   newStep,
   problems,
   sources,
-  triggerOutputs,
 } from "../lib/pipeline";
 import { SchemaFields, VideoCost } from "./SchemaSettings";
 import { moduleGroup } from "../lib/modules";
@@ -45,8 +45,34 @@ export function PipelineEditor({
   function update(i: number, step: PipelineStep) {
     setSteps(pipeline.steps.map((s, n) => (n === i ? step : s)));
   }
+  // Steps show as one-line rows; tap to open. New steps and steps with a
+  // problem open on their own.
+  const [open, setOpen] = useState<Set<string>>(new Set());
+  const toggle = (id: string, on?: boolean) =>
+    setOpen((o) => {
+      const next = new Set(o);
+      if (on ?? !next.has(id)) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  // A step opened for a problem stays open while it is being fixed.
+  const problemSteps = Object.keys(issues)
+    .filter((id) => id)
+    .join(" ");
+  useEffect(() => {
+    if (!problemSteps) return;
+    setOpen((o) => {
+      const missing = problemSteps.split(" ").filter((id) => !o.has(id));
+      return missing.length ? new Set([...o, ...missing]) : o;
+    });
+  }, [problemSteps]);
   function rename(i: number, id: string) {
     const old = pipeline.steps[i].id;
+    setOpen((o) => {
+      const next = new Set(o);
+      if (next.delete(old)) next.add(id);
+      return next;
+    });
     // Keep later connections pointing at the renamed step.
     setSteps(
       pipeline.steps.map((s, n) =>
@@ -79,8 +105,10 @@ export function PipelineEditor({
         ? pipeline.steps.length - 1
         : pipeline.steps.length;
     const steps = [...pipeline.steps];
-    steps.splice(at, 0, newStep(pipeline, at, module, modules));
+    const step = newStep(pipeline, at, module, modules);
+    steps.splice(at, 0, step);
     setSteps(steps);
+    toggle(step.id, true);
   }
   const addable = modules.filter(
     (m) =>
@@ -111,6 +139,7 @@ export function PipelineEditor({
                 aria-invalid={(issues[step.id] ?? []).length > 0 || undefined}
                 onClick={(e) => {
                   e.preventDefault();
+                  toggle(step.id, true);
                   document
                     .getElementById(anchor(i))
                     ?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -126,20 +155,20 @@ export function PipelineEditor({
         })}
       </ol>
       <ol className="pipeline-steps">
-        <li className="pipeline-step trigger">
-          <div className="step-head">
-            <span className="step-number">0</span>
-            <strong>Command message</strong>
-          </div>
-          <p className="muted">
-            Provides{" "}
-            {triggerOutputs.map((o) => o.title.toLowerCase()).join(" and ")}.
-          </p>
-        </li>
         {pipeline.steps.map((step, i) => {
           const module = modules.find((m) => m.id === step.module);
           const available = sources(pipeline, i, modules);
           const stepIssues = issues[step.id] ?? [];
+          const expanded = open.has(step.id) || stepIssues.length > 0;
+          // What feeds this step, e.g. "from link · Link".
+          const summary = (module?.inputs ?? [])
+            .map((port) => step.inputs?.[port.name])
+            .filter((b): b is string => !!b)
+            .map(
+              (b) =>
+                "from " + (available.find((s) => s.value === b)?.label ?? b),
+            )
+            .join(", ");
           return (
             <li
               key={i}
@@ -148,45 +177,24 @@ export function PipelineEditor({
               aria-label={`Step ${i + 1}: ${step.id}`}
             >
               <div className="step-head">
-                <span className="step-number">{i + 1}</span>
-                <select
-                  aria-label={`Module for step ${i + 1}`}
-                  value={step.module}
-                  onChange={(e) => {
-                    const next = modules.find((m) => m.id === e.target.value);
-                    if (!next) return;
-                    update(i, {
-                      id: step.id,
-                      module: next.id,
-                      inputs: connect(pipeline, i, next, modules),
-                    });
-                  }}
+                <button
+                  type="button"
+                  className="step-toggle"
+                  aria-expanded={expanded}
+                  aria-controls={anchor(i) + "-body"}
+                  onClick={() => toggle(step.id)}
                 >
-                  {!module && (
-                    <option value={step.module}>{step.module}</option>
-                  )}
-                  {groups.map((g) => (
-                    <optgroup key={g} label={g}>
-                      {modules
-                        .filter((m) => moduleGroup(m.id) === g)
-                        .map((m) => (
-                          <option key={m.id} value={m.id}>
-                            {m.title}
-                          </option>
-                        ))}
-                    </optgroup>
-                  ))}
-                </select>
-                <input
-                  className="step-id"
-                  aria-label={`Name of step ${i + 1}`}
-                  maxLength={24}
-                  spellCheck={false}
-                  value={step.id}
-                  onChange={(e) =>
-                    rename(i, e.target.value.toLowerCase().replace(/\s/g, "_"))
-                  }
-                />
+                  <span className="step-number">{i + 1}</span>
+                  <span className="step-title">
+                    <strong>{module?.title ?? step.module}</strong>{" "}
+                    <code>{step.id}</code>
+                    <small className="step-summary">
+                      {stepIssues.length
+                        ? "Needs attention"
+                        : summary || module?.description}
+                    </small>
+                  </span>
+                </button>
                 <div className="step-actions">
                   <button
                     type="button"
@@ -220,77 +228,127 @@ export function PipelineEditor({
                   </button>
                 </div>
               </div>
-              {module && (
-                <>
-                  <p className="muted">
-                    {module.description}
-                    {effects[module.effect] && (
-                      <span className={"type-tag effect-" + module.effect}>
-                        {effects[module.effect]}
-                      </span>
-                    )}
-                  </p>
-                  {module.inputs.map((port) => {
-                    const fits = available.filter((s) =>
-                      port.types.includes(s.type),
-                    );
-                    const value = step.inputs?.[port.name] ?? "";
-                    return (
-                      <Field
-                        key={port.name}
-                        label={`${port.title}${port.required ? "" : " (optional)"}`}
-                      >
-                        <select
-                          aria-label={`${port.title} for step ${i + 1}`}
-                          value={value}
-                          onChange={(e) => {
-                            const inputs = { ...step.inputs };
-                            if (e.target.value)
-                              inputs[port.name] = e.target.value;
-                            else delete inputs[port.name];
-                            update(i, { ...step, inputs });
-                          }}
-                        >
-                          <option value="">Not connected</option>
-                          {value && !fits.some((s) => s.value === value) && (
-                            <option value={value}>
-                              {value} (not available)
-                            </option>
-                          )}
-                          {fits.map((s) => (
-                            <option key={s.value} value={s.value}>
-                              {s.label}
-                            </option>
-                          ))}
-                        </select>
-                      </Field>
-                    );
-                  })}
-                  {module.settings.ui === "video-cost" && (
-                    <VideoCost
-                      attempts={Number(
-                        step.settings?.max_attempts ??
-                          module.settings.properties?.max_attempts?.default,
+              {expanded && (
+                <div className="step-body" id={anchor(i) + "-body"}>
+                  <div className="step-module">
+                    <select
+                      aria-label={`Module for step ${i + 1}`}
+                      value={step.module}
+                      onChange={(e) => {
+                        const next = modules.find(
+                          (m) => m.id === e.target.value,
+                        );
+                        if (!next) return;
+                        update(i, {
+                          id: step.id,
+                          module: next.id,
+                          inputs: connect(pipeline, i, next, modules),
+                        });
+                      }}
+                    >
+                      {!module && (
+                        <option value={step.module}>{step.module}</option>
                       )}
-                      passes={Number(
-                        step.settings?.passes ??
-                          module.settings.properties?.passes?.default,
-                      )}
-                      minutes={minutes}
+                      {groups.map((g) => (
+                        <optgroup key={g} label={g}>
+                          {modules
+                            .filter((m) => moduleGroup(m.id) === g)
+                            .map((m) => (
+                              <option key={m.id} value={m.id}>
+                                {m.title}
+                              </option>
+                            ))}
+                        </optgroup>
+                      ))}
+                    </select>
+                    <input
+                      className="step-id"
+                      aria-label={`Name of step ${i + 1}`}
+                      maxLength={24}
+                      spellCheck={false}
+                      value={step.id}
+                      onChange={(e) =>
+                        rename(
+                          i,
+                          e.target.value.toLowerCase().replace(/\s/g, "_"),
+                        )
+                      }
                     />
+                  </div>
+                  {module && (
+                    <>
+                      <p className="muted">
+                        {module.description}
+                        {effects[module.effect] && (
+                          <span className={"type-tag effect-" + module.effect}>
+                            {effects[module.effect]}
+                          </span>
+                        )}
+                      </p>
+                      {module.inputs.map((port) => {
+                        const fits = available.filter((s) =>
+                          port.types.includes(s.type),
+                        );
+                        const value = step.inputs?.[port.name] ?? "";
+                        return (
+                          <Field
+                            key={port.name}
+                            label={`${port.title}${port.required ? "" : " (optional)"}`}
+                          >
+                            <select
+                              aria-label={`${port.title} for step ${i + 1}`}
+                              value={value}
+                              onChange={(e) => {
+                                const inputs = { ...step.inputs };
+                                if (e.target.value)
+                                  inputs[port.name] = e.target.value;
+                                else delete inputs[port.name];
+                                update(i, { ...step, inputs });
+                              }}
+                            >
+                              <option value="">Not connected</option>
+                              {value &&
+                                !fits.some((s) => s.value === value) && (
+                                  <option value={value}>
+                                    {value} (not available)
+                                  </option>
+                                )}
+                              {fits.map((s) => (
+                                <option key={s.value} value={s.value}>
+                                  {s.label}
+                                </option>
+                              ))}
+                            </select>
+                          </Field>
+                        );
+                      })}
+                      {module.settings.ui === "video-cost" && (
+                        <VideoCost
+                          attempts={Number(
+                            step.settings?.max_attempts ??
+                              module.settings.properties?.max_attempts?.default,
+                          )}
+                          passes={Number(
+                            step.settings?.passes ??
+                              module.settings.properties?.passes?.default,
+                          )}
+                          minutes={minutes}
+                        />
+                      )}
+                      <SchemaFields
+                        schema={module.settings}
+                        values={step.settings ?? {}}
+                        workspace={workspace}
+                        onChange={(key, value) =>
+                          update(i, {
+                            ...step,
+                            settings: { ...step.settings, [key]: value },
+                          })
+                        }
+                      />
+                    </>
                   )}
-                  <SchemaFields
-                    schema={module.settings}
-                    values={step.settings ?? {}}
-                    workspace={workspace}
-                    onChange={(key, value) =>
-                      update(i, {
-                        ...step,
-                        settings: { ...step.settings, [key]: value },
-                      })
-                    }
-                  />
-                </>
+                </div>
               )}
               {stepIssues.map((text) => (
                 <p key={text} role="alert" className="inline-alert">
