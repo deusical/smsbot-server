@@ -180,6 +180,7 @@ export type KindSchema = {
   default?: unknown;
   minimum?: number;
   maximum?: number;
+  effective_maximum?: number;
   enum?: string[];
   unit?: string;
   properties?: Record<string, KindSchema>;

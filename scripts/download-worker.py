@@ -28,6 +28,38 @@ LIMIT = 20_000_000 - 1
 work = threading.local()
 
 
+DEFAULT_SETTINGS = {"preset": "slow", "passes": 2, "max_attempts": 3,
+                    "copy_if_fits": True, "max_mb": 19.99, "execution_minutes": 15}
+
+
+def validate_settings(value):
+    if not isinstance(value, dict) or set(value) - set(DEFAULT_SETTINGS):
+        raise ValueError("invalid_settings")
+    result = {**DEFAULT_SETTINGS, **value}
+    if (result["preset"] not in ("veryfast", "faster", "fast", "medium", "slow") or
+        type(result["passes"]) is not int or not 1 <= result["passes"] <= 2 or
+        type(result["max_attempts"]) is not int or not 1 <= result["max_attempts"] <= 3 or
+        type(result["copy_if_fits"]) is not bool or
+        type(result["max_mb"]) not in (int, float) or not math.isfinite(result["max_mb"]) or
+        not .1 <= result["max_mb"] <= 19.99 or
+        type(result["execution_minutes"]) is not int or not 1 <= result["execution_minutes"] <= 60):
+        raise ValueError("invalid_settings")
+    return result
+
+
+def protocol_settings(request):
+    protocol = request.get("protocol", 1)
+    if type(protocol) is not int or protocol not in (1, 2):
+        raise ValueError("unsupported_protocol")
+    if protocol == 2:
+        if set(request) - {"url", "max_bytes", "deadline", "protocol", "settings"}:
+            raise ValueError("invalid_request")
+        return validate_settings(request.get("settings"))
+    if "settings" in request:
+        raise ValueError("invalid_settings")
+    return None
+
+
 class LeaseExpired(Exception):
     pass
 
@@ -103,13 +135,17 @@ def probe(source, deadline):
                            "-of", "json", str(source)], deadline, capture=True))
 
 
-def compress(source, destination, limit, deadline, encoder=None):
+def compress(source, destination, limit, deadline, encoder=None, settings=None):
     """Use CPU H.264 two-pass on Linux, or the existing AV1 NVENC on Windows.
 
     Target just below the ceiling and re-encode with measured size correction
     if muxing overshoots. Preserve resolution/aspect ratio rather than imposing
     the old batch script's fixed landscape scaling on portrait videos.
     """
+    configured = settings is not None
+    settings = validate_settings(settings or {})
+    if configured:
+        limit = min(limit, int(round(settings["max_mb"] * 1_000_000)))
     encoder = encoder or ("libx264" if os.name != "nt" else "av1_nvenc")
     info = probe(source, deadline)
     duration = float(info["format"]["duration"])
@@ -118,7 +154,7 @@ def compress(source, destination, limit, deadline, encoder=None):
     if not any(s.get("codec_type") == "video" for s in info["streams"]):
         raise ValueError("video_required")
     audio = any(s.get("codec_type") == "audio" for s in info["streams"])
-    if source.stat().st_size <= limit:
+    if settings["copy_if_fits"] and source.stat().st_size <= limit:
         shutil.copy2(source, destination)
     else:
         target = int(limit * .985)
@@ -126,22 +162,26 @@ def compress(source, destination, limit, deadline, encoder=None):
         rate = int(target * 8 / duration - audio_rate - 12000)
         if rate < 32000:
             raise ValueError("video_too_long")
-        for _ in range(3):
+        for _ in range(settings["max_attempts"]):
             base = ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
                  "-i", str(source), "-map", "0:v:0", "-map", "0:a:0?",
                  "-map_metadata", "-1", "-map_chapters", "-1"]
             if encoder == "libx264":
                 stats = str(destination.with_suffix(".pass"))
-                video = ["-c:v", "libx264", "-preset", "slow", "-threads", "2", "-pix_fmt", "yuv420p", "-b:v", str(rate), "-passlogfile", stats]
+                video = ["-c:v", "libx264", "-preset", settings["preset"], "-threads", "2", "-pix_fmt", "yuv420p", "-b:v", str(rate), "-passlogfile", stats]
                 try:
-                    run(base + video + ["-pass", "1", "-an", "-f", "null", "-"], deadline)
-                    run(base + video + ["-pass", "2", "-c:a", "aac", "-b:a", str(audio_rate or 128000), "-movflags", "+faststart", str(destination)], deadline)
+                    if settings["passes"] == 2:
+                        run(base + video + ["-pass", "1", "-an", "-f", "null", "-"], deadline)
+                        final = video + ["-pass", "2"]
+                    else:
+                        final = video[:-2]  # No pass log for single-pass encoding.
+                    run(base + final + ["-c:a", "aac", "-b:a", str(audio_rate or 128000), "-movflags", "+faststart", str(destination)], deadline)
                 finally:
                     for log in destination.parent.glob(destination.with_suffix(".pass").name + "*"):
                         log.unlink(missing_ok=True)
             else:
-                run(base + ["-c:v", "av1_nvenc", "-preset", "p7", "-tune", "hq",
-                 "-multipass", "fullres", "-rc", "vbr", "-b:v", str(rate),
+                run(base + ["-c:v", "av1_nvenc", "-preset", {"veryfast": "p3", "faster": "p4", "fast": "p5", "medium": "p6", "slow": "p7"}[settings["preset"]], "-tune", "hq",
+                 "-multipass", "fullres" if settings["passes"] == 2 else "disabled", "-rc", "vbr", "-b:v", str(rate),
                  "-maxrate", str(rate * 2), "-bufsize", str(rate * 4),
                  "-rc-lookahead", "32", "-spatial-aq", "1", "-temporal-aq", "1",
                  "-pix_fmt", "p010le", "-c:a", "aac", "-b:a", str(audio_rate or 128000),
@@ -246,11 +286,16 @@ class Jobs:
         return json.loads(AESGCM(self.key).decrypt(data[:12], data[12:], path.name.encode()))
 
     def poll(self, job, request):
+        settings = protocol_settings(request)
+        if settings is not None:
+            request = {**request, "settings": settings}
         with self.lock:
             path = self.path(job)
             if (path / "state.enc").exists():
                 state = self.load(path)
                 if any(state[k] != request[k] for k in ("url", "max_bytes", "deadline")):
+                    raise ValueError("immutable_job")
+                if settings is not None and (state.get("protocol") != 2 or state["settings"] != settings):
                     raise ValueError("immutable_job")
             else:
                 state = {**request, "stage": "queued"}
@@ -266,7 +311,7 @@ class Jobs:
                     threading.Thread(target=self.execute, args=(job,), daemon=True).start()
                 else:
                     raise RuntimeError("busy")
-            return {"stage": state["stage"]}
+            return {"stage": state["stage"], **({"protocol": 2} if state.get("protocol") == 2 else {})}
 
     def execute(self, job):
         state, path = None, None
@@ -309,7 +354,8 @@ class Jobs:
                         files[0].replace(original)
                         seal_file(original, checkpoint, self.key)
                     stage("compressing")
-                    output = compress(original, folder / "send.mp4", state["max_bytes"], deadline)
+                    options = {"settings": state["settings"]} if state.get("protocol") == 2 else {}
+                    output = compress(original, folder / "send.mp4", state["max_bytes"], deadline, **options)
                     if not alive():
                         raise LeaseExpired()
                     seal_file(output, path / "result.enc", self.key)
@@ -325,6 +371,7 @@ class Jobs:
                 state["stage"] = "failed"
                 self.save(path, state)
         finally:
+            work.__dict__.clear()
             with self.lock:
                 self.active.pop(job, None)
 
@@ -352,6 +399,15 @@ def create_server(root, token, port, output_root=None):
                 self.send_error(401)
                 return
             try:
+                if self.command == "GET" and self.path == "/download/capabilities":
+                    data = b'{"protocol":2}'
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(data)))
+                    self.send_header("Cache-Control", "no-store")
+                    self.end_headers()
+                    self.wfile.write(data)
+                    return
                 parts = self.path.split("/")
                 if len(parts) not in (4, 5) or parts[:3] != ["", "download", "jobs"]:
                     raise ValueError()
@@ -365,6 +421,9 @@ def create_server(root, token, port, output_root=None):
                         not 100000 <= request["max_bytes"] <= LIMIT or type(request.get("deadline")) is not int or
                         not time.time()-5 < request["deadline"] <= time.time()+3600):
                         raise ValueError()
+                    settings = protocol_settings(request)
+                    if settings is not None and request["deadline"] > time.time() + settings["execution_minutes"] * 60 + 5:
+                        raise ValueError("invalid_deadline")
                     data = json.dumps(jobs.poll(job, request)).encode()
                     self.send_response(200)
                     self.send_header("Content-Type", "application/json")

@@ -1607,10 +1607,21 @@ components:
               type: boolean
             generation:
               $ref: '#/components/schemas/Generation'
+            preset: {type: string, enum: [veryfast, faster, fast, medium, slow], default: slow}
+            passes: {type: integer, minimum: 1, maximum: 2, default: 2}
+            max_attempts: {type: integer, minimum: 1, maximum: 3, default: 3}
+            copy_if_fits: {type: boolean, default: true}
+            max_mb:
+              type: number
+              minimum: 0.1
+              maximum: 19.99
+              default: 19.99
+              description: Decimal MB; effective target is capped by host per-file and total attachment limits, snapshotted at acceptance.
             execution_minutes:
               type: integer
-              minimum: 0
+              minimum: 1
               maximum: 60
+              default: 15
         revision:
           type: integer
           description: Output metadata identifying the configuration that last saved this command. Concurrency protection uses only the top-level Configuration.revision.
@@ -1662,6 +1673,26 @@ components:
       required:
       - id
       - name
+    DownloadWorkerRequestV2:
+      type: object
+      additionalProperties: false
+      description: Private token-authenticated loopback worker protocol, not an owner API route. Probe GET /download/capabilities before POST /download/jobs/{job}; see docs/DOWNLOAD_COMMAND.md. An outdated worker receives a legacy request using its defaults, with a sanitized service-log warning. Checkpoints never authorize submission.
+      required: [protocol, url, max_bytes, deadline, settings]
+      properties:
+        protocol: {type: integer, enum: [2]}
+        url: {type: string, format: uri}
+        max_bytes: {type: integer, minimum: 100000, maximum: 19999999}
+        deadline: {type: integer, description: Absolute Unix seconds; bounded by execution_minutes and at most one hour.}
+        settings:
+          type: object
+          additionalProperties: false
+          properties:
+            preset: {type: string, enum: [veryfast, faster, fast, medium, slow], default: slow}
+            passes: {type: integer, minimum: 1, maximum: 2, default: 2}
+            max_attempts: {type: integer, minimum: 1, maximum: 3, default: 3}
+            copy_if_fits: {type: boolean, default: true}
+            max_mb: {type: number, minimum: 0.1, maximum: 19.99, default: 19.99}
+            execution_minutes: {type: integer, minimum: 1, maximum: 60, default: 15}
     CommandKind:
       type: object
       properties:
@@ -1674,7 +1705,7 @@ components:
         resource_class: {type: string, enum: [media, provider, upload]}
         schema:
           type: object
-          description: Recursive form schema (type, properties, title, ui, default, minimum, maximum, enum, unit). UI hints select multiline, model, profile and optional generation controls.
+          description: Recursive form schema (type, properties, title, ui, default, minimum, maximum, effective_maximum, enum, unit). Effective bounds reflect host attachment limits. UI hints select multiline, model, profile and optional generation controls.
     Configuration:
       type: object
       additionalProperties: false

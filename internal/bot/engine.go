@@ -9,6 +9,7 @@ import (
 	"github.com/deusical/smsbot-server/internal/collection"
 	"github.com/deusical/smsbot-server/internal/store"
 	"github.com/deusical/smsbot-server/internal/transport"
+	"math"
 	"strings"
 	"sync"
 	"time"
@@ -465,6 +466,7 @@ func (e *Engine) planCommand(ctx context.Context, m transport.Incoming, p *store
 		return "", false, errors.New("invalid command kind")
 	}
 	p.Kind = k.ID
+	p.KindSettings = append(json.RawMessage(nil), cmd.Settings...)
 	return k.plan(e, ctx, Input{Incoming: m, Arguments: input, Parent: parent}, p, cfg, cmd, model, instructions, g)
 }
 
@@ -476,6 +478,17 @@ func planVideoKind(e *Engine, ctx context.Context, in Input, p *store.Plan, cfg 
 	}
 	p.Approval = cmd.Approval
 	p.DownloadURL = downloadURL(input)
+	if p.DownloadURL != "" {
+		v := videoSettings(cmd)
+		settings, err := e.Collection.Settings()
+		if err != nil {
+			return "", false, err
+		}
+		p.DownloadMaxBytes = min(videoHostLimit(settings.FileLimits()), int64(math.Round(v.MaxMB*1e6)))
+		v.MaxMB = float64(p.DownloadMaxBytes) / 1e6
+		p.KindSettings, _ = json.Marshal(v)
+	}
+
 	if p.DownloadURL != "" {
 		minutes := cmd.ExecutionMinutes
 		if minutes == 0 {

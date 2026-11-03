@@ -81,7 +81,11 @@ it("kind switching clears incompatible fields", () => {
   } as Command;
   const k = {
     id: "fixed.reply",
- title:"Fixed text", version:1,threads:false,retry_class:"none",resource_class:"upload",
+    title: "Fixed text",
+    version: 1,
+    threads: false,
+    retry_class: "none",
+    resource_class: "upload",
     legacy_type: "fixed",
     schema: {
       type: "object",
@@ -96,4 +100,53 @@ it("kind switching clears incompatible fields", () => {
     settings: { instructions: "Reply" },
   });
   expect(changed.generation).toBeUndefined();
+});
+
+it("uses media cost hint and shows the effective host cap", () => {
+  const c = {
+    type: "download",
+    instructions: "",
+    settings: {
+      max_attempts: 3,
+      passes: 2,
+      max_mb: 19.99,
+      execution_minutes: 15,
+    },
+  } as unknown as Command;
+  const k = {
+    id: "media.video",
+    schema: {
+      type: "object",
+      ui: "video-cost",
+      properties: {
+        max_attempts: { type: "number", default: 3 },
+        passes: { type: "number", default: 2 },
+        execution_minutes: { type: "number", default: 15 },
+        max_mb: {
+          type: "number",
+          title: "Maximum size",
+          default: 19.99,
+          unit: "MB",
+          effective_maximum: 10.48576,
+        },
+      },
+    },
+  } as unknown as CommandKind;
+  const w = {
+    config: { settings: { favorites: [] }, profiles: [] },
+    models: [],
+  } as unknown as Workspace;
+  render(
+    <SchemaSettings
+      command={c}
+      definition={k}
+      workspace={w}
+      onChange={vi.fn()}
+    />,
+  );
+  expect(
+    screen.getByText(/6 encode passes plus a verification decode/),
+  ).toBeVisible();
+  expect(screen.getByText(/effective: 10.48576 MB/)).toBeVisible();
+  expect(screen.getByRole("note")).toHaveTextContent("deadline may be short");
 });

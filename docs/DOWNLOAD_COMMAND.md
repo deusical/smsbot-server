@@ -46,24 +46,68 @@ request at a time.
 
 ## Compression and bounds
 
-Files already below the cap are copied unchanged. Linux uses two-pass H.264
-with the `slow` preset and AAC audio for larger files, preserving resolution and
-aspect ratio. Windows development can still use the existing AV1 NVENC p7/HQ
-settings. Acer has no NVIDIA encoder, so it uses the CPU path.
+`media.video@1` exposes bounded settings in Commands:
 
-Encoding targets 98.5% of the available byte budget, then corrects for measured
-overshoot with at most three attempts. Size, duration, audio presence and a full
-decode are verified. Original downloads are retained separately. The send copy
-must be **strictly below 20,000,000 bytes**, also bounded by the configured
-attachment ceiling. The default is 10 MiB per file; set both per-file and combined
-attachment limits to at least 20 MB to use the full budget.
+| Setting | Default | Allowed values |
+| --- | --- | --- |
+| `preset` | `slow` | `veryfast`, `faster`, `fast`, `medium`, `slow` |
+| `passes` | 2 | 1?2 |
+| `max_attempts` | 3 | 1?3 |
+| `copy_if_fits` | true | boolean |
+| `max_mb` | 19.99 | 0.1?19.99 decimal MB, further capped by host attachment limits |
+| `execution_minutes` | 15 | 1?60 |
 
-Incoming messages must still arrive within two minutes. Accepted downloads have
-an independent **15-minute execution lifetime**, configurable per command from 1
-to 60 minutes (`execution_minutes`; zero or omitted means 15). The deadline is
-snapshotted when accepted and includes approval, queueing, preparation and upload.
-Approval itself still expires after two minutes. Editing a command does not
-extend existing jobs. Deadline expiry prevents submission.
+Defaults preserve slow two-pass encoding, three attempts, copying an original
+that fits, and the existing 15-minute lifetime. The byte target is now explicitly
+19.99 decimal MB, capped by both the per-file and combined attachment limits.
+The default host limit is 10 MiB per file. Configured and effective values are
+shown separately when the host lowers the command target. No encoder name,
+thread count, path or shell flag is accepted in command settings.
+
+Linux uses H.264 (`libx264`), AAC and two host-controlled threads. One pass omits
+the pass log and first analysis pass; two passes preserve the existing analysis
+and encoding flow. Windows uses the existing AV1 NVENC/HQ path. Presets map to
+NVENC p3/p4/p5/p6/p7 respectively; one pass maps to `-multipass disabled`, two
+to `-multipass fullres` inside a single NVENC invocation. Attempts and
+`copy_if_fits` apply equally to CPU and NVENC. The UI cost line is a worst-case
+encode-work estimate; hardware multipass is not multiple FFmpeg processes.
+
+Every encoded result targets 98.5% of the byte budget and retries overshoots up
+to `max_attempts`. Size, duration, audio and a full verification decode remain
+mandatory, including copied files. Originals stay separate. A long video can
+take tens of minutes; the editor warns when the selected deadline looks short.
+The estimate is advisory and cannot extend a deadline.
+
+Incoming messages must still arrive within two minutes. At acceptance the bot
+snapshots effective settings, byte ceiling and the absolute execution deadline.
+The deadline includes approval, queueing, preparation and upload. Approval still
+expires after two minutes. Editing settings cannot alter accepted jobs; a host
+limit reduction cancels a job whose snapshotted ceiling is no longer allowed.
+Legacy flat `execution_minutes` maps into settings; zero/absent in the legacy
+representation means 15. Explicit modern settings require 1?60 minutes.
+
+## Worker protocol v2
+
+The bot probes authenticated `GET /download/capabilities` for `{"protocol":2}`
+before creating a worker job. `POST /download/jobs/<job>` then includes:
+
+```json
+{"protocol":2,"url":"https://douyin.com/example","max_bytes":19990000,"deadline":1800000000,"settings":{"preset":"slow","passes":2,"max_attempts":3,"copy_if_fits":true,"max_mb":19.99,"execution_minutes":15}}
+```
+
+The worker independently validates all enums and bounds, including the deadline
+window and byte ceiling. The encrypted checkpoint stores all effective settings;
+a restart uses those settings, even if code defaults changed. Changed settings
+for an existing job are rejected. The host's single preparation slot and CPU
+thread count stay outside commands. Legacy protocol requests remain supported.
+
+If the worker does not advertise protocol 2, the bot submits a legacy request
+and lets that worker use its defaults, as approved by the owner. It logs only
+`download_worker_outdated_using_defaults` once per downloader instance, with no
+URL, content, contact or upstream error. The warning currently appears in the
+service log; Activity continues to show the sanitized preparation stage. The
+original deadline, byte ceiling and every dispatcher safety check still apply.
+Network failures yield another poll and do not bypass authorization.
 
 The bot stores its job ID and encrypted plan immediately. Dispatch enqueues or
 polls preparation with short HTTP calls and yields between polls, so other
