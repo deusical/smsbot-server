@@ -17,6 +17,14 @@
   max-height: calc(100vh - 100px);
   max-height: calc(100dvh - 100px);
 }
+/* Commands and built-ins scroll together below the search row, so a short
+   window never squeezes the command list into a sliver, and the New menu
+   (in the search row) isn't clipped. */
+.studio-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
 .menu-wrap {
   position: relative;
 }
@@ -25,7 +33,8 @@
   top: calc(100% + 6px);
   right: 0;
   z-index: 30;
-  width: 250px;
+  width: 290px;
+  max-width: calc(100vw - 32px);
   padding: 6px;
   display: grid;
   border: 1px solid var(--line);
@@ -44,14 +53,14 @@
   border: 0;
   background: transparent;
   text-align: left;
+  white-space: normal;
 }
 .menu small {
   color: var(--muted);
   font-weight: 400;
 }
 .command-list {
-  flex: 1;
-  overflow-y: auto;
+  flex: none;
   list-style: none;
   margin: 0;
   padding: 0 8px;
@@ -76,13 +85,14 @@
 .command-item {
   flex: 1;
   min-width: 0;
-  height: 58px;
+  height: auto;
+  min-height: 58px;
   display: grid;
   justify-content: stretch;
   justify-items: start;
   align-content: center;
   gap: 3px;
-  padding: 0 8px;
+  padding: 8px;
   border: 0;
   background: transparent;
   font-weight: 400;
@@ -133,11 +143,13 @@
 }
 .editor-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 12px;
 }
+/* Room for a full 24-character name; the switches move below when narrow. */
 .bang-input {
-  flex: 1;
+  flex: 1 1 280px;
   min-width: 0;
   display: flex;
   align-items: center;

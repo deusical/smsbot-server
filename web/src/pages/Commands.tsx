@@ -262,61 +262,63 @@ export function CommandsPage({
                 )}
               </div>
             </div>
-            <ul className="command-list">
-              {filtered.map(({ c, i }) => (
-                <li
-                  key={i}
-                  className={
-                    (i === index ? "selected " : "") +
-                    (c.enabled ? "live" : "off")
-                  }
-                >
-                  <button
-                    type="button"
-                    className="command-item"
-                    aria-current={i === index ? "true" : undefined}
-                    onClick={() => {
-                      setSelected(i);
-                      setMobileDetail(true);
-                    }}
+            <div className="studio-scroll">
+              <ul className="command-list">
+                {filtered.map(({ c, i }) => (
+                  <li
+                    key={i}
+                    className={
+                      (i === index ? "selected " : "") +
+                      (c.enabled ? "live" : "off")
+                    }
                   >
-                    <code className="bang">!{c.name || "untitled"}</code>
-                    <small>{c.description || "Command"}</small>
-                    <small className="flow-summary">
-                      {flowSummary(stepsOf(c), modules)}
-                    </small>
-                  </button>
-                  <Switch
-                    label={`Enable !${c.name || "untitled"}`}
-                    hideLabel
-                    checked={c.enabled}
-                    onChange={(enabled) => change(i, { enabled })}
-                  />
-                </li>
-              ))}
-            </ul>
-            {!commands.length && (
-              <div className="empty small">
-                <strong>No commands yet</strong>
-                <p>
-                  Pick a template from New. Commands start switched off until
-                  you enable them.
-                </p>
-              </div>
-            )}
-            {commands.length > 0 && !filtered.length && (
-              <p className="muted pad">No commands match “{search}”.</p>
-            )}
-            <div className="builtins">
-              <span className="label">Built in</span>
-              <ul>
-                {builtins.map((b) => (
-                  <li key={b.name} title={b.detail}>
-                    <code className="bang quiet">!{b.name}</code>
-                    <small>{b.detail}</small>
+                    <button
+                      type="button"
+                      className="command-item"
+                      aria-current={i === index ? "true" : undefined}
+                      onClick={() => {
+                        setSelected(i);
+                        setMobileDetail(true);
+                      }}
+                    >
+                      <code className="bang">!{c.name || "untitled"}</code>
+                      <small>{c.description || "Command"}</small>
+                      <small className="flow-summary">
+                        {flowSummary(stepsOf(c), modules)}
+                      </small>
+                    </button>
+                    <Switch
+                      label={`Enable !${c.name || "untitled"}`}
+                      hideLabel
+                      checked={c.enabled}
+                      onChange={(enabled) => change(i, { enabled })}
+                    />
                   </li>
                 ))}
               </ul>
+              {!commands.length && (
+                <div className="empty small">
+                  <strong>No commands yet</strong>
+                  <p>
+                    Pick a template from New. Commands start switched off until
+                    you enable them.
+                  </p>
+                </div>
+              )}
+              {commands.length > 0 && !filtered.length && (
+                <p className="muted pad">No commands match “{search}”.</p>
+              )}
+              <div className="builtins">
+                <span className="label">Built in</span>
+                <ul>
+                  {builtins.map((b) => (
+                    <li key={b.name} title={b.detail}>
+                      <code className="bang quiet">!{b.name}</code>
+                      <small>{b.detail}</small>
+                    </li>
+                  ))}
+                </ul>
+              </div>
             </div>
           </aside>
           <section className="studio-detail panel">
