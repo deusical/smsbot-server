@@ -208,3 +208,34 @@ func TestContinuousOwnerImportDoesNotStarveDueFallback(t *testing.T) {
 		t.Fatal("continuous owner import suppressed due routine coverage")
 	}
 }
+
+// An owner action can bring discovery forward once; it then returns to its
+// regular cadence instead of running on every tick.
+func TestDiscoverRunsOnePassAheadOfSchedule(t *testing.T) {
+	t.Parallel()
+	v, _ := vault.New(make([]byte, 32))
+	db, err := store.Open(filepath.Join(t.TempDir(), "state.db"), v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.DB.Close()
+	host := &replayHost{retryHost: &retryHost{s: db, fail: map[string]bool{}}}
+	worker := New(db, host)
+	now := time.Now()
+	worker.now = func() time.Time { return now }
+	ctx := context.Background()
+	worker.Tick(ctx)
+	worker.Tick(ctx)
+	if host.discoveryCalls != 1 {
+		t.Fatalf("discovery ran %d times before it was due", host.discoveryCalls)
+	}
+	worker.Discover()
+	worker.Tick(ctx)
+	if host.discoveryCalls != 2 {
+		t.Fatal("requested discovery did not run on the next tick")
+	}
+	worker.Tick(ctx)
+	if host.discoveryCalls != 2 {
+		t.Fatal("discovery kept running after the requested pass")
+	}
+}

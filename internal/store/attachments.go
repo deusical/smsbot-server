@@ -35,8 +35,9 @@ func (s *Store) saveAttachments(tx *sql.Tx, id string, files []media.File) error
 		// Locally submitted originals remain authoritative after normalization
 		// removes inline bytes. Exact transaction/alias matching selected this
 		// message; phone echoes may assign entirely different part IDs.
+		// web and bot origins are set only by this service's own submissions.
 		var localSend bool
-		if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM messages m JOIN message_meta meta ON meta.message=m.id WHERE m.id=? AND m.direction='outgoing' AND meta.origin='web')", id).Scan(&localSend); err != nil {
+		if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM messages m JOIN message_meta meta ON meta.message=m.id WHERE m.id=? AND m.direction='outgoing' AND meta.origin IN ('web','bot'))", id).Scan(&localSend); err != nil {
 			return err
 		}
 		for _, f := range existing {
@@ -63,7 +64,16 @@ func (s *Store) saveAttachments(tx *sql.Tx, id string, files []media.File) error
 	return err
 }
 
+// SaveSentFiles records files the owner sent from the dashboard.
 func (s *Store) SaveSentFiles(id, conv, text string, files []media.File) error {
+	return s.SaveSubmitted(id, conv, text, files, "web", true)
+}
+
+// SaveSubmitted records a message the dispatcher just submitted: its text, its
+// files, who sent it and who may see it, in one transaction. A reader never sees
+// the message without them; a later change to them would not reach a dashboard
+// that already showed it. A later delivered or read status is never downgraded.
+func (s *Store) SaveSubmitted(id, conv, text string, files []media.File, origin string, ownerOnly bool) error {
 	tx, err := s.DB.Begin()
 	if err != nil {
 		return err
@@ -77,11 +87,13 @@ func (s *Store) SaveSentFiles(id, conv, text string, files []media.File) error {
 	if err != nil {
 		return err
 	}
-	if _, err = tx.Exec("INSERT INTO message_meta VALUES(?,'web','submitted',1) ON CONFLICT(message) DO UPDATE SET origin='web',owner_only=1", id); err != nil {
+	if _, err = tx.Exec("INSERT INTO message_meta VALUES(?,?,'submitted',?) ON CONFLICT(message) DO UPDATE SET origin=excluded.origin,owner_only=excluded.owner_only,status=CASE WHEN message_meta.status IN ('read','delivered') THEN message_meta.status ELSE 'submitted' END", id, origin, ownerOnly); err != nil {
 		return err
 	}
-	if err = s.saveAttachments(tx, id, files); err != nil {
-		return err
+	if len(files) > 0 {
+		if err = s.saveAttachments(tx, id, files); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }
