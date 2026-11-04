@@ -20,6 +20,7 @@ type countedCaptureTransport struct {
 func (f *countedCaptureTransport) IdentityEpoch() uint64 { return f.epoch.Load() }
 
 func TestCaptureDuplicateAndChangedSnapshots(t *testing.T) {
+	t.Parallel()
 	e, f := setup(t)
 	settings := enableInbox(t, e)
 	var calls atomic.Int32
@@ -93,6 +94,7 @@ func TestCaptureDuplicateAndChangedSnapshots(t *testing.T) {
 }
 
 func TestCaptureFailedVerificationIsNotRemembered(t *testing.T) {
+	t.Parallel()
 	e, f := setup(t)
 	enableInbox(t, e)
 	calls := 0
@@ -115,6 +117,7 @@ func TestCaptureFailedVerificationIsNotRemembered(t *testing.T) {
 }
 
 func TestQueuedPreflightBackoffAndFreshness(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"recover", "stale", "pause"} {
 		t.Run(mode, func(t *testing.T) {
 			e, f := setup(t)

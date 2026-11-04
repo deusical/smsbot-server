@@ -11,6 +11,7 @@ import (
 )
 
 func TestCookieUpdateCLI(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	data, key := filepath.Join(root, "state"), filepath.Join(root, "master.key")
 	if err := vault.Initialize(key); err != nil {
@@ -60,6 +61,7 @@ func TestCookieUpdateCLI(t *testing.T) {
 }
 
 func TestCookieUpdateModeValidation(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		args []string
 		want string
@@ -77,7 +79,28 @@ func TestCookieUpdateModeValidation(t *testing.T) {
 }
 
 func TestVersionFlagPrintsWithoutState(t *testing.T) {
+	t.Parallel()
 	if err := runWithInput([]string{"--version"}, strings.NewReader("")); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestFixtureSpeedIsFixtureOnlyAndBounded(t *testing.T) {
+	t.Parallel()
+	for args, ok := range map[string]bool{
+		"--fixture":                     true,
+		"--fixture --fixture-speed=10":  true,
+		"--fixture --fixture-speed=100": true,
+		"--fixture --fixture-speed=0":   false,
+		"--fixture --fixture-speed=101": false,
+		"--fixture-speed=10":            false,
+	} {
+		o, err := parseOptions(append(strings.Fields(args), "--data", "d", "--key", "k"))
+		if err != nil {
+			t.Fatal(args, err)
+		}
+		if (o.validate() == nil) != ok {
+			t.Errorf("%s: valid=%t, want %t", args, !ok, ok)
+		}
 	}
 }

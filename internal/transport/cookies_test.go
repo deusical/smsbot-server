@@ -33,6 +33,7 @@ func cookieUpdateFixture(t *testing.T, plain string) (*Google, []byte) {
 }
 
 func TestUpdateCookiesPreservesPairingAndEncryptedEvidence(t *testing.T) {
+	t.Parallel()
 	for _, optional := range []bool{false, true} {
 		t.Run(map[bool]string{false: "optional-absent", true: "optional-present"}[optional], func(t *testing.T) {
 			g, original := cookieUpdateFixture(t, syntheticSession)
@@ -96,6 +97,7 @@ func TestUpdateCookiesPreservesPairingAndEncryptedEvidence(t *testing.T) {
 }
 
 func TestUpdateCookiesFailureLeavesSessionUntouched(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct{ name, plain, input string }{
 		{"invalid-input", syntheticSession, `{"SID":"fixture-sensitive"}`},
 		{"invalid-json", `fixture-sensitive`, syntheticCookies},

@@ -23,6 +23,7 @@ func (f *thumbnailTransport) DownloadFile(ctx context.Context, file media.File) 
 }
 
 func TestImageThumbnailDoesNotMasqueradeAsOriginalDownload(t *testing.T) {
+	t.Parallel()
 	e, fixture := setup(t)
 	enableInbox(t, e)
 	useTransport(e, &thumbnailTransport{fixture})
@@ -47,6 +48,7 @@ func syntheticUpload() []media.Upload {
 }
 
 func TestOwnerLimitsPersistAndCanBeUnlimited(t *testing.T) {
+	t.Parallel()
 	e, _ := setup(t)
 	s := enableInbox(t, e)
 	limits := media.Limits{}
@@ -84,6 +86,7 @@ func TestOwnerLimitsPersistAndCanBeUnlimited(t *testing.T) {
 }
 
 func TestFileOnlyCaptureNeverExecutesButACaptionedCommandDoes(t *testing.T) {
+	t.Parallel()
 	e, _ := setup(t)
 	enableInbox(t, e)
 	arm(t, e)
@@ -120,6 +123,7 @@ func TestFileOnlyCaptureNeverExecutesButACaptionedCommandDoes(t *testing.T) {
 }
 
 func TestFileComposeDurableIntentAndUncertainSubmission(t *testing.T) {
+	t.Parallel()
 	e, f := setup(t)
 	enableInbox(t, e)
 	e.Pause(false)
@@ -169,6 +173,7 @@ func (f *blockedFileTransport) PrepareFiles(ctx context.Context, files []media.F
 }
 
 func TestPauseAndConsentRevocationDuringUploadPreventSend(t *testing.T) {
+	t.Parallel()
 	for _, revoke := range []bool{false, true} {
 		t.Run(map[bool]string{false: "pause", true: "revoke"}[revoke], func(t *testing.T) {
 			e, fixture := setup(t)
@@ -215,6 +220,7 @@ func TestPauseAndConsentRevocationDuringUploadPreventSend(t *testing.T) {
 }
 
 func TestSentFilesRetainOriginalThroughPhoneEcho(t *testing.T) {
+	t.Parallel()
 	e, _ := setup(t)
 	enableInbox(t, e)
 	e.Pause(false)
@@ -257,6 +263,7 @@ func (f *failedReloadTransport) PrepareFiles(ctx context.Context, files []media.
 	return files, nil
 }
 func TestUploadJobReloadFailurePropagates(t *testing.T) {
+	t.Parallel()
 	e, fixture := setup(t)
 	enableInbox(t, e)
 	e.Pause(false)
@@ -273,6 +280,7 @@ func TestUploadJobReloadFailurePropagates(t *testing.T) {
 	}
 }
 func TestAttachmentReadsEnforceExpiryWithoutPruning(t *testing.T) {
+	t.Parallel()
 	e, _ := setup(t)
 	enableInbox(t, e)
 	files, _ := media.Prepare(syntheticUpload())
@@ -317,6 +325,7 @@ func (f *failingRepairTransport) RefreshFile(ctx context.Context, conv, id strin
 	return f.originalRepairTransport.RefreshFile(ctx, conv, id, at, file)
 }
 func TestLegacyRepairFailureBackoffAndRecovery(t *testing.T) {
+	t.Parallel()
 	e, f := setup(t)
 	enableInbox(t, e)
 	source := &failingRepairTransport{originalRepairTransport: &originalRepairTransport{f}, fail: true}
@@ -378,6 +387,7 @@ func (f *originalRepairTransport) DownloadFile(ctx context.Context, file media.F
 	return nil, errors.New("original_unavailable")
 }
 func TestLegacyInlinePreviewIsRepairedForOriginalDownload(t *testing.T) {
+	t.Parallel()
 	e, f := setup(t)
 	enableInbox(t, e)
 	useTransport(e, &originalRepairTransport{f})
@@ -397,6 +407,7 @@ func TestLegacyInlinePreviewIsRepairedForOriginalDownload(t *testing.T) {
 	}
 }
 func TestInlinePreviewNeverBecomesOriginal(t *testing.T) {
+	t.Parallel()
 	e, f := setup(t)
 	enableInbox(t, e)
 	useTransport(e, &thumbnailTransport{f})
@@ -421,6 +432,7 @@ func (f *originalRepairTransport) OpenFile(ctx context.Context, file media.File)
 	return nil, errors.New("original_unavailable")
 }
 func TestArchiveRepairsLegacyPreviewBeforeSavingOriginal(t *testing.T) {
+	t.Parallel()
 	e, f := setup(t)
 	enableInbox(t, e)
 	useTransport(e, &originalRepairTransport{f})

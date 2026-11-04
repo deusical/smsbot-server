@@ -37,6 +37,7 @@ func (h *catchUpHost) MissedSince(token uint64) (time.Time, uint64, bool) {
 }
 
 func TestOutageCatchUpScansOnlyConversationsActiveSinceIt(t *testing.T) {
+	t.Parallel()
 	v, _ := vault.New(make([]byte, 32))
 	s, err := store.Open(filepath.Join(t.TempDir(), "state.db"), v)
 	if err != nil {
@@ -87,6 +88,7 @@ func TestOutageCatchUpScansOnlyConversationsActiveSinceIt(t *testing.T) {
 }
 
 func TestCatchUpWindowSpansAWholePass(t *testing.T) {
+	t.Parallel()
 	v, _ := vault.New(make([]byte, 32))
 	s, err := store.Open(filepath.Join(t.TempDir(), "state.db"), v)
 	if err != nil {

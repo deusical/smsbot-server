@@ -1,5 +1,5 @@
-import {test, expect, type Page} from "@playwright/test";
-import {readFileSync} from "node:fs";
+import { test, expect, type Page, nextPoll, signIn } from "./fixtures";
+
 async function prepare(page: Page, fullInbox = true) {
   let archiveReads=0, mutations=0, checks=0;
   const record={conversation:{id:"demo-chat"},state:"running",since:"2026-07-16T07:00:00Z",imported:0,oldest:"",last_sync:"2026-10-16T12:00:00Z",error:""};
@@ -9,8 +9,7 @@ async function prepare(page: Page, fullInbox = true) {
   await page.route("**/api/v1/inbox/conversations/demo-chat/refresh",route=>{checks++;return route.fulfill({json:record});});
   await page.route("**/api/v1/inbox/conversations/demo-chat/sync",route=>{mutations++;const body=route.request().postDataJSON();record.since=body.since;record.state=body.cancel?"cancelled":"queued";return route.fulfill({json:record});});
   await page.route("**/api/v1/inbox/conversations/demo-chat/history?*",route=>route.fulfill({json:{messages:[{id:"synthetic-notice-message",direction:"incoming",text:"Synthetic saved message",attachments:[{id:"synthetic-file",name:"synthetic.pdf",mime:"application/pdf",size:100,archive_state:"pending"}],at:"2026-10-16T12:00:00Z"}],next_cursor:""}}));
-  const descriptor=JSON.parse(readFileSync(".test-state/connection.json","utf8"));
-  await page.goto("/");await page.getByLabel("Owner credential").fill(readFileSync(descriptor.owner,"utf8"));await page.getByRole("button",{name:"Sign in",exact:true}).click();
+  await signIn(page);
   const openThread=async()=>{
     await page.getByRole("button",{name:"Conversations",exact:true}).click();
     await page.locator(".conversation").filter({hasText:"Demo conversation"}).getByRole("button",{name:/Demo conversation/}).click();
@@ -24,6 +23,7 @@ test("conversation stays clear while automatic checks continue and Archive owns 
   await expect(page.getByRole("status",{name:"Background archive scope"})).toHaveCount(0);
   await expect(page.getByText("Sync details",{exact:true})).toHaveCount(0);
   await expect(page.getByRole("button",{name:"Archive conversation",exact:true})).toHaveCount(0);
+  await nextPoll(page);
   await expect.poll(app.checks).toBeGreaterThan(0);
   expect(app.reads()).toBe(0);
   await expect(page.locator(".attachment-info")).not.toContainText("Original:");
@@ -36,8 +36,9 @@ test("conversation stays clear while automatic checks continue and Archive owns 
   await expect(page.getByRole("status",{name:"Import progress"})).toContainText("All available history requested");
   expect(app.record.since).toBe("");expect(app.mutations()).toBe(1);
   app.record.error="history_fetch_failed";app.record.state="retrying";
+  await nextPoll(page);
   await expect(page.getByRole("alert")).toContainText("A history check failed");
-  const before=app.reads();await expect.poll(app.reads).toBeGreaterThan(before);
+  const before=app.reads();await nextPoll(page);await expect.poll(app.reads).toBeGreaterThan(before);
   await page.getByRole("button",{name:"Cancel history import",exact:true}).click();
   await expect(page.getByRole("status",{name:"Import progress"})).toContainText("Import cancelled");
   await page.screenshot({path:".test-state/archive-panel-desktop.png",fullPage:true});
@@ -100,7 +101,6 @@ test("enrolled text-history import remains available in Archive with collection 
   expect(calls).toBe(2);expect(app.mutations()).toBe(0);
 });
 
-
 test("storage breakdown and searchable long conversation names stay bounded",async({page})=>{
   const app=await prepare(page);
   const label="Synthetic long conversation " + "0123456789*".repeat(16);
@@ -124,7 +124,6 @@ test("storage breakdown and searchable long conversation names stay bounded",asy
   }
 });
 
-
 test("failed storage measurement stays explicit instead of showing zero",async({page})=>{
  await prepare(page);
  await page.route("**/api/v1/inbox/archive/stats",route=>route.fulfill({status:503,json:{error:"archive_stats_unavailable"}}));
@@ -132,7 +131,6 @@ test("failed storage measurement stays explicit instead of showing zero",async({
  await expect(page.getByLabel("Archive overview")).toContainText("Measurement unavailable; retrying");
  await expect(page.locator(".storage-stat strong")).not.toHaveText("0 B");
 });
-
 
 test("loading metrics stay readable, do not claim zero, and can be retried",async({page})=>{
  await prepare(page);
@@ -144,6 +142,7 @@ test("loading metrics stay readable, do not claim zero, and can be retried",asyn
  await expect(page.locator(".archive-stat strong")).toHaveText(["Loading","Loading","Loading","Loading"]);
  await expect(page.getByLabel("Archive overview")).not.toContainText("0 imports active");
  await expect(page.locator(".archive-page")).not.toContainText("0 history scans");
+ await nextPoll(page);
  await expect(page.getByRole("button",{name:"Retry archive loading"})).toBeVisible();
  await page.getByRole("button",{name:"Retry archive loading"}).click();
  await expect.poll(()=>calls).toBeGreaterThan(1);
@@ -154,7 +153,6 @@ test("loading metrics stay readable, do not claim zero, and can be retried",asyn
  await expect(page.getByText("No conversations archived yet.",{exact:false})).toBeVisible();
  await page.unrouteAll({behavior:"wait"});
 });
-
 
 test("Archive conversation starts a first archive and coalesces rapid clicks",async({page})=>{
  const app=await prepare(page);
@@ -175,6 +173,7 @@ test("Archive conversation starts a first archive and coalesces rapid clicks",as
  await button.click();await expect.poll(()=>calls).toBe(2);
  await expect(button).toBeEnabled();
  app.record.state="available_pages_exhausted";
+ await nextPoll(page);
  await expect(page.getByRole("status",{name:"Import progress"})).toContainText("All available pages checked");
  await button.click();await expect.poll(()=>calls).toBe(3);
  await expect(page.getByRole("status",{name:"Import progress"})).toContainText("All available history requested");

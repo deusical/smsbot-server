@@ -1,5 +1,6 @@
 import {test, type Page} from "@playwright/test";
 import {readFileSync} from "node:fs";
+import { connectionFile } from "./server";
 
 // Regenerates the documentation screenshots from synthetic data only:
 //   DOCS_SCREENSHOTS=1 npx playwright test tests/docs-screenshots.spec.ts
@@ -46,7 +47,7 @@ async function prepare(page: Page, options: {live?: boolean} = {}) {
   await page.route("**/api/v1/inbox/archive/stats", route => route.fulfill({json: {original_bytes: 31457280, original_files: 42, database_bytes: 5242880, export_bytes: 0, temporary_bytes: 0, total_bytes: 36700160, messages: 2260, quota_bytes: 10737418240, measured_at: minutes(0)}}));
   await page.route("**/api/v1/inbox/archive/files/policy", route => route.fulfill({json: {enabled: true, max_file_mb: 0, quota_mb: 10240}}));
   await page.route("**/api/v1/inbox/archive/backup", route => route.request().method() === "GET" ? route.fulfill({json: null}) : route.fulfill({json: null}));
-  const descriptor = JSON.parse(readFileSync(".test-state/connection.json", "utf8"));
+  const descriptor = JSON.parse(readFileSync(connectionFile, "utf8"));
   await page.goto("/");
   await page.getByLabel("Owner credential").fill(readFileSync(descriptor.owner, "utf8"));
   await page.getByRole("button", {name: "Sign in", exact: true}).click();

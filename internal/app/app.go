@@ -61,6 +61,22 @@ func New(s *store.Store, t transport.Transport, archiveRoot string) *Service {
 	return &Service{Store: s, Transport: t, Engine: e, Collection: c, History: c.History, Archive: c.Archive, Notify: notify.New(s, t, "")}
 }
 
+// Accelerate divides the background workers' polling intervals by factor. It is
+// for the offline fixture only, so browser tests do not wait on real-time loops;
+// a factor of 1 or less leaves them unchanged.
+func (a *Service) Accelerate(factor int) {
+	if factor <= 1 {
+		return
+	}
+	f := time.Duration(factor)
+	a.History.ActiveInterval = 3 * time.Second / f
+	a.Archive.Interval = 3 * time.Second / f
+	a.Collection.CaptureInterval = time.Second / f
+	a.Collection.GapRecheck = 3 * time.Second / f
+	a.Notify.Interval /= f
+	a.Engine.WorkerPollDelay = time.Second / f
+}
+
 // Init runs one-time startup work in order: collection publishes consent and
 // marks opted-in history for preservation before the legacy expiry pass can
 // delete it. Any failure stops startup.

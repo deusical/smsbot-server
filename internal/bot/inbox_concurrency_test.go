@@ -47,6 +47,7 @@ func assertPauseResponsive(t *testing.T, e *Engine) {
 }
 
 func TestSettingsValidationDoesNotBlockPauseOrOverwriteNewRevision(t *testing.T) {
+	t.Parallel()
 	e, f := setup(t)
 	entered := make(chan struct{})
 	release := make(chan struct{})
@@ -79,6 +80,7 @@ func TestSettingsValidationDoesNotBlockPauseOrOverwriteNewRevision(t *testing.T)
 	}
 }
 func TestSettingsValidationHasOneOverallDeadline(t *testing.T) {
+	t.Parallel()
 	e, f := setup(t)
 	var deadlines []time.Time
 	useTransport(e, &lookupTransport{f, func(ctx context.Context, id string) (transport.Conversation, error) {
@@ -102,6 +104,7 @@ func TestSettingsValidationHasOneOverallDeadline(t *testing.T) {
 	}
 }
 func TestAsyncCaptureReturnsBeforeLookupAndRechecksConsent(t *testing.T) {
+	t.Parallel()
 	e, f := setup(t)
 	s := enableInbox(t, e)
 	entered := make(chan struct{})
@@ -146,6 +149,7 @@ func TestAsyncCaptureReturnsBeforeLookupAndRechecksConsent(t *testing.T) {
 	}
 }
 func TestCaptureFailureReportsGapWithoutPausingAutomation(t *testing.T) {
+	t.Parallel()
 	e, f := setup(t)
 	enableInbox(t, e)
 	e.Pause(false)
@@ -186,6 +190,7 @@ func (f *slowHistoryTransport) FetchHistory(ctx context.Context, conv, peer, cur
 	}
 }
 func TestHistoryFetchDoesNotBlockPauseAndRechecksRevocation(t *testing.T) {
+	t.Parallel()
 	e, f := setup(t)
 	s := enableInbox(t, e)
 	source := &slowHistoryTransport{f, make(chan struct{}), make(chan struct{})}
@@ -208,6 +213,7 @@ func TestHistoryFetchDoesNotBlockPauseAndRechecksRevocation(t *testing.T) {
 	}
 }
 func TestComposeRetrySurvivesPauseAndRejectsChangedPayload(t *testing.T) {
+	t.Parallel()
 	e, _ := setup(t)
 	enableInbox(t, e)
 	e.Pause(false)
@@ -229,6 +235,7 @@ func TestComposeRetrySurvivesPauseAndRejectsChangedPayload(t *testing.T) {
 	}
 }
 func TestDelayedReceiptAdvancesChatStatusWithoutDowngrade(t *testing.T) {
+	t.Parallel()
 	e, _ := setup(t)
 	enableInbox(t, e)
 	e.Pause(false)
@@ -260,6 +267,7 @@ func (f *sentHistoryTransport) FetchHistory(ctx context.Context, conv, peer, cur
 	return transport.HistoryPage{Messages: []transport.HistoricalMessage{{ID: "synthetic-sent-upstream", TransactionID: f.txn, Direction: "outgoing", Text: "Synthetic sent reply", At: time.Now(), Status: "delivered"}}}, nil
 }
 func TestLegacySendThenRepeatedHistoryImportHasOneRowAndOneSend(t *testing.T) {
+	t.Parallel()
 	e, f := setup(t)
 	e.Store.Enroll("demo-chat", "demo-peer")
 	e.Pause(false)
@@ -299,6 +307,7 @@ func (f *earlyEchoTransport) Send(ctx context.Context, conv, txn, text string) (
 	return f.Fixture.Send(ctx, conv, txn, text)
 }
 func TestEarlyEchoStatusSurvivesSubmissionPersistence(t *testing.T) {
+	t.Parallel()
 	e, f := setup(t)
 	enableInbox(t, e)
 	useTransport(e, &earlyEchoTransport{f, e.Store})

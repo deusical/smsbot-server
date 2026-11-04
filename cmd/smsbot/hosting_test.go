@@ -3,6 +3,7 @@ package main
 import "testing"
 
 func TestValidateHosting(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		listen, origin, cert, key, want string
 		valid                           bool
@@ -32,6 +33,7 @@ func TestValidateHosting(t *testing.T) {
 	}
 }
 func TestValidateHostingRejectsAmbiguousOrigin(t *testing.T) {
+	t.Parallel()
 	for _, origin := range []string{"https://fixture.example/", "https://fixture.example?", "https://fixture.example#fragment", "https://user@fixture.example", "https://fixture.example:0", "https://fixture.example:70000", "https://fixture.example:", "https://0.0.0.0", "https://bad_name.example", "https://fixture.example/../../", "https://[fe80::1%25eth0]"} {
 		if _, e := ValidateHosting("127.0.0.1:8787", origin, "", ""); e == nil {
 			t.Fatalf("accepted %q", origin)

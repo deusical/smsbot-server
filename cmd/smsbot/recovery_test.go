@@ -2,6 +2,7 @@ package main
 
 import (
 	"github.com/deusical/smsbot-server/internal/media"
+	"github.com/deusical/smsbot-server/internal/racetest"
 	"github.com/deusical/smsbot-server/internal/store"
 	"github.com/deusical/smsbot-server/internal/vault"
 	"os"
@@ -11,6 +12,8 @@ import (
 )
 
 func TestOfflineCLIBackupRestoreWithOriginalKeyAndNewOwner(t *testing.T) {
+	t.Parallel()
+	racetest.SkipHeavy(t)
 	root := t.TempDir()
 	key := filepath.Join(root, "master.key")
 	source := filepath.Join(root, "source")

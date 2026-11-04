@@ -39,6 +39,7 @@ func zipOf(t *testing.T, parts map[string]string) []byte {
 const wordNS = `xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"`
 
 func TestClassifyKindsFromTypeAndName(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct{ mime, name, kind string }{
 		{"image/jpeg", "", kindImage},
 		{"image/heic", "", kindImage},
@@ -68,6 +69,7 @@ func TestClassifyKindsFromTypeAndName(t *testing.T) {
 }
 
 func TestDocumentsAreReadAsText(t *testing.T) {
+	t.Parallel()
 	docx := zipOf(t, map[string]string{"word/document.xml": `<w:document ` + wordNS + `><w:body>
 		<w:p><w:pPr><w:tabs><w:tab w:val="left"/></w:tabs></w:pPr><w:r><w:t>First</w:t></w:r><w:r><w:t xml:space="preserve"> line</w:t></w:r></w:p>
 		<w:p><w:r><w:t>Second</w:t><w:tab/><w:t>cell</w:t></w:r></w:p>
@@ -116,6 +118,7 @@ func TestDocumentsAreReadAsText(t *testing.T) {
 }
 
 func TestDocumentsCannotExpandWithoutLimit(t *testing.T) {
+	t.Parallel()
 	big := strings.Repeat("a", unzipLimit+1)
 	data := zipOf(t, map[string]string{"word/document.xml": "<w:document " + wordNS + "><w:t>" + big + "</w:t></w:document>"})
 	if len(data) > 1<<20 {
@@ -127,6 +130,7 @@ func TestDocumentsCannotExpandWithoutLimit(t *testing.T) {
 }
 
 func TestPlainTextEncodings(t *testing.T) {
+	t.Parallel()
 	utf16le := append([]byte{0xFF, 0xFE}, []byte{'h', 0, 'i', 0, ' ', 0, 0x3D, 0xD8, 0x00, 0xDE}...)
 	for name, tc := range map[string]struct {
 		in   []byte
@@ -148,6 +152,7 @@ func TestPlainTextEncodings(t *testing.T) {
 }
 
 func TestEachKindIsSentTheWayProvidersExpectIt(t *testing.T) {
+	t.Parallel()
 	plan := store.Plan{Input: "What is this?", Instructions: "x"}
 	last := func(file *Attachment) map[string]any {
 		t.Helper()
@@ -189,6 +194,7 @@ func TestEachKindIsSentTheWayProvidersExpectIt(t *testing.T) {
 }
 
 func TestOnlyFilesThatCannotBeSentAreRefused(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		file store.FileRef
@@ -230,6 +236,7 @@ func withFile(t *testing.T, e *Engine, m transport.Incoming, name, mime string, 
 }
 
 func TestAskAboutAFileReachesTheModel(t *testing.T) {
+	t.Parallel()
 	notes := []byte("Remember the milk")
 	pdf := []byte("%PDF-1.4 synthetic")
 	docx := zipOf(t, map[string]string{"word/document.xml": `<w:document ` + wordNS + `><w:p><w:r><w:t>From the document</w:t></w:r></w:p></w:document>`})
@@ -285,6 +292,7 @@ func TestAskAboutAFileReachesTheModel(t *testing.T) {
 }
 
 func TestAnUnreadableFileIsExplained(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, mime string
 		data       []byte
@@ -319,6 +327,7 @@ func TestAnUnreadableFileIsExplained(t *testing.T) {
 }
 
 func TestLongTextIsCutOff(t *testing.T) {
+	t.Parallel()
 	e, _ := setup(t)
 	enableInbox(t, e)
 	arm(t, e)
@@ -347,6 +356,7 @@ func (p *refusingProvider) Generate(ctx context.Context, key string, plan store.
 }
 
 func TestAFileTheProviderRefusesIsReportedInTheChat(t *testing.T) {
+	t.Parallel()
 	e, fixture := setup(t)
 	enableInbox(t, e)
 	arm(t, e)
@@ -378,6 +388,7 @@ func TestAFileTheProviderRefusesIsReportedInTheChat(t *testing.T) {
 }
 
 func TestOnlyARefusalIsTakenForAFileProblem(t *testing.T) {
+	t.Parallel()
 	for code, want := range map[string]bool{"provider_http_400": true, "provider_http_413": true, "provider_http_429": false, "provider_http_500": false, "provider_connection_failed": false} {
 		if got := providerRefused(errors.New(code)); got != want {
 			t.Errorf("%s: %t", code, got)
@@ -386,6 +397,7 @@ func TestOnlyARefusalIsTakenForAFileProblem(t *testing.T) {
 }
 
 func TestCompatibleEndpointTriesAPdfAsAFileThenAsAnImage(t *testing.T) {
+	t.Parallel()
 	var kinds []string
 	accept := ""
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -84,6 +84,7 @@ func incoming(t *testing.T, s *store.Store, id, conv, text string, at time.Time)
 }
 
 func TestMessagesFollowEachDevicesOwnSettings(t *testing.T) {
+	t.Parallel()
 	n, _, out, now := setup(t)
 	all := store.DefaultNotificationPrefs()
 	botOn := store.DefaultNotificationPrefs()
@@ -146,6 +147,7 @@ func TestMessagesFollowEachDevicesOwnSettings(t *testing.T) {
 }
 
 func TestAlertsAndOutagesRespectDeviceSettings(t *testing.T) {
+	t.Parallel()
 	n, tr, out, now := setup(t)
 	quiet := store.DefaultNotificationPrefs()
 	quiet.Approvals, quiet.Problems, quiet.Connection = false, false, false
@@ -194,6 +196,7 @@ func TestAlertsAndOutagesRespectDeviceSettings(t *testing.T) {
 }
 
 func TestGoneDevicesAreForgotten(t *testing.T) {
+	t.Parallel()
 	n, _, _, now := setup(t)
 	device(t, n.Store, "gone", store.DefaultNotificationPrefs())
 	n.Tick(context.Background())
@@ -205,6 +208,7 @@ func TestGoneDevicesAreForgotten(t *testing.T) {
 }
 
 func TestRegisteringAgainKeepsSettings(t *testing.T) {
+	t.Parallel()
 	n, _, _, _ := setup(t)
 	prefs := store.DefaultNotificationPrefs()
 	prefs.Messages = "off"
@@ -216,6 +220,7 @@ func TestRegisteringAgainKeepsSettings(t *testing.T) {
 }
 
 func TestEndpointValidation(t *testing.T) {
+	t.Parallel()
 	for raw, ok := range map[string]bool{
 		"https://fcm.googleapis.com/fcm/send/abc":   true,
 		"https://updates.push.services.mozilla.com": true,
@@ -240,6 +245,7 @@ func TestEndpointValidation(t *testing.T) {
 // A public-looking name can still resolve to a local address; the push
 // client refuses such destinations when it connects.
 func TestPushClientRefusesNonPublicAddresses(t *testing.T) {
+	t.Parallel()
 	for addr, ok := range map[string]bool{
 		"142.250.80.10":    true,
 		"2607:f8b0::200e":  true,
@@ -265,6 +271,7 @@ func TestPushClientRefusesNonPublicAddresses(t *testing.T) {
 }
 
 func TestUnreadableMessageDoesNotStopLaterNotifications(t *testing.T) {
+	t.Parallel()
 	n, _, out, now := setup(t)
 	device(t, n.Store, "all", store.DefaultNotificationPrefs())
 	n.Tick(context.Background())
@@ -281,6 +288,7 @@ func TestUnreadableMessageDoesNotStopLaterNotifications(t *testing.T) {
 }
 
 func TestAlertsNameAnUnknownConversationPlainly(t *testing.T) {
+	t.Parallel()
 	n, _, out, _ := setup(t)
 	device(t, n.Store, "alerts", store.DefaultNotificationPrefs())
 	n.Tick(context.Background())

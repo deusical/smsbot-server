@@ -13,6 +13,7 @@ import (
 )
 
 func TestInteractionOwnerAPIAndReplyCompatibility(t *testing.T) {
+	t.Parallel()
 	s := apiSetup(t)
 	ctx := context.Background()
 	cfg, _ := s.Collection.Settings()

@@ -41,6 +41,7 @@ func decodeSize(t *testing.T, data []byte) (int, int) {
 }
 
 func TestShrinkScalesDownAndKeepsSmallImages(t *testing.T) {
+	t.Parallel()
 	noise := image.NewRGBA(image.Rect(0, 0, 3000, 1500))
 	rand.New(rand.NewSource(1)).Read(noise.Pix)
 	var big bytes.Buffer
@@ -67,6 +68,7 @@ func TestShrinkScalesDownAndKeepsSmallImages(t *testing.T) {
 }
 
 func TestShrinkAppliesRotationTags(t *testing.T) {
+	t.Parallel()
 	// Left half red, right half blue.
 	src := image.NewRGBA(image.Rect(0, 0, 40, 20))
 	for y := 0; y < 20; y++ {
@@ -103,6 +105,7 @@ func TestShrinkAppliesRotationTags(t *testing.T) {
 }
 
 func TestShrinkCompositesTransparencyOnWhiteAndRefusesNonImages(t *testing.T) {
+	t.Parallel()
 	clear := image.NewNRGBA(image.Rect(0, 0, 8, 8))
 	var b bytes.Buffer
 	if err := png.Encode(&b, clear); err != nil {
@@ -124,6 +127,7 @@ func TestShrinkCompositesTransparencyOnWhiteAndRefusesNonImages(t *testing.T) {
 }
 
 func TestAHEICPhotoIsReadAndReturnedAsAJPEG(t *testing.T) {
+	t.Parallel()
 	data, err := os.ReadFile("testdata/sample.heic")
 	if err != nil {
 		t.Fatal(err)

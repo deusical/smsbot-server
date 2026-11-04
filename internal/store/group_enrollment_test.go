@@ -6,6 +6,7 @@ import (
 )
 
 func TestGroupEnrollmentRules(t *testing.T) {
+	t.Parallel()
 	s := newCheckpointStore(t)
 	const roster, other = "group:r1", "group:r2"
 	for name, args := range map[string][3]string{"no conversation": {"", "a", roster}, "no member": {"g", "", roster}, "not a roster": {"g", "a", "demo-peer"}} {
@@ -52,6 +53,7 @@ func TestGroupEnrollmentRules(t *testing.T) {
 }
 
 func TestGroupEnrollmentSurvivesABackup(t *testing.T) {
+	t.Parallel()
 	source := newCheckpointStore(t)
 	if err := source.EnrollMember("g", "a", "group:r1"); err != nil {
 		t.Fatal(err)

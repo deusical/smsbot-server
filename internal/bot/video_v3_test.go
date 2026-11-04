@@ -96,6 +96,7 @@ func runVideoCommand(t *testing.T, worker *fakeWorker) (*Engine, string, []strin
 }
 
 func TestVideoProtocolV3DownloadsThenCompresses(t *testing.T) {
+	t.Parallel()
 	worker := &fakeWorker{t: t, capabilities: `{"protocol":2,"protocols":[1,2,3]}`}
 	e, id, warnings := runVideoCommand(t, worker)
 	if got := stateOf(t, e, id); got != "submitted" || len(warnings) != 0 {
@@ -118,6 +119,7 @@ func TestVideoProtocolV3DownloadsThenCompresses(t *testing.T) {
 }
 
 func TestVideoWithoutProtocolV3RunsOneCombinedJob(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct{ name, capabilities, want string }{
 		{"v2", `{"protocol":2}`, "download_worker_v3_unavailable_using_v2"},
 		{"v1", "", "download_worker_v3_unavailable_using_v2,download_worker_outdated_using_defaults"},
@@ -147,6 +149,7 @@ func TestVideoWithoutProtocolV3RunsOneCombinedJob(t *testing.T) {
 
 // A saved pipeline that pinned the combined video.download@1 keeps working.
 func TestCombinedVideoStepUpgrades(t *testing.T) {
+	t.Parallel()
 	p := Pipeline{Steps: []PipelineStep{
 		step("link", "text.extract_url", map[string]string{"text": "trigger.args"}, ""),
 		{ID: "video", Module: "video.download", Version: 1, Inputs: map[string]string{"url": "link.url"}, Settings: json.RawMessage(`{"preset":"fast"}`)},
@@ -187,6 +190,7 @@ func TestCombinedVideoStepUpgrades(t *testing.T) {
 // An AI answer with no link ends the command with how to use it, without
 // asking the worker.
 func TestMissingLinkAtDispatchRepliesWithoutDownloading(t *testing.T) {
+	t.Parallel()
 	e, fixture := setup(t)
 	arm(t, e)
 	c := configureAI(t, e, false, false)

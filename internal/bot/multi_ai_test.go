@@ -65,6 +65,7 @@ func runChain(t *testing.T, e *Engine, id, args string) string {
 }
 
 func TestSeveralAIStepsRunInOrderAndEachIsAccounted(t *testing.T) {
+	t.Parallel()
 	e, fixture := setup(t)
 	arm(t, e)
 	c := configureAI(t, e, false, false)
@@ -132,6 +133,7 @@ func TestSeveralAIStepsRunInOrderAndEachIsAccounted(t *testing.T) {
 // The daily budget is checked before every request, including the requests
 // earlier steps of the same job already made.
 func TestTheBudgetStopsALaterAIStep(t *testing.T) {
+	t.Parallel()
 	e, fixture := setup(t)
 	arm(t, e)
 	c := configureAI(t, e, false, false)
@@ -153,6 +155,7 @@ func TestTheBudgetStopsALaterAIStep(t *testing.T) {
 // With a conversation on the second AI step, only that step reads and
 // records the conversation; the first stays a plain request.
 func TestOnlyTheConversationStepIsTheTurn(t *testing.T) {
+	t.Parallel()
 	e, _ := setup(t)
 	arm(t, e)
 	c := configureAI(t, e, false, false)
@@ -200,6 +203,7 @@ func threadThenTranslate() Command {
 }
 
 func TestAThreadWithALaterAIStepRemembersWhatWasSent(t *testing.T) {
+	t.Parallel()
 	e, fixture := setup(t)
 	arm(t, e)
 	c := configureAI(t, e, true, false)
@@ -233,6 +237,7 @@ func TestAThreadWithALaterAIStepRemembersWhatWasSent(t *testing.T) {
 // In a group sharing one conversation, only the conversation step says who
 // asked; a translating step gets the bare text.
 func TestTheAskerLabelStaysOnTheConversationStep(t *testing.T) {
+	t.Parallel()
 	e, _, roster := botGroup(t)
 	c := configureAI(t, e, true, false)
 	c.Commands = append(c.Commands, chainCommand(true))

@@ -3,6 +3,7 @@ package media
 import "testing"
 
 func TestUnlimitedAndIndependentAttachmentLimits(t *testing.T) {
+	t.Parallel()
 	data := make([]byte, 11<<20)
 	uploads := []Upload{{Name: "large-a.bin", Data: data}, {Name: "large-b.bin", Data: data}, {Data: []byte{1}}, {Data: []byte{2}}, {Data: []byte{3}}}
 	files, err := PrepareWithLimits(uploads, Limits{})
@@ -25,6 +26,7 @@ func TestUnlimitedAndIndependentAttachmentLimits(t *testing.T) {
 }
 
 func TestUploadLimitsAndIntentBindsBytes(t *testing.T) {
+	t.Parallel()
 	for _, uploads := range [][]Upload{
 		{{Name: "empty"}},
 		{{Name: "too-large", Data: make([]byte, MaxFileBytes+1)}},
@@ -46,6 +48,7 @@ func TestUploadLimitsAndIntentBindsBytes(t *testing.T) {
 }
 
 func TestUnlimitedFileIDsDoNotWrapAfter256Files(t *testing.T) {
+	t.Parallel()
 	uploads := make([]Upload, 257)
 	for i := range uploads {
 		uploads[i] = Upload{Name: "synthetic.txt", Data: []byte("Synthetic identical bytes")}

@@ -10,6 +10,7 @@ import (
 )
 
 func TestCaptureGapDetailsAreCookieOwnerOnlyAndHideCheckpoints(t *testing.T) {
+	t.Parallel()
 	s := apiSetup(t)
 	if err := s.Store.SaveCaptureGap(store.CaptureGap{Conversation: "synthetic-private-conversation", Since: "2026-10-16T12:00:00Z", Until: "2026-10-16T12:01:00Z", Reason: "capture_delayed", State: "queued", Cursor: "synthetic-private-cursor", Generation: 7}); err != nil {
 		t.Fatal(err)

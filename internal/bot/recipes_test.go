@@ -3,6 +3,7 @@ package bot
 import "testing"
 
 func TestRecipeImportRejectsForeignFormatsSecretsAndUnknownFields(t *testing.T) {
+	t.Parallel()
 	for _, raw := range []string{
 		`{"format":"smsbot.commands","version":1,"commands":[]}`,
 		`{"commands":[],"key":"SYNTHETIC_KEY"}`,

@@ -71,6 +71,7 @@ func stateOf(t *testing.T, e *Engine, id string) string {
 	return state
 }
 func TestFixtureAIRequiresNoKeyAndIsOffline(t *testing.T) {
+	t.Parallel()
 	e, f := setup(t)
 	arm(t, e)
 	c := DefaultConfiguration()
@@ -91,6 +92,7 @@ func TestFixtureAIRequiresNoKeyAndIsOffline(t *testing.T) {
 	}
 }
 func TestQueueSnapshotsGenerationAndContext(t *testing.T) {
+	t.Parallel()
 	e, _ := setup(t)
 	arm(t, e)
 	c := configureAI(t, e, true, false)
@@ -122,6 +124,7 @@ func TestQueueSnapshotsGenerationAndContext(t *testing.T) {
 	}
 }
 func TestPauseCancelsGenerationWithoutWaiting(t *testing.T) {
+	t.Parallel()
 	e, f := setup(t)
 	arm(t, e)
 	configureAI(t, e, false, false)
@@ -158,6 +161,7 @@ func TestPauseCancelsGenerationWithoutWaiting(t *testing.T) {
 	}
 }
 func TestMemoryResetDuringGenerationCannotRestoreContext(t *testing.T) {
+	t.Parallel()
 	e, _ := setup(t)
 	arm(t, e)
 	configureAI(t, e, true, false)
@@ -186,6 +190,7 @@ func TestMemoryResetDuringGenerationCannotRestoreContext(t *testing.T) {
 	}
 }
 func TestNewApprovalAfterGenerationDoesNotRegenerate(t *testing.T) {
+	t.Parallel()
 	e, f := setup(t)
 	arm(t, e)
 	c := configureAI(t, e, false, false)
@@ -218,6 +223,7 @@ func TestNewApprovalAfterGenerationDoesNotRegenerate(t *testing.T) {
 	}
 }
 func TestUnknownCostBlocksNextAIRequest(t *testing.T) {
+	t.Parallel()
 	e, f := setup(t)
 	arm(t, e)
 	configureAI(t, e, false, false)
@@ -241,6 +247,7 @@ func TestUnknownCostBlocksNextAIRequest(t *testing.T) {
 	}
 }
 func TestApprovalExpiryAndRecipePreview(t *testing.T) {
+	t.Parallel()
 	e, f := setup(t)
 	arm(t, e)
 	configureAI(t, e, false, true)
@@ -270,6 +277,7 @@ func TestApprovalExpiryAndRecipePreview(t *testing.T) {
 	}
 }
 func TestConsentRemovalInvalidatesQueuedContext(t *testing.T) {
+	t.Parallel()
 	e, _ := setup(t)
 	arm(t, e)
 	c := configureAI(t, e, true, false)
@@ -289,6 +297,7 @@ func TestConsentRemovalInvalidatesQueuedContext(t *testing.T) {
 	}
 }
 func TestDispatchBoundsProviderCallContext(t *testing.T) {
+	t.Parallel()
 	e, _ := setup(t)
 	arm(t, e)
 	zero := 0.0
@@ -306,6 +315,7 @@ func TestDispatchBoundsProviderCallContext(t *testing.T) {
 }
 
 func TestProviderFailureNeverSubmits(t *testing.T) {
+	t.Parallel()
 	e, f := setup(t)
 	arm(t, e)
 	configureAI(t, e, false, false)

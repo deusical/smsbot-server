@@ -12,6 +12,7 @@ import (
 )
 
 func TestVerifiedRecoverySingleFlightAndFreshness(t *testing.T) {
+	t.Parallel()
 	g := NewGoogle(nil, "")
 	g.ready.Store(true)
 	g.started = time.Now().Add(-time.Hour)
@@ -60,6 +61,7 @@ func TestVerifiedRecoverySingleFlightAndFreshness(t *testing.T) {
 	}
 }
 func TestStaleRecoveryCannotOverrideNewFailure(t *testing.T) {
+	t.Parallel()
 	for _, hard := range []bool{false, true} {
 		g := NewGoogle(nil, "")
 		g.noteFailure("reconnecting", false)
@@ -72,6 +74,7 @@ func TestStaleRecoveryCannotOverrideNewFailure(t *testing.T) {
 	}
 }
 func TestRecoveryBackoffAndHardBlockers(t *testing.T) {
+	t.Parallel()
 	for _, err := range []error{errors.New("synthetic transient"), events.ErrInvalidCredentials, errRecoveryStorage} {
 		g := NewGoogle(nil, "")
 		g.noteFailure("reconnecting", false)
@@ -97,6 +100,7 @@ func TestRecoveryBackoffAndHardBlockers(t *testing.T) {
 	}
 }
 func TestRunRecoveryKeepsIntentAndRejectsGapCommands(t *testing.T) {
+	t.Parallel()
 	g := NewGoogle(nil, "")
 	g.ready.Store(true)
 	g.started = time.Now().Add(-time.Hour)
@@ -126,6 +130,7 @@ func TestRunRecoveryKeepsIntentAndRejectsGapCommands(t *testing.T) {
 	}
 }
 func TestRecoveryProbeStopsOnShutdown(t *testing.T) {
+	t.Parallel()
 	g := NewGoogle(nil, "")
 	exited := make(chan struct{})
 	g.recoveryProbe = func(ctx context.Context) error { <-ctx.Done(); close(exited); return ctx.Err() }
@@ -141,6 +146,7 @@ func TestRecoveryProbeStopsOnShutdown(t *testing.T) {
 }
 
 func TestCredentialFailuresUseCodesAndRemainBlocked(t *testing.T) {
+	t.Parallel()
 	for _, code := range []int64{7, 16} {
 		err := events.RequestError{Data: &gmproto.ErrorResponse{Type: code, Message: "synthetic variant"}}
 		if !credentialError(err) {
@@ -161,6 +167,7 @@ func TestCredentialFailuresUseCodesAndRemainBlocked(t *testing.T) {
 }
 
 func TestRecoveryFreshnessStartsAfterIdentityInvalidation(t *testing.T) {
+	t.Parallel()
 	g := NewGoogle(nil, "")
 	g.noteFailure("reconnecting", false)
 	_, _, epoch := g.failureSnapshot()
@@ -177,6 +184,7 @@ func TestRecoveryFreshnessStartsAfterIdentityInvalidation(t *testing.T) {
 }
 
 func TestNewTransientEventCannotHideProbeStorageFailure(t *testing.T) {
+	t.Parallel()
 	g := NewGoogle(nil, "")
 	g.noteFailure("reconnecting", false)
 	_, _, epoch := g.failureSnapshot()

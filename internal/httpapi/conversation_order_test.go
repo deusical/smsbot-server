@@ -3,6 +3,7 @@ package httpapi
 import "testing"
 
 func TestNewestTimePrefersLaterValidTimestamp(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ a, b, want string }{
 		{"2026-10-16T12:00:00Z", "2026-10-16T12:05:00.000000000Z", "2026-10-16T12:05:00Z"},
 		{"2026-10-16T12:05:00Z", "2026-10-16T12:00:00.000000000Z", "2026-10-16T12:05:00Z"},

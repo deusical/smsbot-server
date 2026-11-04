@@ -12,6 +12,7 @@ func planArchive(id string) store.Archive {
 }
 
 func TestPendingWorkDefinesSelectionAndWake(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	later := now.Add(time.Minute).UTC().Format(time.RFC3339Nano)
 	idle := planArchive("idle")
@@ -44,6 +45,7 @@ func TestPendingWorkDefinesSelectionAndWake(t *testing.T) {
 }
 
 func TestSelectPriorityPrefersRecentFocusAndOldestAttempt(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	view := func(id, focus string) store.Archive {
 		a := planArchive(id)
@@ -66,6 +68,7 @@ func TestSelectPriorityPrefersRecentFocusAndOldestAttempt(t *testing.T) {
 }
 
 func TestRotateWrapsAfterCursor(t *testing.T) {
+	t.Parallel()
 	sorted := []store.Archive{planArchive("a"), planArchive("b"), planArchive("c")}
 	any := func(store.Archive) bool { return true }
 	if a, ok := rotate(sorted, "b", any); !ok || a.Conversation.ID != "c" {

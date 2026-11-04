@@ -22,6 +22,7 @@ func enableInbox(t *testing.T, e *Engine) collection.Settings {
 	return s
 }
 func TestInboxCapturesWhilePausedWithoutExecuting(t *testing.T) {
+	t.Parallel()
 	e, _ := setup(t)
 	enableInbox(t, e)
 	m := incoming()
@@ -51,6 +52,7 @@ func TestInboxCapturesWhilePausedWithoutExecuting(t *testing.T) {
 	}
 }
 func TestInboxSelectedIdentityAndDisableBoundaries(t *testing.T) {
+	t.Parallel()
 	e, _ := setup(t)
 	s, _ := e.Collection.Settings()
 	s.Enabled = true
@@ -80,6 +82,7 @@ func TestInboxSelectedIdentityAndDisableBoundaries(t *testing.T) {
 	}
 }
 func TestInboxManualSendDeduplicatesAndRechecksRevocation(t *testing.T) {
+	t.Parallel()
 	e, f := setup(t)
 	s := enableInbox(t, e)
 	s.AutomaticReplies = false
@@ -113,6 +116,7 @@ func TestInboxManualSendDeduplicatesAndRechecksRevocation(t *testing.T) {
 	}
 }
 func TestInboxHistoryNeverExecutesAndSettingIsIndependent(t *testing.T) {
+	t.Parallel()
 	e, _ := setup(t)
 	s := enableInbox(t, e)
 	e.Pause(false)
@@ -134,6 +138,7 @@ func TestInboxHistoryNeverExecutesAndSettingIsIndependent(t *testing.T) {
 	}
 }
 func TestInboxConcurrentSettingsSaveRejectsStaleRevision(t *testing.T) {
+	t.Parallel()
 	e, _ := setup(t)
 	s, _ := e.Collection.Settings()
 	s.AutomaticReplies = false
@@ -156,6 +161,7 @@ func TestInboxConcurrentSettingsSaveRejectsStaleRevision(t *testing.T) {
 	}
 }
 func TestOutgoingObservationDeduplicatesEchoAndHistory(t *testing.T) {
+	t.Parallel()
 	e, _ := setup(t)
 	enableInbox(t, e)
 	m := incoming()

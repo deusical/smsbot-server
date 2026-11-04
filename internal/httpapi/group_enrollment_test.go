@@ -18,6 +18,7 @@ func demoRoster(t *testing.T, s *Server) string {
 }
 
 func TestGroupEnrollmentNeedsARealMemberAndTheRosterTheOwnerSaw(t *testing.T) {
+	t.Parallel()
 	s := apiSetup(t)
 	roster := demoRoster(t, s)
 	post := func(body string) int { return req(s, "POST", "/api/v1/enrollment", body, "fixture-client", "").Code }
@@ -43,6 +44,7 @@ func TestGroupEnrollmentNeedsARealMemberAndTheRosterTheOwnerSaw(t *testing.T) {
 }
 
 func TestGroupApprovalAndRemovingOneMember(t *testing.T) {
+	t.Parallel()
 	s := apiSetup(t)
 	fixture := s.Transport.(*transport.Fixture)
 	roster := demoRoster(t, s)
@@ -92,6 +94,7 @@ func TestGroupApprovalAndRemovingOneMember(t *testing.T) {
 }
 
 func TestAGroupSharesOneAIConversationOnlyWhenTheOwnerSwitchesItOn(t *testing.T) {
+	t.Parallel()
 	s := apiSetup(t)
 	put := func(id, body string) int {
 		return req(s, "PUT", "/api/v1/enrollment/"+id+"/shared", body, "fixture-client", "").Code

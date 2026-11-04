@@ -13,6 +13,7 @@ import (
 )
 
 func TestConfigurationRecipeAndOfflineExecutionAPI(t *testing.T) {
+	t.Parallel()
 	s := apiSetup(t)
 	c := bot.DefaultConfiguration()
 	c.Commands = []bot.Command{{Name: "sample", Type: "fixed", Enabled: true, Instructions: "Synthetic {input}"}}
@@ -48,6 +49,7 @@ func TestConfigurationRecipeAndOfflineExecutionAPI(t *testing.T) {
 	}
 }
 func TestProviderKeyOwnerOnlyAndNoReadback(t *testing.T) {
+	t.Parallel()
 	s := apiSetup(t)
 	login := req(s, "POST", "/api/v1/login", `{"token":"fixture-owner"}`, "", "http://localhost:8787")
 	cookie := login.Result().Cookies()[0]
@@ -72,6 +74,7 @@ func TestProviderKeyOwnerOnlyAndNoReadback(t *testing.T) {
 	}
 }
 func TestCompatibleProviderConfigurationIsOwnerOnlyAndNeverReturnsKey(t *testing.T) {
+	t.Parallel()
 	s := apiSetup(t)
 	login := req(s, "POST", "/api/v1/login", `{"token":"fixture-owner"}`, "", "http://localhost:8787")
 	cookie := login.Result().Cookies()[0]
@@ -100,6 +103,7 @@ func TestCompatibleProviderConfigurationIsOwnerOnlyAndNeverReturnsKey(t *testing
 	}
 }
 func TestHistoryImportNeverCreatesJobs(t *testing.T) {
+	t.Parallel()
 	s := apiSetup(t)
 	if req(s, "POST", "/api/v1/conversations/demo-chat/history/import", `{"cursor":""}`, "fixture-client", "").Code != 409 {
 		t.Fatal("unenrolled history imported")
@@ -123,6 +127,7 @@ func TestHistoryImportNeverCreatesJobs(t *testing.T) {
 	}
 }
 func TestNativeJSONMediaTypeSupportsUTF8Charset(t *testing.T) {
+	t.Parallel()
 	s := apiSetup(t)
 	for _, contentType := range []string{"application/json; charset=utf-8", "application/json; charset=UTF-8"} {
 		r := httptest.NewRequest("POST", "http://localhost:8787/api/v1/pause", bytes.NewBufferString(`{"paused":true}`))
@@ -138,6 +143,7 @@ func TestNativeJSONMediaTypeSupportsUTF8Charset(t *testing.T) {
 }
 
 func TestConfigRevisionAndKindAPI(t *testing.T) {
+	t.Parallel()
 	s := apiSetup(t)
 	if w := req(s, "GET", "/api/command-kinds", "", "fixture-client", ""); w.Code != 200 {
 		t.Fatal("kind alias unavailable")
@@ -167,6 +173,7 @@ func TestConfigRevisionAndKindAPI(t *testing.T) {
 }
 
 func TestDualRepresentationConfigFitsRequestBudget(t *testing.T) {
+	t.Parallel()
 	s := apiSetup(t)
 	c := bot.DefaultConfiguration()
 	for i := 0; i < 90; i++ {
@@ -185,6 +192,7 @@ func TestDualRepresentationConfigFitsRequestBudget(t *testing.T) {
 }
 
 func TestCommandModulesAndPipelineErrors(t *testing.T) {
+	t.Parallel()
 	s := apiSetup(t)
 	for _, path := range []string{"/api/command-modules", "/api/v1/command-modules"} {
 		w := req(s, "GET", path, "", "fixture-client", "")

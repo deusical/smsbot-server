@@ -8,6 +8,7 @@ import (
 )
 
 func TestOriginalFailureCooldownAndLegacyDeadlines(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 10, 24, 0, 0, 0, 0, time.UTC)
 	for _, tc := range []struct {
 		failures int

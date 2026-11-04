@@ -15,6 +15,7 @@ func mediaUpdate(message, action, remote string) *gmproto.Message {
 	return &gmproto.Message{MessageID: message, MessageInfo: []*gmproto.MessageInfo{{ActionMessageID: &action, Data: &gmproto.MessageInfo_MediaContent{MediaContent: &gmproto.MediaContent{MimeType: "image/jpeg", MediaID: remote, Size: 250000, DecryptionKey: make([]byte, 32), MediaData: []byte("tiny preview")}}}}}
 }
 func TestGoogleInlineImageIsPreviewOnly(t *testing.T) {
+	t.Parallel()
 	m := mediaUpdate("synthetic-message", "synthetic-action", "")
 	_, files, ok := messageParts(m)
 	if !ok || len(files) != 1 {
@@ -31,6 +32,7 @@ func TestGoogleInlineImageIsPreviewOnly(t *testing.T) {
 	}
 }
 func TestFullMediaAcceptsOnlyRequestedHistoricalPart(t *testing.T) {
+	t.Parallel()
 	g := NewGoogle(nil, "")
 	f := media.File{Info: media.Info{ID: "part-0"}, MessageID: "synthetic-message", ActionID: "synthetic-action"}
 	result, err := g.fullMedia.get(context.Background(), f, func(ctx context.Context, message, action string) error {
@@ -53,6 +55,7 @@ func TestFullMediaAcceptsOnlyRequestedHistoricalPart(t *testing.T) {
 	}
 }
 func TestFullMediaCancellationAndFailureNeverReturnPreview(t *testing.T) {
+	t.Parallel()
 	for _, fail := range []bool{false, true} {
 		var r fullMediaRequests
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
@@ -74,6 +77,7 @@ func TestFullMediaCancellationAndFailureNeverReturnPreview(t *testing.T) {
 }
 
 func TestOriginalReadBackIsSparseAndStopsWithRequest(t *testing.T) {
+	t.Parallel()
 	ctx, cancel := context.WithCancel(context.Background())
 	var reads atomic.Int32
 	delivered := make(chan struct{})
@@ -98,6 +102,7 @@ func TestOriginalReadBackIsSparseAndStopsWithRequest(t *testing.T) {
 	}
 }
 func TestOriginalReadBackStopsOnPhoneError(t *testing.T) {
+	t.Parallel()
 	reads := 0
 	readBackOriginal(context.Background(), []time.Duration{0, 0, 0}, func(context.Context) ([]*gmproto.Message, error) {
 		reads++

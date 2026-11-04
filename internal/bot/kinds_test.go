@@ -7,6 +7,7 @@ import (
 )
 
 func TestLegacyKindRoundTrip(t *testing.T) {
+	t.Parallel()
 	for _, typ := range []string{"fixed", "ai", "download"} {
 		c := Command{Type: typ, Instructions: "hello {input}", Memory: true, ExecutionMinutes: 15}
 		if err := normalizeCommand(&c); err != nil {
@@ -30,6 +31,7 @@ func TestLegacyKindRoundTrip(t *testing.T) {
 }
 
 func TestKindSettingsRejectUnknownFields(t *testing.T) {
+	t.Parallel()
 	c := Command{Kind: "media.video", Settings: json.RawMessage(`{"encoder":"unsafe"}`)}
 	if normalizeCommand(&c) == nil {
 		t.Fatal("unknown settings accepted")
@@ -37,12 +39,14 @@ func TestKindSettingsRejectUnknownFields(t *testing.T) {
 }
 
 func TestThreadCapability(t *testing.T) {
+	t.Parallel()
 	if !commandThreads(Command{Name: "ask", Type: "ai", Memory: true}) || commandThreads(Command{Name: "ask", Type: "ai"}) || commandThreads(Command{Name: "other", Kind: "ai.generate", Memory: true}) || commandThreads(Command{Name: "ask", Type: "fixed", Memory: true}) || commandThreads(Command{Type: "download"}) {
 		t.Fatal("unexpected thread capability")
 	}
 }
 
 func TestLegacyRecipeFixture(t *testing.T) {
+	t.Parallel()
 	e, _ := setup(t)
 	raw, err := os.ReadFile("testdata/legacy-recipe.json")
 	if err != nil {
@@ -60,6 +64,7 @@ func TestLegacyRecipeFixture(t *testing.T) {
 	}
 }
 func TestRepresentationPreservesMemoryAndLegacyEdits(t *testing.T) {
+	t.Parallel()
 	e, _ := setup(t)
 	configureAI(t, e, true, false)
 	before, err := e.Store.MemoryEpoch("c1", "")
@@ -89,6 +94,7 @@ func TestRepresentationPreservesMemoryAndLegacyEdits(t *testing.T) {
 	}
 }
 func TestKindPreviewsUnchanged(t *testing.T) {
+	t.Parallel()
 	e, _ := setup(t)
 	c := DefaultConfiguration()
 	c.Settings.DefaultModel = "fixture/model"
@@ -113,6 +119,7 @@ func TestKindPreviewsUnchanged(t *testing.T) {
 }
 
 func TestLegacyRenamedAndDuplicatedEdits(t *testing.T) {
+	t.Parallel()
 	e, _ := setup(t)
 	c := DefaultConfiguration()
 	c.Commands = []Command{{Name: "hello", Type: "fixed", Instructions: "Hello {input}"}}
@@ -137,6 +144,7 @@ func TestLegacyRenamedAndDuplicatedEdits(t *testing.T) {
 	}
 }
 func TestKindDefinitions(t *testing.T) {
+	t.Parallel()
 	defs := KindDefinitions()
 	if len(defs) != 4 {
 		t.Fatal("missing kinds")
@@ -152,6 +160,7 @@ func TestKindDefinitions(t *testing.T) {
 }
 
 func TestRevisionAwareSettingsAreAuthoritative(t *testing.T) {
+	t.Parallel()
 	e, _ := setup(t)
 	c := DefaultConfiguration()
 	c.Commands = []Command{{Name: "first", Type: "fixed", Instructions: "First"}, {Name: "second", Type: "fixed", Instructions: "Second"}}
@@ -170,6 +179,7 @@ func TestRevisionAwareSettingsAreAuthoritative(t *testing.T) {
 }
 
 func TestRecipeRevisionsAreNotImported(t *testing.T) {
+	t.Parallel()
 	e, _ := setup(t)
 	c := DefaultConfiguration()
 	c.Commands = []Command{{Name: "hello", Type: "fixed", Instructions: "hello", Revision: 999}}

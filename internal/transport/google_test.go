@@ -9,6 +9,7 @@ import (
 )
 
 func TestCookieParserNeverExecutesInput(t *testing.T) {
+	t.Parallel()
 	valid := `{"SID":"fixture","HSID":"fixture","SSID":"fixture","OSID":"fixture","APISID":"fixture","SAPISID":"fixture","unrelated":"discard"}`
 	c, e := ParseCookies(valid)
 	if e != nil || len(c) != 6 {
@@ -23,6 +24,7 @@ func TestCookieParserNeverExecutesInput(t *testing.T) {
 	}
 }
 func TestIncomingNormalization(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	m := &libgm.WrappedMessage{Message: &gmproto.Message{MessageID: "fixture-id", ConversationID: "fixture-chat", ParticipantID: "fixture-peer", Timestamp: now.UnixMicro(), MessageStatus: &gmproto.MessageStatus{Status: gmproto.MessageStatusType_INCOMING_COMPLETE}, MessageInfo: []*gmproto.MessageInfo{{Data: &gmproto.MessageInfo_MessageContent{MessageContent: &gmproto.MessageContent{Content: "!ping"}}}}}}
 	if in, ok := normalize(m, now.Add(-time.Second)); !ok || in.Text != "!ping" {

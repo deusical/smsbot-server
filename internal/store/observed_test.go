@@ -9,6 +9,7 @@ import (
 )
 
 func TestBackupPreservesPrivateMessageVisibility(t *testing.T) {
+	t.Parallel()
 	s := inboxStore(t)
 	s.SaveObserved("synthetic-chat", "synthetic-message", "", "incoming", "Synthetic private text", "phone", "", time.Now())
 	b, err := s.ExportBackup()
@@ -29,6 +30,7 @@ func TestBackupPreservesPrivateMessageVisibility(t *testing.T) {
 	}
 }
 func TestMigrationCopyIsIdempotent(t *testing.T) {
+	t.Parallel()
 	path := os.Getenv("SMSBOT_MIGRATION_COPY")
 	if path == "" {
 		t.Skip("explicit disposable database copy required")
@@ -71,6 +73,7 @@ func TestMigrationCopyIsIdempotent(t *testing.T) {
 }
 
 func TestReimportRepairsExactTransactionDuplicateAndPreservesIdenticalSends(t *testing.T) {
+	t.Parallel()
 	s := inboxStore(t)
 	conv := "synthetic-chat"
 	at := time.Now()

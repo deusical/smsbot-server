@@ -13,6 +13,7 @@ import (
 )
 
 func TestCompatibleProviderModelsAndGeneration(t *testing.T) {
+	t.Parallel()
 	var request map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer SYNTHETIC_KEY" {
@@ -71,6 +72,7 @@ func TestCompatibleProviderModelsAndGeneration(t *testing.T) {
 }
 
 func TestCompatibleProviderSettingsAreValidatedAndSecret(t *testing.T) {
+	t.Parallel()
 	e, _ := setup(t)
 	status, err := e.CompatibleProviderStatus()
 	if err != nil || status.Configured || status.BaseURL != defaultCompatibleURL {
@@ -112,6 +114,7 @@ func TestCompatibleProviderSettingsAreValidatedAndSecret(t *testing.T) {
 }
 
 func TestFixtureCannotRefreshCompatibleCatalog(t *testing.T) {
+	t.Parallel()
 	requests := make(chan struct{}, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		requests <- struct{}{}
@@ -133,6 +136,7 @@ func TestFixtureCannotRefreshCompatibleCatalog(t *testing.T) {
 }
 
 func TestCompatibleCatalogRefreshPreservesOtherProviders(t *testing.T) {
+	t.Parallel()
 	e, _ := setup(t)
 	models := []Model{
 		{ID: "openai/test", Name: "OpenRouter model", Provider: "openrouter", RemoteID: "openai/test"},
@@ -151,6 +155,7 @@ func TestCompatibleCatalogRefreshPreservesOtherProviders(t *testing.T) {
 }
 
 func TestDispatchRoutesNamespacedModelThroughCompatibleProvider(t *testing.T) {
+	t.Parallel()
 	providerCalls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/chat/completions" || r.Header.Get("Authorization") != "Bearer SYNTHETIC_KEY" {
@@ -196,6 +201,7 @@ func TestDispatchRoutesNamespacedModelThroughCompatibleProvider(t *testing.T) {
 }
 
 func TestCompatibleProviderFailureNeverSubmits(t *testing.T) {
+	t.Parallel()
 	providerCalls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		providerCalls++
@@ -242,6 +248,7 @@ func TestCompatibleProviderFailureNeverSubmits(t *testing.T) {
 }
 
 func TestCompatibleProviderErrorsDoNotEchoBody(t *testing.T) {
+	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
 		w.Write([]byte("SYNTHETIC_PRIVATE_PROVIDER_BODY"))
@@ -255,6 +262,7 @@ func TestCompatibleProviderErrorsDoNotEchoBody(t *testing.T) {
 }
 
 func TestCompatibleCatalogHonorsCallerCancellation(t *testing.T) {
+	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		<-r.Context().Done()
 	}))

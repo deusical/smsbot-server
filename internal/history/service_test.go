@@ -42,6 +42,7 @@ func (h *deadlineHost) Commit(ctx context.Context, c Commit) error {
 	return err
 }
 func TestFetchDeadlineDoesNotConsumePersistenceBudget(t *testing.T) {
+	t.Parallel()
 	v, _ := vault.New(make([]byte, 32))
 	s, err := store.Open(filepath.Join(t.TempDir(), "state.db"), v)
 	if err != nil {
@@ -69,6 +70,7 @@ type repairRetryHost struct {
 
 func (h *repairRetryHost) RepairCaptureGap(context.Context) error { h.repairs++; return nil }
 func TestFailedViewedSectionDoesNotStarveImportsAndRepairs(t *testing.T) {
+	t.Parallel()
 	v, _ := vault.New(make([]byte, 32))
 	s, err := store.Open(filepath.Join(t.TempDir(), "state.db"), v)
 	if err != nil {
@@ -103,6 +105,7 @@ func (h *retryHost) Commit(_ context.Context, c Commit) error {
 	return err
 }
 func TestIndependentRecentAndBackfillRetries(t *testing.T) {
+	t.Parallel()
 	v, _ := vault.New(make([]byte, 32))
 	s, err := store.Open(filepath.Join(t.TempDir(), "state.db"), v)
 	if err != nil {
@@ -158,6 +161,7 @@ func TestIndependentRecentAndBackfillRetries(t *testing.T) {
 }
 
 func TestCompletedOlderHistoryIsNotRecheckedAutomatically(t *testing.T) {
+	t.Parallel()
 	v, _ := vault.New(make([]byte, 32))
 	s, err := store.Open(filepath.Join(t.TempDir(), "state.db"), v)
 	if err != nil {
@@ -195,6 +199,7 @@ func TestCompletedOlderHistoryIsNotRecheckedAutomatically(t *testing.T) {
 }
 
 func TestServiceIdleBackoffAndWake(t *testing.T) {
+	t.Parallel()
 	v, _ := vault.New(make([]byte, 32))
 	s, err := store.Open(filepath.Join(t.TempDir(), "state.db"), v)
 	if err != nil {

@@ -1,11 +1,9 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page, nextPoll, signIn } from "./fixtures";
 import { readFileSync } from "node:fs";
+import { connectionFile, origin } from "./server";
 
 async function login(page: Page, path = "/") {
-  const descriptor = JSON.parse(readFileSync(".test-state/connection.json", "utf8"));
-  await page.goto(path);
-  await page.getByLabel("Owner credential").fill(readFileSync(descriptor.owner, "utf8"));
-  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await signIn(page, path);
   // Signed in before any API call is made on the session's behalf.
   await expect(page.getByRole("navigation", { name: "Main navigation" })).toBeVisible();
 }
@@ -45,7 +43,7 @@ test("reloading or opening a page's URL shows that page", async ({ page }) => {
   await page.context().clearCookies();
   await page.goto("/archive");
   await expect(page.getByLabel("Owner credential")).toBeVisible();
-  const descriptor = JSON.parse(readFileSync(".test-state/connection.json", "utf8"));
+  const descriptor = JSON.parse(readFileSync(connectionFile, "utf8"));
   await page.getByLabel("Owner credential").fill(readFileSync(descriptor.owner, "utf8"));
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await heading(page, "Archive");
@@ -55,7 +53,7 @@ test("reloading or opening a page's URL shows that page", async ({ page }) => {
   await heading(page, "Settings");
 });
 
-const headers = { Origin: "http://127.0.0.1:8788" };
+const headers = { Origin: origin };
 async function allowInbox(page: Page, enabled: boolean) {
   const s = await (await page.request.get("/api/v1/inbox/settings")).json();
   const saved = await page.request.put("/api/v1/inbox/settings", {
@@ -72,6 +70,7 @@ test("a conversation has a URL and Back returns to the list", async ({ page }) =
   try {
     await nav(page).getByRole("button", { name: "Conversations", exact: true }).click();
     await expect(page).toHaveURL(/\/conversations$/);
+    await nextPoll(page);
     await page.locator(".conversation").filter({ hasText: "Demo conversation" }).getByRole("button", { name: /Demo conversation/ }).click();
     await expect(page).toHaveURL(/\/conversations\/[^/]+$/);
     const opened = page.url();

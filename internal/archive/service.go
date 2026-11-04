@@ -3,6 +3,7 @@
 package archive
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -47,17 +48,19 @@ type FileRepairer interface {
 	Repair(context.Context, transport.Conversation, string, media.File) (bool, error)
 }
 type Service struct {
-	focusKey     string
-	focusCursor  string
-	focusRound   int
-	closing      bool
-	Store        *store.Store
-	Root         string
-	Host         FileHost
-	policyMu     sync.Mutex // policy changes serialize with final file publication
-	mu           sync.Mutex // publishes blobs/records, garbage collection and snapshot exports
-	tick         sync.Mutex
-	cursor       string
+	focusKey    string
+	focusCursor string
+	focusRound  int
+	closing     bool
+	Store       *store.Store
+	Root        string
+	Host        FileHost
+	policyMu    sync.Mutex // policy changes serialize with final file publication
+	mu          sync.Mutex // publishes blobs/records, garbage collection and snapshot exports
+	tick        sync.Mutex
+	cursor      string
+	// Interval spaces background ticks; zero means every 3 seconds.
+	Interval     time.Duration
 	lastGC       time.Time
 	nextScan     time.Time
 	idleSequence int64
@@ -116,7 +119,7 @@ func (s *Service) Run(ctx context.Context) {
 			return
 		case <-timer.C:
 			s.Tick(ctx)
-			timer.Reset(3 * time.Second)
+			timer.Reset(cmp.Or(s.Interval, 3*time.Second))
 		}
 	}
 }

@@ -13,6 +13,7 @@ import (
 )
 
 func TestInboxOwnerOnlyAndLegacyVisibility(t *testing.T) {
+	t.Parallel()
 	s := apiSetup(t)
 	cfg, _ := s.Collection.Settings()
 	cfg.Enabled = true
@@ -39,6 +40,7 @@ func ownerRequest(s *Server, method, path, body string) *httptest.ResponseRecord
 	return w
 }
 func TestInboxSettingsOptimisticSave(t *testing.T) {
+	t.Parallel()
 	s := apiSetup(t)
 	cfg, _ := s.Collection.Settings()
 	cfg.Enabled = true
@@ -52,6 +54,7 @@ func TestInboxSettingsOptimisticSave(t *testing.T) {
 }
 
 func TestOwnerComposeUnicodeLimit(t *testing.T) {
+	t.Parallel()
 	s := apiSetup(t)
 	cfg, _ := s.Collection.Settings()
 	cfg.Enabled = true
@@ -72,6 +75,7 @@ func TestOwnerComposeUnicodeLimit(t *testing.T) {
 }
 
 func TestInboxWithoutArchiveKeepsSnapshotPolling(t *testing.T) {
+	t.Parallel()
 	s := apiSetup(t)
 	cfg, err := s.Collection.Settings()
 	if err != nil {
@@ -107,6 +111,7 @@ func TestInboxWithoutArchiveKeepsSnapshotPolling(t *testing.T) {
 }
 
 func TestViewedRefreshOwnerConsentAndRangeValidation(t *testing.T) {
+	t.Parallel()
 	s := apiSetup(t)
 	path := "/api/v1/inbox/conversations/demo-chat/refresh"
 	body := `{"since":"2026-01-01T00:00:00Z","until":"2026-01-02T00:00:00Z"}`

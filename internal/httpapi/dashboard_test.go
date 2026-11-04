@@ -7,6 +7,7 @@ import (
 )
 
 func TestDashboardPagesServeTheAppAndNothingElseDoes(t *testing.T) {
+	t.Parallel()
 	s := apiSetup(t)
 	home := req(s, "GET", "/", "", "", "")
 	if home.Code != 200 || !strings.Contains(home.Body.String(), "<title>SmsBot</title>") {

@@ -1,16 +1,8 @@
-import { test, expect, type Page } from "@playwright/test";
-import { readFileSync } from "node:fs";
+import { test, expect, type Page, nextPoll, signIn } from "./fixtures";
 import type { Configuration, Conversation, Job, State } from "../src/lib/api";
 
 async function login(page: Page) {
-  const descriptor = JSON.parse(
-    readFileSync(".test-state/connection.json", "utf8"),
-  );
-  await page.goto("/");
-  await page
-    .getByLabel("Owner credential")
-    .fill(readFileSync(descriptor.owner, "utf8"));
-  await page.getByRole("button", { name: "Sign in" }).click();
+  await signIn(page);
   await expect(
     page.getByRole("heading", { name: "Home", exact: true }),
   ).toBeVisible();
@@ -136,6 +128,7 @@ test("a command built from steps saves, previews and runs offline", async ({
         })
       ).ok(),
     ).toBe(true);
+    await nextPoll(page);
     await expect
       .poll(
         async () =>
@@ -151,6 +144,7 @@ test("a command built from steps saves, previews and runs offline", async ({
     await row.locator(".feed-main").click();
     const steps = row.getByRole("list", { name: "Steps" });
     await expect(steps).toContainText("Compress video");
+    await nextPoll(page);
     await expect(steps.locator("li.done")).toHaveCount(5);
     await page.screenshot({ path: "test-results/activity-steps.png" });
   } finally {

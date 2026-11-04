@@ -1,11 +1,8 @@
-import { test, expect, type Page } from "@playwright/test";
-import { readFileSync } from "node:fs";
-const headers = { Origin: "http://127.0.0.1:8788" };
+import { test, expect, type Page, pollAndSettle, nextPoll, signIn } from "./fixtures";
+import { origin } from "./server";
+const headers = { Origin: origin };
 async function setup(page: Page) {
-  const descriptor = JSON.parse(readFileSync(".test-state/connection.json", "utf8"));
-  await page.goto("/");
-  await page.getByLabel("Owner credential").fill(readFileSync(descriptor.owner, "utf8"));
-  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await signIn(page);
   await expect(page.getByRole("heading", { name: "Home", exact: true })).toBeVisible();
   const previous = await (await page.request.get("/api/v1/inbox/settings")).json();
   expect((await page.request.put("/api/v1/inbox/settings", { headers, data: { ...previous, enabled: true, scope: "all", load_older: false, automatic_replies: false, archive_retention_days: 0 } })).ok()).toBeTruthy();
@@ -44,9 +41,11 @@ test("viewed sections refresh automatically and edits, gaps and original upgrade
   await page.route("**/attachments/viewed-image?*", route => { imageReads++; return route.fulfill({ contentType: "image/gif", body: Buffer.from("R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==", "base64") }); });
   try {
     await open(page);
+    await nextPoll(page);
     await expect.poll(() => ranges.length).toBeGreaterThan(0);
     expect(Date.parse(ranges[0].since)).toBeGreaterThan(Date.parse(messages[0].at));
     expect(ranges[0].until).toBe("");
+    await nextPoll(page);
     await expect(page.getByText("Synthetic refreshed edit", { exact: true })).toBeVisible({ timeout: 12000 });
     await expect(page.getByText("Synthetic recovered gap", { exact: true })).toBeVisible();
     await expect(page.locator(".attachment-info")).toContainText("4.6 MB");
@@ -54,6 +53,7 @@ test("viewed sections refresh automatically and edits, gaps and original upgrade
     await expect.poll(() => imageReads).toBeGreaterThan(1);
     const scroller = page.locator(".messages");
     await scroller.evaluate(el => { el.scrollTop = 0; });
+    await nextPoll(page);
     await expect.poll(() => ranges.some(r => r.since === messages[0].at && !!r.until)).toBeTruthy();
     await expect.poll(() => scroller.evaluate(el => el.scrollTop)).toBeLessThan(80);
     expect(heads).toBe(1);
@@ -85,9 +85,11 @@ test("view changes coalesce behind a pending refresh and offline history stays r
     await expect(page.getByText(/Phone updates are waiting/)).toHaveCount(0);
     expect(ranges).toHaveLength(0);
     ready = true;
+    await nextPoll(page);
     await expect.poll(() => ranges.length, { timeout: 10000 }).toBe(1);
     await page.locator(".messages").evaluate(el => { el.scrollTop = 0; });
-    await page.waitForTimeout(1000);
+    await nextPoll(page);
+    await pollAndSettle(page, 1000);
     expect(ranges).toHaveLength(1);
     release();
     await expect.poll(() => ranges.length).toBe(2);
@@ -95,7 +97,7 @@ test("view changes coalesce behind a pending refresh and offline history stays r
     expect(ranges[1].until).not.toBe("");
     await page.evaluate(() => Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" }));
     await page.locator(".messages").evaluate(el => { el.scrollTop = el.scrollHeight / 2; });
-    await page.waitForTimeout(700);
+    await pollAndSettle(page, 700);
     expect(ranges).toHaveLength(2);
     await page.evaluate(() => { Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" }); document.dispatchEvent(new Event("visibilitychange")); });
     await expect.poll(() => ranges.length).toBe(3);
@@ -103,6 +105,7 @@ test("view changes coalesce behind a pending refresh and offline history stays r
     await page.locator(".messages").evaluate(el => { el.scrollTop = el.scrollHeight; });
     await expect.poll(() => ranges.length).toBeGreaterThan(3);
     await expect(page.getByText("Could not check this section. Saved messages remain available; retrying automatically.", { exact: true })).toHaveCount(0);
+    await nextPoll(page);
     await expect(page.getByText("Synthetic viewed message 199", { exact: true })).toBeVisible();
   } finally { release(); await cleanup(); }
 });

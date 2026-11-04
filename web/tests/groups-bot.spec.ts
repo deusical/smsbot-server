@@ -1,7 +1,7 @@
-import { test, expect, type Page } from "@playwright/test";
-import { readFileSync } from "node:fs";
+import { test, expect, type Page, signIn } from "./fixtures";
+import { origin } from "./server";
 
-const headers = { Origin: "http://127.0.0.1:8788" };
+const headers = { Origin: origin };
 type Inbox = Record<string, unknown>;
 const getInbox = async (page: Page): Promise<Inbox> => (await page.request.get("/api/v1/inbox/settings")).json();
 async function putInbox(page: Page, settings: Inbox) {
@@ -11,10 +11,7 @@ async function putInbox(page: Page, settings: Inbox) {
 }
 const setMembers = (page: Page, members: string[]) => page.request.post("/api/v1/fixture/group-members", { headers, data: { members } });
 async function login(page: Page) {
-  const c = JSON.parse(readFileSync(".test-state/connection.json", "utf8"));
-  await page.goto("/");
-  await page.getByLabel("Owner credential").fill(readFileSync(c.owner, "utf8"));
-  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await signIn(page);
   await expect(page.getByRole("navigation", { name: "Main navigation" })).toBeVisible();
 }
 async function openGroup(page: Page) {

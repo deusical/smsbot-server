@@ -18,6 +18,7 @@ func group(id string, people ...string) *gmproto.Conversation {
 }
 
 func TestAGroupHasAFixedIdentityAndANamedRoster(t *testing.T) {
+	t.Parallel()
 	c := group("g1", "b", "a", "c")
 	listed := listConversation(c)
 	if !listed.Group || listed.ParticipantID != "group:g1" || !listed.Writable || !listed.Collectable() || listed.Label != "Group conversation" {
@@ -42,6 +43,7 @@ func TestAGroupHasAFixedIdentityAndANamedRoster(t *testing.T) {
 }
 
 func TestGroupsThatCannotBeReadAreNotSelectable(t *testing.T) {
+	t.Parallel()
 	left := group("g1", "a", "b")
 	left.ReadOnly = true
 	if got := listConversation(left); got.ParticipantID != "" || got.Collectable() {
@@ -59,6 +61,7 @@ func TestGroupsThatCannotBeReadAreNotSelectable(t *testing.T) {
 }
 
 func TestAGroupIsSendableButNothingElseActsInIt(t *testing.T) {
+	t.Parallel()
 	c := group("g1", "a", "b")
 	// Typing, read marking and reactions stay with individual conversations.
 	if !readable(c) || eligible(c) {
@@ -67,6 +70,7 @@ func TestAGroupIsSendableButNothingElseActsInIt(t *testing.T) {
 }
 
 func TestPeopleJoiningAGroupKeepTheSendBaselineAndPauseNothing(t *testing.T) {
+	t.Parallel()
 	c := group("g1", "a", "b")
 	g := NewGoogle(nil, "")
 	g.cacheDetail(c)
@@ -85,6 +89,7 @@ func TestPeopleJoiningAGroupKeepTheSendBaselineAndPauseNothing(t *testing.T) {
 }
 
 func TestASendToAGroupNeedsTheRosterTheOwnerSaw(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	if _, given := expectedRoster(ctx); given {
 		t.Fatal("a roster out of nowhere")
@@ -119,6 +124,7 @@ func TestASendToAGroupNeedsTheRosterTheOwnerSaw(t *testing.T) {
 }
 
 func TestGroupMessagesRecordWhoSentThem(t *testing.T) {
+	t.Parallel()
 	m := &gmproto.Message{MessageID: "m1", ParticipantID: "b"}
 	if v := conversationSnapshot(group("g1", "a", "b"), m, time.Now()); v.Sender != "b" {
 		t.Fatalf("sender %q", v.Sender)

@@ -11,6 +11,7 @@ import (
 )
 
 func TestOutboundMediaRetainsUploadReferenceAndFormat(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		mime   string
 		format gmproto.MediaFormats
@@ -28,6 +29,7 @@ func TestOutboundMediaRetainsUploadReferenceAndFormat(t *testing.T) {
 }
 
 func TestAttachmentsNormalizeLiveAndHistoryWithoutLosingCaption(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	m := &gmproto.Message{MessageID: "synthetic-media", ConversationID: "synthetic-chat", ParticipantID: "synthetic-peer", Timestamp: now.UnixMicro(), MessageStatus: &gmproto.MessageStatus{Status: gmproto.MessageStatusType_INCOMING_COMPLETE}, MessageInfo: []*gmproto.MessageInfo{
 		{Data: &gmproto.MessageInfo_MessageContent{MessageContent: &gmproto.MessageContent{Content: "!ping"}}},
@@ -63,6 +65,7 @@ func TestAttachmentsNormalizeLiveAndHistoryWithoutLosingCaption(t *testing.T) {
 }
 
 func TestLongTextPreservedForArchive(t *testing.T) {
+	t.Parallel()
 	text := strings.Repeat("Synthetic long text ", 1000)
 	m := &gmproto.Message{MessageInfo: []*gmproto.MessageInfo{{Data: &gmproto.MessageInfo_MessageContent{MessageContent: &gmproto.MessageContent{Content: text}}}}}
 	got, _, ok := messageParts(m)
@@ -72,6 +75,7 @@ func TestLongTextPreservedForArchive(t *testing.T) {
 }
 
 func TestOutboundPartsPutFilesBeforeCaption(t *testing.T) {
+	t.Parallel()
 	file := media.File{RemoteID: "upload", Key: make([]byte, 32), Name: "a.png", MIME: "image/png"}
 	parts, ok := outboundParts("caption", []media.File{file, file})
 	if !ok || len(parts) != 3 || parts[0].GetMediaContent() == nil || parts[1].GetMediaContent() == nil || parts[2].GetMessageContent().GetContent() != "caption" {

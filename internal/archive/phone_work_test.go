@@ -12,6 +12,7 @@ import (
 )
 
 func TestPolicyBlockSurvivesObservationsAndWorkerRestarts(t *testing.T) {
+	t.Parallel()
 	for _, unknownSize := range []bool{false, true} {
 		t.Run(map[bool]string{false: "reported-size", true: "unknown-size"}[unknownSize], func(t *testing.T) {
 			s, manager := setup(t)
@@ -74,6 +75,7 @@ func TestPolicyBlockSurvivesObservationsAndWorkerRestarts(t *testing.T) {
 }
 
 func TestPolicyRetryRequiresImprovedEffectiveCapacity(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name                  string
 		before, after         Policy
@@ -99,6 +101,7 @@ func TestPolicyRetryRequiresImprovedEffectiveCapacity(t *testing.T) {
 }
 
 func TestChangedBlockedSourceAndSmallerFilesRemainEligible(t *testing.T) {
+	t.Parallel()
 	s, manager := setup(t)
 	policy := Policy{Enabled: true, QuotaMiB: 1}
 	if err := manager.SetPolicy(policy); err != nil {
@@ -122,6 +125,7 @@ func TestChangedBlockedSourceAndSmallerFilesRemainEligible(t *testing.T) {
 }
 
 func TestLegacyRepeatedFailuresSkipPhoneUntilCooldownOrSourceChange(t *testing.T) {
+	t.Parallel()
 	s, manager := setup(t)
 	file := media.File{Info: media.Info{ID: "part", ArchiveState: "failed"}, ActionID: "action", MessageID: "upstream", Failures: 18, RetryAt: time.Now().Add(-time.Minute).UTC().Format(time.RFC3339Nano)}
 	seed(t, s, []media.File{file})
@@ -147,6 +151,7 @@ func TestLegacyRepeatedFailuresSkipPhoneUntilCooldownOrSourceChange(t *testing.T
 }
 
 func TestObservedModernFailureKeepsRetryVersionAndEventuallyRetries(t *testing.T) {
+	t.Parallel()
 	s, manager := setup(t)
 	file := media.File{Info: media.Info{ID: "part", Size: 5, ArchiveState: "failed"}, RemoteID: "source", Failures: 14}
 	Backoff(&file, time.Now().Add(-25*time.Hour))

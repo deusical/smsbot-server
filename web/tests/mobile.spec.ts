@@ -1,9 +1,10 @@
-import { test, expect, devices, type Page } from "@playwright/test";
+import { test, expect, devices, type Page } from "./fixtures";
 import { readFileSync } from "node:fs";
+import { connectionFile } from "./server";
 
 function ownerToken() {
   const descriptor = JSON.parse(
-    readFileSync(".test-state/connection.json", "utf8"),
+    readFileSync(connectionFile, "utf8"),
   );
   return readFileSync(descriptor.owner, "utf8");
 }

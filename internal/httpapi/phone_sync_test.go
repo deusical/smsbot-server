@@ -51,6 +51,7 @@ func listConversations(t *testing.T, s *Server) map[string]transport.Conversatio
 }
 
 func TestConversationListCarriesRecencyAndPreviewOnlyWithCollection(t *testing.T) {
+	t.Parallel()
 	s := apiSetup(t)
 	when := time.Now().Add(-time.Minute).UTC()
 	setInbox(t, s, func(c *botSettings) { c.Enabled = true })
@@ -77,6 +78,7 @@ func TestConversationListCarriesRecencyAndPreviewOnlyWithCollection(t *testing.T
 }
 
 func TestStateRevisionMovesWithActivity(t *testing.T) {
+	t.Parallel()
 	s := apiSetup(t)
 	revision := func() string {
 		w := ownerRequest(s, "GET", "/api/v1/state", "")
@@ -104,6 +106,7 @@ func TestStateRevisionMovesWithActivity(t *testing.T) {
 }
 
 func TestReadReceiptsRespectConsentSettingAndThrottle(t *testing.T) {
+	t.Parallel()
 	s := apiSetup(t)
 	f := fixtureOf(t, s)
 	body := `{"through":"` + time.Now().UTC().Format(time.RFC3339Nano) + `"}`
@@ -136,6 +139,7 @@ func TestReadReceiptsRespectConsentSettingAndThrottle(t *testing.T) {
 }
 
 func TestReadReceiptsDefaultOnForOldSettings(t *testing.T) {
+	t.Parallel()
 	var cfg botSettings
 	if err := json.Unmarshal([]byte(`{"enabled":true,"scope":"all"}`), &cfg); err != nil {
 		t.Fatal(err)
@@ -146,6 +150,7 @@ func TestReadReceiptsDefaultOnForOldSettings(t *testing.T) {
 }
 
 func TestTypingOnlyForOptedInConversations(t *testing.T) {
+	t.Parallel()
 	s := apiSetup(t)
 	f := fixtureOf(t, s)
 	f.SetTyping("demo-chat", true)
@@ -184,6 +189,7 @@ func (f *refreshingFixture) PhoneRequests() map[string]transport.PhoneRequestCou
 }
 
 func TestConversationListForcesPhoneReadOnlyWhenAskedAndStateReportsPhoneRequests(t *testing.T) {
+	t.Parallel()
 	s := apiSetup(t)
 	setInbox(t, s, func(c *botSettings) { c.Enabled = true })
 	f := &refreshingFixture{Fixture: fixtureOf(t, s)}

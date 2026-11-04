@@ -65,6 +65,7 @@ func arm(t *testing.T, e *Engine) {
 	}
 }
 func TestAccessBoundaries(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		edit func(*transport.Incoming)
@@ -93,6 +94,7 @@ func TestAccessBoundaries(t *testing.T) {
 	}
 }
 func TestPausedAndUnenrolled(t *testing.T) {
+	t.Parallel()
 	e, _ := setup(t)
 	m := incoming()
 	ok, err := e.Accept(context.Background(), m)
@@ -108,6 +110,7 @@ func TestPausedAndUnenrolled(t *testing.T) {
 	}
 }
 func TestDedupAndDispatch(t *testing.T) {
+	t.Parallel()
 	e, f := setup(t)
 	arm(t, e)
 	m := incoming()
@@ -136,6 +139,7 @@ func TestDedupAndDispatch(t *testing.T) {
 	}
 }
 func TestPauseCancelsQueued(t *testing.T) {
+	t.Parallel()
 	e, f := setup(t)
 	arm(t, e)
 	e.Accept(context.Background(), incoming())
@@ -153,6 +157,7 @@ func TestPauseCancelsQueued(t *testing.T) {
 	}
 }
 func TestUnenrollCancelsQueued(t *testing.T) {
+	t.Parallel()
 	e, f := setup(t)
 	arm(t, e)
 	e.Accept(context.Background(), incoming())
@@ -164,6 +169,7 @@ func TestUnenrollCancelsQueued(t *testing.T) {
 	}
 }
 func TestUnknownNotRetried(t *testing.T) {
+	t.Parallel()
 	e, f := setup(t)
 	arm(t, e)
 	e.Accept(context.Background(), incoming())
@@ -179,6 +185,7 @@ func TestUnknownNotRetried(t *testing.T) {
 	}
 }
 func TestCrashRecovery(t *testing.T) {
+	t.Parallel()
 	e, f := setup(t)
 	arm(t, e)
 	e.Accept(context.Background(), incoming())
@@ -194,6 +201,7 @@ func TestCrashRecovery(t *testing.T) {
 	}
 }
 func TestExpiredQueue(t *testing.T) {
+	t.Parallel()
 	e, f := setup(t)
 	arm(t, e)
 	e.Accept(context.Background(), incoming())
@@ -205,6 +213,7 @@ func TestExpiredQueue(t *testing.T) {
 	}
 }
 func TestIdentityChange(t *testing.T) {
+	t.Parallel()
 	e, f := setup(t)
 	arm(t, e)
 	e.Accept(context.Background(), incoming())
@@ -216,6 +225,7 @@ func TestIdentityChange(t *testing.T) {
 }
 
 func TestReceiptsMatchTransactionAndNeverDowngrade(t *testing.T) {
+	t.Parallel()
 	e, _ := setup(t)
 	arm(t, e)
 	e.Accept(context.Background(), incoming())
@@ -236,6 +246,7 @@ func TestReceiptsMatchTransactionAndNeverDowngrade(t *testing.T) {
 }
 
 func TestKnownRejectionIsFailedAndNeverRetried(t *testing.T) {
+	t.Parallel()
 	e, f := setup(t)
 	arm(t, e)
 	e.Accept(context.Background(), incoming())
@@ -257,6 +268,7 @@ func useTransport(e *Engine, t transport.Transport) {
 }
 
 func TestBuiltinCommandsReplyAndRejectInput(t *testing.T) {
+	t.Parallel()
 	e, _ := setup(t)
 	arm(t, e)
 	configureAI(t, e, false, false)

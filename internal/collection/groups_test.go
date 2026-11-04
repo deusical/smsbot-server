@@ -21,6 +21,7 @@ func demoGroup(t *testing.T, f *transport.Fixture) transport.Conversation {
 }
 
 func TestGroupsAreCollectedOnlyWhenChosenOrAskedFor(t *testing.T) {
+	t.Parallel()
 	_, f := setup(t)
 	g := demoGroup(t, f)
 	individual := transport.Conversation{ID: "demo-chat", ParticipantID: "demo-peer", Writable: true}
@@ -46,6 +47,7 @@ func TestGroupsAreCollectedOnlyWhenChosenOrAskedFor(t *testing.T) {
 }
 
 func TestAGroupMemberSpeaksForTheGroupButNotForAnIndividual(t *testing.T) {
+	t.Parallel()
 	member := transport.Incoming{ParticipantID: "demo-member-b"}
 	if !speaksFor("group:demo-group", member) || speaksFor("demo-peer", member) || !speaksFor("demo-peer", transport.Incoming{ParticipantID: "demo-peer"}) || !speaksFor("demo-peer", transport.Incoming{Outgoing: true}) {
 		t.Fatal("wrong sender attribution")
@@ -53,6 +55,7 @@ func TestAGroupMemberSpeaksForTheGroupButNotForAnIndividual(t *testing.T) {
 }
 
 func TestGroupMessagesAreSavedWithTheirSender(t *testing.T) {
+	t.Parallel()
 	svc, _ := setup(t)
 	s, _ := svc.Settings()
 	s.Enabled, s.Scope, s.Groups, s.LoadOlder = true, "all", true, false
@@ -82,6 +85,7 @@ func TestGroupMessagesAreSavedWithTheirSender(t *testing.T) {
 }
 
 func TestAGroupIsNotSavedUnlessAllowed(t *testing.T) {
+	t.Parallel()
 	svc, _ := setup(t)
 	s, _ := svc.Settings()
 	s.Enabled, s.Scope, s.LoadOlder = true, "all", false

@@ -13,6 +13,7 @@ func interactionMessage(id, protocol string) transport.Incoming {
 	return transport.Incoming{ID: id, ConversationID: "demo-chat", ParticipantID: "demo-peer", Text: "Synthetic interaction", At: time.Now(), Interaction: &transport.MessageInteraction{UpstreamID: id, Protocol: protocol, OwnerID: "fixture-self", ObservedAt: time.Now(), Reactions: []transport.Reaction{}}}
 }
 func TestReplyProtocolAndIntentIdentity(t *testing.T) {
+	t.Parallel()
 	e, f := setup(t)
 	enableInbox(t, e)
 	e.Pause(false)
@@ -75,6 +76,7 @@ func TestReplyProtocolAndIntentIdentity(t *testing.T) {
 }
 
 func TestReactionIntentReconciliationAndUncertainty(t *testing.T) {
+	t.Parallel()
 	for _, failure := range []string{"", "unknown", "definite"} {
 		t.Run("result_"+failure, func(t *testing.T) {
 			e, f := setup(t)
@@ -144,6 +146,7 @@ func TestReactionIntentReconciliationAndUncertainty(t *testing.T) {
 }
 
 func TestReactionCanonicalEmojiConfirmation(t *testing.T) {
+	t.Parallel()
 	e, _ := setup(t)
 	enableInbox(t, e)
 	e.Pause(false)
@@ -171,6 +174,7 @@ func TestReactionCanonicalEmojiConfirmation(t *testing.T) {
 }
 
 func TestReactionFinalChecksAndRestart(t *testing.T) {
+	t.Parallel()
 	e, _ := setup(t)
 	enableInbox(t, e)
 	e.Pause(false)
@@ -226,6 +230,7 @@ func (f *changedProtocolFixture) Conversations(ctx context.Context) ([]transport
 	return []transport.Conversation{{ID: "demo-chat", ParticipantID: f.participant, Protocol: f.protocol, Writable: true, Group: f.group}}, nil
 }
 func TestInteractionSubmissionRechecksPolicy(t *testing.T) {
+	t.Parallel()
 	for _, change := range []string{"paused", "consent", "protocol", "identity", "group"} {
 		t.Run(change, func(t *testing.T) {
 			e, f := setup(t)
@@ -268,6 +273,7 @@ func TestInteractionSubmissionRechecksPolicy(t *testing.T) {
 }
 
 func TestObservedEditOrReactionNeverExecutesCommand(t *testing.T) {
+	t.Parallel()
 	e, _ := setup(t)
 	enableInbox(t, e)
 	arm(t, e)
@@ -293,6 +299,7 @@ func TestObservedEditOrReactionNeverExecutesCommand(t *testing.T) {
 }
 
 func TestOldOutgoingReactionObservation(t *testing.T) {
+	t.Parallel()
 	for _, queued := range []bool{false, true} {
 		t.Run(map[bool]string{false: "receive", true: "capture_worker"}[queued], func(t *testing.T) {
 			e, _ := setup(t)
@@ -363,6 +370,7 @@ func (f *ownerResolvingFixture) InteractionOwner(conv, peer string) (string, err
 	return "fixture-self", nil
 }
 func TestUncachedInteractionOwnerResolvedAfterVerifiedLookup(t *testing.T) {
+	t.Parallel()
 	e, f := setup(t)
 	enableInbox(t, e)
 	e.Pause(false)
@@ -420,6 +428,7 @@ func (f *cachedLookupFixture) Conversations(ctx context.Context) ([]transport.Co
 }
 
 func TestMessageActionsUseCachedConversationButReactionsCheckLive(t *testing.T) {
+	t.Parallel()
 	e, f := setup(t)
 	enableInbox(t, e)
 	e.Pause(false)

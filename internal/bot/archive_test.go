@@ -12,6 +12,7 @@ import (
 )
 
 func TestArchiveConversationCreatesReusesAndRearchivesWithoutDeletingSavedHistory(t *testing.T) {
+	t.Parallel()
 	e, f := setup(t)
 	enableInbox(t, e)
 	first, err := e.Collection.RequestArchive(context.Background(), "demo-chat", "", false)
@@ -61,6 +62,7 @@ func TestArchiveConversationCreatesReusesAndRearchivesWithoutDeletingSavedHistor
 }
 
 func TestLiveCaptureDuringFetchWinsOverStaleSnapshot(t *testing.T) {
+	t.Parallel()
 	e, f := setup(t)
 	cfg := enableInbox(t, e)
 	cfg.Scope = "selected"
@@ -116,6 +118,7 @@ func TestLiveCaptureDuringFetchWinsOverStaleSnapshot(t *testing.T) {
 }
 
 func TestArchiveOldestTimestampAndHeadlessRetention(t *testing.T) {
+	t.Parallel()
 	e, _ := setup(t)
 	cfg := enableInbox(t, e)
 	c := transport.Conversation{ID: "demo-chat", ParticipantID: "demo-peer", Writable: true}
@@ -155,6 +158,7 @@ func (t expiredDiscoveryTransport) DiscoverConversations(ctx context.Context, cu
 	return t.Fixture.DiscoverConversations(ctx, cursor)
 }
 func TestArchiveDiscoveryRecoversExpiredCursor(t *testing.T) {
+	t.Parallel()
 	e, f := setup(t)
 	enableInbox(t, e)
 	useTransport(e, expiredDiscoveryTransport{f})
@@ -193,6 +197,7 @@ func (t *heldArchiveTransport) FetchHistory(ctx context.Context, conv, peer, cur
 	return t.Fixture.FetchHistory(ctx, conv, peer, cursor)
 }
 func TestArchiveCancelAndRevokeDuringFetch(t *testing.T) {
+	t.Parallel()
 	for _, revoke := range []bool{false, true} {
 		t.Run(map[bool]string{false: "cancel", true: "revoke"}[revoke], func(t *testing.T) {
 			e, f := setup(t)
@@ -242,6 +247,7 @@ func TestArchiveCancelAndRevokeDuringFetch(t *testing.T) {
 }
 
 func TestArchiveSyncRunsPausedAndNeverRoutesHistory(t *testing.T) {
+	t.Parallel()
 	e, _ := setup(t)
 	enableInbox(t, e)
 	e.Collection.History.Tick(context.Background())
@@ -274,6 +280,7 @@ func TestArchiveSyncRunsPausedAndNeverRoutesHistory(t *testing.T) {
 	}
 }
 func TestOldArchiveUpdateNeverRunsCommand(t *testing.T) {
+	t.Parallel()
 	e, _ := setup(t)
 	enableInbox(t, e)
 	arm(t, e)
@@ -300,6 +307,7 @@ func TestOldArchiveUpdateNeverRunsCommand(t *testing.T) {
 }
 
 func TestEditOfOrdinaryFreshMessageCannotBecomeCommand(t *testing.T) {
+	t.Parallel()
 	e, _ := setup(t)
 	enableInbox(t, e)
 	arm(t, e)

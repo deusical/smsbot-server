@@ -21,6 +21,7 @@ func step(id, module string, inputs map[string]string, settings string) Pipeline
 func reply(inputs map[string]string) PipelineStep { return step("reply", "reply", inputs, "") }
 
 func TestPipelineValidation(t *testing.T) {
+	t.Parallel()
 	ok := Pipeline{Steps: []PipelineStep{
 		step("caption", "text.template", map[string]string{"input": "trigger.args"}, `{"template":"Hi {input}"}`),
 		reply(map[string]string{"text": "caption.text"}),
@@ -75,6 +76,7 @@ func TestPipelineValidation(t *testing.T) {
 }
 
 func TestTemplatesAreValidPipelines(t *testing.T) {
+	t.Parallel()
 	for _, c := range []Command{
 		{Name: "echo", Type: "fixed", Instructions: "Hi {input}"},
 		{Name: "ask", Type: "ai", Memory: true},
@@ -95,6 +97,7 @@ func TestTemplatesAreValidPipelines(t *testing.T) {
 }
 
 func TestModuleDefinitionsAreComplete(t *testing.T) {
+	t.Parallel()
 	defs := ModuleDefinitions()
 	if len(defs) < 9 {
 		t.Fatal("modules missing")
@@ -124,6 +127,7 @@ func customCommand(name string, p Pipeline) Command {
 
 // A command built only from configuration: no command-specific code.
 func TestCustomTextPipelineRunsEndToEnd(t *testing.T) {
+	t.Parallel()
 	e, fixture := setup(t)
 	arm(t, e)
 	c := DefaultConfiguration()
@@ -153,6 +157,7 @@ func TestCustomTextPipelineRunsEndToEnd(t *testing.T) {
 }
 
 func TestCustomPipelineSnapshotIsImmutable(t *testing.T) {
+	t.Parallel()
 	e, _ := setup(t)
 	arm(t, e)
 	c := DefaultConfiguration()
@@ -186,6 +191,7 @@ func TestCustomPipelineSnapshotIsImmutable(t *testing.T) {
 
 // An AI prompt built by an earlier step, with no AI-command code.
 func TestCustomPromptFeedsTheAIStep(t *testing.T) {
+	t.Parallel()
 	e, fixture := setup(t)
 	arm(t, e)
 	c := configureAI(t, e, false, false)
@@ -218,6 +224,7 @@ func TestCustomPromptFeedsTheAIStep(t *testing.T) {
 
 // A native reply continues whichever command answered, not only ask.
 func TestAnyThreadedCommandContinuesItsOwnThread(t *testing.T) {
+	t.Parallel()
 	e, _ := setup(t)
 	arm(t, e)
 	c := configureAI(t, e, true, false)
@@ -254,6 +261,7 @@ func TestAnyThreadedCommandContinuesItsOwnThread(t *testing.T) {
 
 // A composed download: link, video, caption and reply, all configuration.
 func TestCustomVideoWithCaption(t *testing.T) {
+	t.Parallel()
 	e, fixture := setup(t)
 	arm(t, e)
 	c := DefaultConfiguration()
@@ -301,6 +309,7 @@ func TestCustomVideoWithCaption(t *testing.T) {
 }
 
 func TestCustomPipelineSurvivesConfigurationRoundTrip(t *testing.T) {
+	t.Parallel()
 	e, _ := setup(t)
 	c := DefaultConfiguration()
 	c.Commands = []Command{customCommand("shout", Pipeline{Steps: []PipelineStep{
@@ -340,6 +349,7 @@ func TestCustomPipelineSurvivesConfigurationRoundTrip(t *testing.T) {
 }
 
 func TestPreviewTracesEachStep(t *testing.T) {
+	t.Parallel()
 	e, _ := setup(t)
 	c := DefaultConfiguration()
 	c.Commands = []Command{customCommand("grab", Pipeline{Steps: []PipelineStep{
@@ -367,6 +377,7 @@ func TestPreviewTracesEachStep(t *testing.T) {
 
 // Converting a template command to equivalent custom steps keeps memory.
 func TestConvertingToCustomStepsKeepsMemoryConsent(t *testing.T) {
+	t.Parallel()
 	e, _ := setup(t)
 	arm(t, e)
 	c := configureAI(t, e, true, false)
@@ -399,6 +410,7 @@ func TestConvertingToCustomStepsKeepsMemoryConsent(t *testing.T) {
 // A link produced at dispatch (here by the AI) still gets the video step's
 // effective settings fixed before the worker is asked.
 func TestVideoLinkFromALaterStep(t *testing.T) {
+	t.Parallel()
 	e, fixture := setup(t)
 	arm(t, e)
 	c := configureAI(t, e, false, false)
@@ -448,6 +460,7 @@ func TestVideoLinkFromALaterStep(t *testing.T) {
 
 // A step that ends the command at acceptance counts as having run.
 func TestAHaltingStepIsRecordedAsRun(t *testing.T) {
+	t.Parallel()
 	e, _ := setup(t)
 	arm(t, e)
 	c := DefaultConfiguration()

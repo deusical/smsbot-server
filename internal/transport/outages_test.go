@@ -6,6 +6,7 @@ import (
 )
 
 func TestOutageLogReportsEarliestUnseenStart(t *testing.T) {
+	t.Parallel()
 	var l outageLog
 	if l.end() {
 		t.Fatal("ended an outage that never began")

@@ -11,6 +11,7 @@ import (
 )
 
 func TestAttachmentEncryptionBackupRestoreAndRetention(t *testing.T) {
+	t.Parallel()
 	s := inboxStore(t)
 	files := []media.File{{Info: media.Info{ID: "synthetic-file", Name: "private-name.txt", MIME: "text/plain", Size: 17}, Data: []byte("Synthetic payload"), RemoteID: "private-remote", Key: []byte("private-key")}}
 	if err := s.SaveObservedFiles("synthetic-chat", "synthetic-upstream", "", "incoming", "", "phone", "", time.Now(), files); err != nil {
@@ -63,6 +64,7 @@ func TestAttachmentEncryptionBackupRestoreAndRetention(t *testing.T) {
 }
 
 func TestAttachmentMigrationFromVersionThree(t *testing.T) {
+	t.Parallel()
 	s := inboxStore(t)
 	if err := s.SaveMessage("synthetic-old", "synthetic-chat", "incoming", "Synthetic existing text"); err != nil {
 		t.Fatal(err)
@@ -82,6 +84,7 @@ func TestAttachmentMigrationFromVersionThree(t *testing.T) {
 }
 
 func TestReimportReplacesLegacyInlinePreview(t *testing.T) {
+	t.Parallel()
 	s := inboxStore(t)
 	old := media.File{Info: media.Info{ID: "part-0", MIME: "image/jpeg", Size: 8}, Data: []byte("preview")}
 	if err := s.SaveObservedFiles("synthetic-chat", "synthetic-message", "", "outgoing", "", "phone", "", time.Now(), []media.File{old}); err != nil {
@@ -98,6 +101,7 @@ func TestReimportReplacesLegacyInlinePreview(t *testing.T) {
 }
 
 func TestMeasuredOriginalSizeSurvivesUpstreamRefresh(t *testing.T) {
+	t.Parallel()
 	s := inboxStore(t)
 	file := media.File{Info: media.Info{ID: "part-0", MIME: "image/jpeg", Size: 32000}, RemoteID: "synthetic-original", MessageID: "synthetic-message", ActionID: "synthetic-action"}
 	save := func(f media.File) {
@@ -117,6 +121,7 @@ func TestMeasuredOriginalSizeSurvivesUpstreamRefresh(t *testing.T) {
 }
 
 func TestForegroundSizeMeasurementPreservesConcurrentArchivedOriginal(t *testing.T) {
+	t.Parallel()
 	s := inboxStore(t)
 	source := media.File{Info: media.Info{ID: "part-0", MIME: "image/jpeg", Size: 25000}, RemoteID: "synthetic-original", MessageID: "synthetic-message", SizeUnverified: true}
 	if err := s.SaveObservedFiles("chat", "message", "", "incoming", "", "phone", "", time.Now(), []media.File{source}); err != nil {

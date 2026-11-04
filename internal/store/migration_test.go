@@ -7,6 +7,7 @@ import (
 )
 
 func TestVersionOneMigrationPreservesEncryptedDataAndOrdersTimestamps(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "state.db")
 	v, _ := vault.New(make([]byte, 32))
 	s, err := Open(path, v)

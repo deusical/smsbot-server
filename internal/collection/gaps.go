@@ -1,6 +1,7 @@
 package collection
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"errors"
@@ -425,7 +426,7 @@ func (svc *Service) finishGapAttempt(g store.CaptureGap, attemptErr error) error
 		g.RetryAt = svc.now().Add(archive.RetryDelay(g.Failures)).UTC().Format(time.RFC3339Nano)
 	} else {
 		g.Failures = 0
-		g.RetryAt = svc.now().Add(3 * time.Second).UTC().Format(time.RFC3339Nano)
+		g.RetryAt = svc.now().Add(cmp.Or(svc.GapRecheck, 3*time.Second)).UTC().Format(time.RFC3339Nano)
 	}
 	return svc.Store.SaveCaptureGap(g)
 }

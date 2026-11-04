@@ -1,5 +1,5 @@
-import {test, expect, type Page} from "@playwright/test";
-import {readFileSync} from "node:fs";
+import { test, expect, type Page, signIn } from "./fixtures";
+
 type Row = {id:string;label:string;last_message_at?:string;unread?:boolean;pinned?:boolean;preview?:string;preview_from_me?:boolean};
 type Msg = {id:string;direction:string;text:string;at:string};
 const iso = (minutesAgo: number) => new Date(Date.now() - minutesAgo * 60000).toISOString();
@@ -36,10 +36,7 @@ async function prepare(page: Page, rows: Row[], options: {readReceipts?: boolean
     world.readCalls.push({id, through: route.request().postDataJSON().through});
     return route.fulfill({json: {ok: true}});
   });
-  const descriptor = JSON.parse(readFileSync(".test-state/connection.json", "utf8"));
-  await page.goto("/");
-  await page.getByLabel("Owner credential").fill(readFileSync(descriptor.owner, "utf8"));
-  await page.getByRole("button", {name: "Sign in", exact: true}).click();
+  await signIn(page);
   await page.getByRole("button", {name: "Conversations", exact: true}).click();
   await expect(page.locator(".link-state")).toHaveAttribute("title", /^Last checked /);
   return world;

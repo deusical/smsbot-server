@@ -17,6 +17,7 @@ func individual(id string) *gmproto.Conversation {
 // A list record carries everything listing needs, so no per-conversation
 // lookup is made; groups and read-only conversations are labelled as such.
 func TestListConversationProjectsListRecord(t *testing.T) {
+	t.Parallel()
 	c := individual("chat-1")
 	c.Name = "Synthetic Name"
 	c.LastMessageTimestamp = 1_700_000_000_000_000
@@ -37,6 +38,7 @@ func TestListConversationProjectsListRecord(t *testing.T) {
 }
 
 func TestConversationEventKeepsSendBaselineOnIdentityChange(t *testing.T) {
+	t.Parallel()
 	g := NewGoogle(nil, "")
 	c := individual("changed")
 	g.cacheDetail(c)

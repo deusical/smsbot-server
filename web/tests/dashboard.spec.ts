@@ -1,22 +1,32 @@
-import { test, expect, type Page } from "@playwright/test";
-import { readFileSync } from "node:fs";
+import { test, expect, type Page, nextPoll, pollUntil, signIn } from "./fixtures";
 import type { Configuration, Job, State, Conversation } from "../src/lib/api";
+
 async function login(page: Page) {
-  const descriptor = JSON.parse(
-    readFileSync(".test-state/connection.json", "utf8"),
-  );
-  const token = readFileSync(descriptor.owner, "utf8");
-  await page.goto("/");
-  await page.getByLabel("Owner credential").fill(token);
-  await page.getByRole("button", { name: "Sign in" }).click();
+  await signIn(page);
   await expect(
     page.getByRole("heading", { name: "Home", exact: true }),
   ).toBeVisible();
+}
+/** IDs of the bot "pong" replies the server already holds for the demo conversation. */
+async function savedPongs(page: Page) {
+  const response = await page.request.get("/api/v1/conversations/demo-chat/history?limit=50&search=pong");
+  expect(response.ok()).toBeTruthy();
+  const history = (await response.json()) as { messages: { id: string; direction: string }[] };
+  return new Set(history.messages.filter((m) => m.direction === "outgoing").map((m) => m.id));
 }
 test("authenticated command journey and sign-out", async ({
   page,
 }) => {
   await login(page);
+  // The journey turns these on from the UI, so start from off and leave them off.
+  const headers = { Origin: new URL(page.url()).origin };
+  const reset = async () => {
+    await page.request.post("/api/v1/pause", { headers, data: { paused: true } });
+    await page.request.delete("/api/v1/enrollment/demo-chat", { headers });
+  };
+  await reset();
+  await page.reload();
+  try {
   await page
     .getByRole("button", { name: "Conversations", exact: true })
     .click();
@@ -33,14 +43,26 @@ test("authenticated command journey and sign-out", async ({
   await power.click();
   await expect(power).toBeChecked();
   await demo.getByRole("button", { name: /Demo conversation/ }).click();
+  // Earlier runs against the same server may have left replies: the newest
+  // outgoing message must be a new one.
+  const before = await savedPongs(page);
   await page.getByRole("button", { name: "Simulate !ping" }).click();
-  await expect(page.locator(".bubble.outgoing")).toContainText("pong");
+  await pollUntil(page, async () => {
+    const latest = page.locator(".bubble.outgoing").last();
+    await expect(latest).toContainText("pong", { timeout: 500 });
+    expect(before.has((await latest.getAttribute("data-message-id")) ?? "")).toBe(false);
+  });
   await page.getByRole("button", { name: "Activity", exact: true }).click();
   await expect(page.locator(".feed-row").first()).toContainText("Submitted");
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page.getByRole("button", { name: "Sign out", exact: true }).click();
   await expect(page.getByLabel("Owner credential")).toBeVisible();
   expect(await page.evaluate(() => localStorage.length)).toBe(0);
+  } finally {
+    // Signed out: restore through a fresh session.
+    await signIn(page);
+    await reset();
+  }
 });
 for (const settings of [
   { name: "mobile light", width: 390, height: 844, scheme: "light" as const },
@@ -96,6 +118,10 @@ test("actual fixture AI activity exposes flat telemetry and omitted zero token f
     ).json()) as { conversations: Conversation[] }
   ).conversations;
   const target = conversations.find((c) => c.id === "demo-chat")!;
+  const earlier = new Set(
+    ((await (await page.request.get("/api/v1/activity")).json()) as Job[]).map((j) => j.id),
+  );
+  const ours = (jobs: Job[]) => jobs.find((j) => j.command.includes("e2eusage") && !earlier.has(j.id));
   try {
     expect(
       (
@@ -151,23 +177,25 @@ test("actual fixture AI activity exposes flat telemetry and omitted zero token f
         const jobs = (await (
           await page.request.get("/api/v1/activity")
         ).json()) as Job[];
-        return jobs.find((j) => j.command.includes("e2eusage"))?.state;
+        return ours(jobs)?.state;
       })
       .toBe("submitted");
     const jobs = (await (
       await page.request.get("/api/v1/activity")
     ).json()) as Job[];
-    const job = jobs.find((j) => j.command.includes("e2eusage"))!;
+    const job = ours(jobs)!;
     expect(job.model).toBe("fixture/model");
     expect(job.cost).toBe(0);
     expect(job.prompt_tokens).toBeUndefined();
     expect(job.reasoning_tokens).toBeUndefined();
     expect(job).not.toHaveProperty("usage");
     await page.getByRole("button", { name: "Activity", exact: true }).click();
-    const entry = page
-      .locator(".feed-row")
-      .filter({ hasText: "e2eusage" });
-    await expect(entry).toBeVisible();
+    // Earlier runs may have left rows: once all of them and this test's are
+    // listed, the newest (first) row is this test's job.
+    const rows = page.locator(".feed-row").filter({ hasText: "e2eusage" });
+    await nextPoll(page);
+    await expect(rows).toHaveCount(jobs.filter((j) => j.command.includes("e2eusage")).length);
+    const entry = rows.first();
     await entry.locator(".feed-main").click();
     await expect(entry).toContainText("fixture/model");
     await expect(entry).toContainText("0 tokens");
@@ -179,7 +207,11 @@ test("actual fixture AI activity exposes flat telemetry and omitted zero token f
       headers,
       data: { paused: true },
     });
-    await page.request.put("/api/v1/config", { headers, data: config });
+    // Restore the original commands on top of the revision this test saved.
+    const current = (await (await page.request.get("/api/v1/config")).json()) as Configuration;
+    expect(
+      (await page.request.put("/api/v1/config", { headers, data: { ...config, revision: current.revision } })).ok(),
+    ).toBe(true);
     if (!target.enrolled)
       await page.request.delete("/api/v1/enrollment/" + target.id, { headers });
     if (!state.paused)
@@ -201,12 +233,14 @@ test("slow conversation refresh does not overlap and failure is specific", async
   let active = 0;
   let maximum = 0;
   let started = 0;
+  let release = () => {};
   await page.route(/\/api\/v1\/(?:inbox\/)?conversations(?:\?|$)/, async (route) => {
     active++;
     started++;
     maximum = Math.max(maximum, active);
     try {
-      await new Promise((resolve) => setTimeout(resolve, 3500));
+      // A failing refresh stays pending until the test releases it.
+      if (fail) await new Promise<void>((resolve) => { release = resolve; });
       if (fail)
         await route.fulfill({
           status: 503,
@@ -220,15 +254,21 @@ test("slow conversation refresh does not overlap and failure is specific", async
   });
   // Intercept the initial fetch before login can populate the list cache.
   await login(page);
-  await expect(page.getByRole("alert")).toContainText(
-    "Could not refresh conversations.",
-    { timeout: 12000 },
-  );
+  await expect.poll(() => started).toBe(1);
+  // Two polling intervals pass while that refresh is pending; neither may start
+  // another. Give an overlapping request real time to reach the route.
+  await nextPoll(page);
+  await nextPoll(page);
+  await page.waitForTimeout(300);
+  expect(started).toBe(1);
+  release();
+  await expect(page.getByRole("alert")).toContainText("Could not refresh conversations.");
   expect(maximum).toBe(1);
-  expect(started).toBeGreaterThan(0);
   await expect(page.getByRole("alert")).not.toContainText("Connection lost");
   fail = false;
-  await expect(page.getByRole("alert")).toHaveCount(0, { timeout: 12000 });
+  release();
+  await nextPoll(page);
+  await expect(page.getByRole("alert")).toHaveCount(0);
   expect(maximum).toBe(1);
 });
 
@@ -328,7 +368,6 @@ test("rejected pause change leaves the displayed state unchanged", async ({
   );
 });
 
-
 test("startup readiness recovers while initial activity loading is pending", async ({
   page,
 }) => {
@@ -353,7 +392,9 @@ test("startup readiness recovers while initial activity loading is pending", asy
     await expect(toggle).toBeDisabled();
     await expect(page.getByText("Phone offline", { exact: true })).toBeVisible();
     ready = true;
-    // Readiness must advance without a reload or waiting for activity/discovery.
+    // Readiness must advance on the next state poll, without a reload or
+    // waiting for activity/discovery.
+    await nextPoll(page);
     await expect(toggle).toBeEnabled({ timeout: 8000 });
     await expect(toggle).not.toBeChecked();
     await toggle.click();

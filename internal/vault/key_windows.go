@@ -1,26 +1,33 @@
 package vault
 
 import (
-	"bytes"
-	"encoding/base64"
 	"errors"
 	"os"
-	"os/exec"
+	"unsafe"
+
+	"golang.org/x/sys/windows"
 )
 
+// protect encrypts or decrypts b with DPAPI for the current user, with no extra
+// entropy. Blobs are interchangeable with .NET ProtectedData (CurrentUser scope),
+// which earlier versions called through PowerShell.
 func protect(b []byte, decrypt bool) ([]byte, error) {
-	method := "Protect"
-	if decrypt {
-		method = "Unprotect"
+	if len(b) == 0 {
+		return nil, errors.New("windows key protection failed")
 	}
-	script := `Add-Type -AssemblyName System.Security; $b=[Convert]::FromBase64String([Console]::In.ReadToEnd()); $r=[Security.Cryptography.ProtectedData]::` + method + `($b,$null,[Security.Cryptography.DataProtectionScope]::CurrentUser); [Console]::Write([Convert]::ToBase64String($r))`
-	c := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script)
-	c.Stdin = bytes.NewBufferString(base64.StdEncoding.EncodeToString(b))
-	out, e := c.Output()
+	in := windows.DataBlob{Size: uint32(len(b)), Data: &b[0]}
+	var out windows.DataBlob
+	var e error
+	if decrypt {
+		e = windows.CryptUnprotectData(&in, nil, nil, 0, nil, windows.CRYPTPROTECT_UI_FORBIDDEN, &out)
+	} else {
+		e = windows.CryptProtectData(&in, nil, nil, 0, nil, windows.CRYPTPROTECT_UI_FORBIDDEN, &out)
+	}
 	if e != nil {
 		return nil, errors.New("windows key protection failed")
 	}
-	return base64.StdEncoding.DecodeString(string(out))
+	defer windows.LocalFree(windows.Handle(unsafe.Pointer(out.Data)))
+	return append([]byte(nil), unsafe.Slice(out.Data, out.Size)...), nil
 }
 func loadKey(path string) ([]byte, error) {
 	b, e := os.ReadFile(path)

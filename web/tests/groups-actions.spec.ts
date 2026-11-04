@@ -1,5 +1,4 @@
-import { test, expect, type Page } from "@playwright/test";
-import { readFileSync } from "node:fs";
+import { test, expect, type Page, signIn } from "./fixtures";
 
 // A group whose phone answers are synthetic: this checks what the dashboard asks
 // for, that a reply or reaction in a group carries the people the owner saw.
@@ -37,10 +36,7 @@ async function prepare(page: Page) {
     return route.fulfill({ status: 202, json: { id: "synthetic-compose" } });
   });
   await page.route("**/api/v1/inbox/conversations/*/read", (route) => route.fulfill({ json: { ok: true } }));
-  const descriptor = JSON.parse(readFileSync(".test-state/connection.json", "utf8"));
-  await page.goto("/");
-  await page.getByLabel("Owner credential").fill(readFileSync(descriptor.owner, "utf8"));
-  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await signIn(page);
   await page.getByRole("button", { name: "Conversations", exact: true }).click();
   await page.locator(".conversation").filter({ hasText: "Lunch crew" }).getByRole("button", { name: /Lunch crew/ }).click();
   await expect(page.locator('[data-message-id="original"]')).toBeVisible();

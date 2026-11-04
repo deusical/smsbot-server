@@ -1,11 +1,8 @@
-import { test, expect, type Page } from "@playwright/test";
-import { readFileSync } from "node:fs";
-const headers = { Origin: "http://127.0.0.1:8788" };
+import { test, expect, type Page, pollAndSettle, nextPoll, pollUntil, signIn } from "./fixtures";
+import { origin } from "./server";
+const headers = { Origin: origin };
 async function setup(page: Page) {
- const c = JSON.parse(readFileSync(".test-state/connection.json", "utf8"));
- await page.goto("/");
- await page.getByLabel("Owner credential").fill(readFileSync(c.owner,"utf8"));
- await page.getByRole("button",{name:"Sign in",exact:true}).click();
+ await signIn(page);
  await expect(page.getByRole("heading",{name:"Home",exact:true})).toBeVisible();
  const cfg = await (await page.request.get("/api/v1/inbox/settings")).json();
  expect((await page.request.put("/api/v1/inbox/settings",{headers,data:{...cfg,enabled:true,scope:"selected",conversations:[{conversation:"demo-chat",participant:"demo-peer"}],archive_retention_days:0,load_older:false,automatic_replies:false}})).ok()).toBeTruthy();
@@ -26,6 +23,7 @@ test("local changes show edits and a burst beyond one latest page",async({page})
   await expect(page.locator(".bubble").filter({hasText:"Archive original text"})).toBeVisible();
   for(let i=0;i<115;i++)await emit(page,`archive-burst-${i}`,`Archive burst item ${i}`);
   await emit(page,"archive-original","Archive edited text");
+  await nextPoll(page);
   await expect(page.locator(".bubble").filter({hasText:"Archive edited text"})).toHaveCount(1,{timeout:10000});
   await expect(page.locator(".bubble").filter({hasText:"Archive original text"})).toHaveCount(0);
   await expect(page.locator(".bubble").filter({hasText:/^Archive burst item /})).toHaveCount(115,{timeout:10000});
@@ -56,7 +54,6 @@ test("large loaded archive bounds rendered rows",async({page})=>{
   await page.request.put("/api/v1/inbox/settings",{headers,data:{...previous,revision:cfg.revision}});
  }
 });
-
 
 test("enrolled archived conversation composes with collection stopped",async({page})=>{
  const previous=await setup(page);
@@ -113,7 +110,6 @@ test("lost inbox acknowledgement keeps its route and key after collection stops"
  }
 });
 
-
 test("archive feed serializes with held older pages and never polls stale head snapshots",async({page})=>{
  const previous=await setup(page);
  let heads=0,changes=0;
@@ -136,12 +132,14 @@ test("archive feed serializes with held older pages and never polls stale head s
   const paging=page.waitForRequest(request=>request.url().includes("/demo-chat/history?")&&new URL(request.url()).searchParams.has("cursor"));
   await page.getByRole("button",{name:"Load older messages",exact:true}).click();await paging;
   // A poll during a pending page must defer its change cursor advancement.
-  await page.waitForTimeout(3400);
+  await pollAndSettle(page);
   expect(changes).toBe(0);
   release();
+  await nextPoll(page);
   await expect(page.getByText("Synthetic current edit",{exact:true})).toBeVisible({timeout:10000});
   await expect(page.getByText("Synthetic stale edit",{exact:true})).toHaveCount(0);
   await expect(page.getByText("Synthetic deleted row",{exact:true})).toHaveCount(0);
+  await nextPoll(page);
   await expect.poll(()=>changes,{timeout:10000}).toBeGreaterThan(1);
   expect(heads).toBe(1);
   await expect(page.getByText("Synthetic current edit",{exact:true})).toBeVisible();
@@ -152,7 +150,6 @@ test("archive feed serializes with held older pages and never polls stale head s
  }
 });
 
-
 test("archive exports select readable format, download and delete the package",async({page})=>{
  const previous=await setup(page);
  try{
@@ -162,7 +159,7 @@ test("archive exports select readable format, download and delete the package",a
   await expect(page.getByRole("heading",{name:"Original file archive",exact:true})).toBeVisible();
   await page.getByLabel("Archive export format").selectOption("plaintext");
   await page.getByRole("button",{name:"Start message export",exact:true}).click();
-  await expect(page.getByRole("link",{name:"Download message export",exact:true})).toBeVisible({timeout:15000});
+  await pollUntil(page,()=>expect(page.getByRole("link",{name:"Download message export",exact:true})).toBeVisible({timeout:500}));
   await expect(page.getByRole("link",{name:"Download message export",exact:true})).toHaveAttribute("download","messages-export.tar");
   const file=await page.request.get(await page.getByRole("link",{name:"Download message export",exact:true}).getAttribute("href")||"");
   expect(file.ok()).toBeTruthy();
@@ -172,7 +169,7 @@ test("archive exports select readable format, download and delete the package",a
   await expect(page.getByRole("link",{name:"Download message export",exact:true})).toHaveCount(0);
   await page.getByLabel("Archive export format").selectOption("encrypted");
   await page.getByRole("button",{name:"Start message export",exact:true}).click();
-  await expect(page.getByRole("link",{name:"Download message export",exact:true})).toHaveAttribute("download","messages-archive.sma",{timeout:15000});
+  await pollUntil(page,()=>expect(page.getByRole("link",{name:"Download message export",exact:true})).toHaveAttribute("download","messages-archive.sma",{timeout:500}));
   await page.getByRole("button",{name:"Delete server export package",exact:true}).click();
  }finally{
   const cfg=await(await page.request.get("/api/v1/inbox/settings")).json();

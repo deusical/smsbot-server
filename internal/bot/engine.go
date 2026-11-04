@@ -23,6 +23,9 @@ type Engine struct {
 	Transport  transport.Transport
 	Provider   Provider
 	Downloader DownloadProvider
+	// WorkerPollDelay spaces polls of the download worker between stages;
+	// zero means one second.
+	WorkerPollDelay time.Duration
 	// mu is the control lock shared with Collection: send decisions serialize
 	// with consent changes and protected commits.
 	mu              *sync.Mutex

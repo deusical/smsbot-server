@@ -1,5 +1,6 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page, nextPoll, pollUntil, signIn } from "./fixtures";
 import { readFileSync } from "node:fs";
+import { origin } from "./server";
 
 test.use({trace: "retain-on-failure"});
 test("older pages preserve the viewport and new messages do not jump the reader", async ({
@@ -45,6 +46,7 @@ test("older pages preserve the viewport and new messages do not jump the reader"
     await page
       .getByRole("button", { name: "Conversations", exact: true })
       .click();
+    await nextPoll(page);
     await page
       .locator(".conversation")
       .filter({ hasText: "Demo conversation" })
@@ -67,6 +69,7 @@ test("older pages preserve the viewport and new messages do not jump the reader"
     );
     expect(Math.abs(before - after)).toBeLessThan(3);
     latest = true;
+    await nextPoll(page);
     await expect(
       page.getByRole("button", { name: "New messages ↓", exact: true }),
     ).toBeVisible();
@@ -84,12 +87,9 @@ test("older pages preserve the viewport and new messages do not jump the reader"
     await configure(page, false);
   }
 });
-const headers = { Origin: "http://127.0.0.1:8788" };
+const headers = { Origin: origin };
 async function login(page: Page) {
-  const c = JSON.parse(readFileSync(".test-state/connection.json", "utf8"));
-  await page.goto("/");
-  await page.getByLabel("Owner credential").fill(readFileSync(c.owner, "utf8"));
-  await page.getByRole("button", { name: "Sign in" }).click();
+  await signIn(page);
   await expect(
     page.getByRole("heading", { name: "Home", exact: true }),
   ).toBeVisible();
@@ -115,6 +115,8 @@ async function configure(page: Page, enabled: boolean) {
 // Retained history may contain many local pages before phone imports begin.
 async function loadAvailableHistory(page: Page) {
   await expect(async () => {
+    // Each attempt lets the dashboard poll once, so it sees pages saved meanwhile.
+    await nextPoll(page);
     const end = page.locator(".history-end");
     if (!(await end.isVisible())) {
       const older = page.getByRole("button", {name: "Load older messages", exact: true});
@@ -308,6 +310,7 @@ test("file-only sends retain selected files after lost acknowledgement and queue
       .filter({ hasText: "Demo conversation" })
       .getByRole("button", { name: /Demo conversation/ })
       .click();
+    await nextPoll(page);
     await expect(
       page.getByRole("button", { name: "Attach files", exact: true }),
     ).toBeVisible();
@@ -384,6 +387,7 @@ test("owner captures ordinary text while paused and sends manually without autom
     await page.getByRole("switch", { name: "Bot sending" }).click();
     const reply = `Synthetic web reply ${Date.now()}`;
     await page.getByLabel("Message", { exact: true }).fill(reply);
+    await nextPoll(page);
     await page
       .getByRole("button", { name: "Send message", exact: true })
       .click();
@@ -391,9 +395,11 @@ test("owner captures ordinary text while paused and sends manually without autom
     await expect(
       page.locator(".bubble.outgoing").filter({ hasText: reply }),
     ).toBeVisible();
-    await expect(
-      page.locator(".bubble.outgoing:not(.pending)").filter({ hasText: reply }),
-    ).toContainText("Sent from web", { timeout: 15000 });
+    await pollUntil(page, () =>
+      expect(
+        page.locator(".bubble.outgoing:not(.pending)").filter({ hasText: reply }),
+      ).toContainText("Sent from web", { timeout: 500 }),
+    );
     await expect(page.locator(".bubble.pending")).toHaveCount(0);
   } finally {
     await configure(page, false);
@@ -530,6 +536,7 @@ test("lost compose acknowledgement retries the same intent without a second repl
     const message = `Synthetic retry ${Date.now()}`;
     const box = page.getByLabel("Message", { exact: true });
     await box.fill(message);
+    await nextPoll(page);
     await page
       .getByRole("button", { name: "Send message", exact: true })
       .click();
@@ -565,12 +572,14 @@ test("settings conflict can reload the saved revision without reloading the dash
   const settings = await (
     await page.request.get("/api/v1/inbox/settings")
   ).json();
-  await page.waitForResponse(
+  const polled = page.waitForResponse(
     async (response) =>
       response.url().endsWith("/api/v1/inbox/settings") &&
       response.request().method() === "GET" &&
       (await response.json()).revision === settings.revision,
   );
+  await nextPoll(page);
+  await polled;
   await page.getByRole("button", { name: "Save changes", exact: true }).click();
   await expect(
     page.getByRole("alert").filter({ hasText: "settings changed reload" }),
@@ -662,7 +671,6 @@ test("background history polling queues an older-page click and keeps pause usab
   }
 });
 
-
 test("unarchived inbox keeps polling snapshots for latest messages", async ({ page }) => {
   await login(page);
   await configure(page, true);
@@ -685,6 +693,7 @@ test("unarchived inbox keeps polling snapshots for latest messages", async ({ pa
     await page.getByRole("button", { name: "Conversations", exact: true }).click();
     await page.locator(".conversation").filter({ hasText: "Demo conversation" }).getByRole("button", { name: /Demo conversation/ }).click();
     await expect(page.getByText("Synthetic initial snapshot", { exact: true })).toBeVisible();
+    await nextPoll(page);
     await expect(page.getByText("Synthetic latest snapshot", { exact: true })).toBeVisible({ timeout: 10000 });
     expect(snapshots).toBeGreaterThan(1);
     expect(changes).toBe(0);
