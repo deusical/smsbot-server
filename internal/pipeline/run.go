@@ -230,9 +230,11 @@ func (e *Engine[C]) Accept(c C, run *Run, h Host) (Accepted, error) {
 		if err != nil {
 			return Declined, err
 		}
-		out, err := m.Accept(c, s)
-		if err != nil {
-			return Declined, err
+		out := Pending()
+		if m.Accept != nil {
+			if out, err = m.Accept(c, s); err != nil {
+				return Declined, err
+			}
 		}
 		switch out.kind {
 		case kindDecline:
@@ -284,7 +286,10 @@ func (e *Engine[C]) Resume(c C, run *Run, h Host) (stopped bool, err error) {
 			if err := h.Halt(s, out.value); err != nil {
 				return true, err
 			}
-			return false, h.Save()
+			if err := h.Save(); err != nil {
+				return true, err
+			}
+			return false, nil
 		case kindDone:
 			s.Done = true
 			if err := e.effect(h, s, m); err != nil {

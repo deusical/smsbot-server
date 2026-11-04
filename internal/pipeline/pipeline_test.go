@@ -328,3 +328,98 @@ func TestImportsOnlyTheStandardLibrary(t *testing.T) {
 		}
 	}
 }
+
+// failingHost refuses to save.
+type failingHost struct{ toyHost }
+
+func (h *failingHost) Save() error { return errors.New("disk full") }
+
+func TestDispatchHaltSavesOrStops(t *testing.T) {
+	e := toyEngine(Policy{})
+	// The shout step's input comes from the slow step, so it runs (and halts
+	// on an empty word) at dispatch.
+	e.Register(Module[*toyCtx]{
+		Definition: Definition{ID: "blank", Version: 1, Title: "Blank", Effect: Pure,
+			Outputs: []Port{{Name: "out", Title: "Out", Types: []string{"text"}}}},
+		Run: func(_ *toyCtx, s *Step) (Outcome, error) { s.Out("out", text("")); return Done(), nil },
+	})
+	p := Pipeline{Steps: []StepConfig{
+		step("b", "blank", nil, ""),
+		step("loud", "shout", map[string]string{"in": "b.out"}, ""),
+		step("say", "print", map[string]string{"text": "loud.out"}, ""),
+	}}
+	if err := e.Validate(&p, nil); err != nil {
+		t.Fatal(err)
+	}
+	run := Snapshot(p, map[string]Value{"word": text("x")})
+	h := &toyHost{}
+	if got, _ := e.Accept(&toyCtx{}, run, h); got != Ready {
+		t.Fatal("not ready")
+	}
+	if stopped, err := e.Resume(&toyCtx{}, run, h); stopped || err != nil || h.halted != "say something" || !run.Halted || len(h.effects) != 0 {
+		t.Fatal("dispatch halt", stopped, err, h.halted)
+	}
+	run = Snapshot(p, map[string]Value{"word": text("x")})
+	f := &failingHost{}
+	e.Accept(&toyCtx{}, run, f)
+	if stopped, err := e.Resume(&toyCtx{}, run, f); !stopped || err == nil {
+		t.Fatal("a failed save after a halt let the run go on", stopped, err)
+	}
+	// A failed save after a finished step stops too.
+	run = Snapshot(Pipeline{Steps: []StepConfig{step("w", "slow", map[string]string{"in": "trigger.word"}, ""), step("say", "print", map[string]string{"text": "w.out"}, "")}}, map[string]Value{"word": text("x")})
+	for i := range run.Steps {
+		if run.Steps[i].Module == "slow" {
+			run.Steps[i].Version = 2
+		}
+	}
+	f = &failingHost{}
+	if stopped, err := e.Resume(&toyCtx{slowReady: true}, run, f); !stopped || err == nil {
+		t.Fatal("a failed save after a step let the run go on", stopped, err)
+	}
+}
+
+func TestAdmissionDeclinesBeforeAnyAccept(t *testing.T) {
+	e := toyEngine(Policy{})
+	accepted := false
+	e.Register(Module[*toyCtx]{
+		Definition: Definition{ID: "gate", Version: 1, Title: "Gate", Effect: Pure,
+			Outputs: []Port{{Name: "out", Title: "Out", Types: []string{"text"}}}},
+		Admit: func(c *toyCtx, _ *Step) (bool, error) {
+			if len(c.log) > 0 && c.log[0] == "error" {
+				return false, errors.New("broken")
+			}
+			return false, nil
+		},
+	})
+	e.Register(Module[*toyCtx]{
+		Definition: Definition{ID: "mark", Version: 1, Title: "Mark", Effect: Pure, Immediate: true,
+			Outputs: []Port{{Name: "out", Title: "Out", Types: []string{"text"}}}},
+		Accept: func(*toyCtx, *Step) (Outcome, error) { accepted = true; return Done(), nil },
+	})
+	p := Pipeline{Steps: []StepConfig{step("m", "mark", nil, ""), step("g", "gate", nil, ""), step("say", "print", map[string]string{"text": "m.out"}, "")}}
+	if err := e.Validate(&p, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := e.Accept(&toyCtx{}, Snapshot(p, nil), &toyHost{}); got != Declined || err != nil || accepted {
+		t.Fatal("admission did not decline first", got, err, accepted)
+	}
+	if got, err := e.Accept(&toyCtx{log: []string{"error"}}, Snapshot(p, nil), &toyHost{}); got != Declined || err == nil {
+		t.Fatal("admission error lost", got, err)
+	}
+}
+
+func TestSimulatedHaltAndRegistrationGuards(t *testing.T) {
+	e := toyEngine(Policy{})
+	p := shoutThenPrint.Clone()
+	_ = e.Validate(&p, nil)
+	trace, halt, err := e.Simulate(&toyCtx{}, Snapshot(p, map[string]Value{"word": text("")}))
+	if err != nil || halt == nil || halt.Text != "say something" || len(trace) != 1 {
+		t.Fatal("simulated halt", trace, halt, err)
+	}
+	defer func() {
+		if recover() == nil {
+			t.Fatal("untyped port registered")
+		}
+	}()
+	e.Register(Module[*toyCtx]{Definition: Definition{ID: "untyped", Version: 1, Outputs: []Port{{Name: "x"}}}})
+}

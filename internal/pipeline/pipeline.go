@@ -251,11 +251,14 @@ func New[C any](policy Policy) *Engine[C] {
 	return &Engine[C]{Policy: policy, modules: map[string]Module[C]{}, types: map[string]Type{}, triggers: map[string]Trigger{}}
 }
 
-// Register adds a module. Registering an id twice panics.
+// Register adds a module. A module without Accept runs on Resume. Registering
+// an id twice, or a port without a type, panics: both are programming errors.
 func (e *Engine[C]) Register(m Module[C]) {
 	if _, exists := e.modules[m.ID]; exists {
 		panic("pipeline: duplicate module " + m.ID)
 	}
+	mustType(m.ID, m.Inputs)
+	mustType(m.ID, m.Outputs)
 	if m.Settings == nil {
 		m.Settings = NoSettings
 	}
@@ -265,8 +268,19 @@ func (e *Engine[C]) Register(m Module[C]) {
 // RegisterType adds a value type.
 func (e *Engine[C]) RegisterType(t Type) { e.types[t.ID] = t }
 
-// RegisterTrigger adds a trigger kind.
-func (e *Engine[C]) RegisterTrigger(t Trigger) { e.triggers[t.ID] = t }
+// RegisterTrigger adds a trigger kind. An output without a type panics.
+func (e *Engine[C]) RegisterTrigger(t Trigger) {
+	mustType(t.ID, t.Outputs)
+	e.triggers[t.ID] = t
+}
+
+func mustType(owner string, ports []Port) {
+	for _, p := range ports {
+		if len(p.Types) == 0 {
+			panic("pipeline: port " + owner + "." + p.Name + " has no type")
+		}
+	}
+}
 
 // RegisterUpgrade adds a function that rewrites old configuration before it
 // is validated, such as a module split into two.

@@ -389,7 +389,7 @@ func fileValue(f *store.FileRef) pipeline.Value {
 }
 
 func valueFile(v pipeline.Value) *store.FileRef {
-	if len(v.Data) == 0 {
+	if v.Type != typeFile || len(v.Data) == 0 {
 		return nil
 	}
 	var f store.FileRef
@@ -405,7 +405,7 @@ func mediaValue(f *media.File) pipeline.Value {
 }
 
 func valueMedia(v pipeline.Value) *media.File {
-	if len(v.Data) == 0 {
+	if v.Type != typeVideo || len(v.Data) == 0 {
 		return nil
 	}
 	var f media.File
