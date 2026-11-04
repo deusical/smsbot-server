@@ -90,7 +90,9 @@ sends twice.
 ## Where things live
 
 - **Sending:** `bot.Engine.Dispatch` runs each job's steps under one lock and releases it
-  only while waiting on the AI provider or uploading files.
+  only while waiting on the AI provider or uploading files. A plan's attachment bytes
+  are sealed apart from the job row (`job_files`, bound to the job and checked against
+  the plan), so a state change rewrites a small row, and they are removed with the plan.
 - **Download commands:** an encrypted plan snapshots the URL and independent
   execution deadline (15 minutes by default, up to 60). Admission still requires
   fresh input. Dispatch makes short idempotent requests to a token-authenticated

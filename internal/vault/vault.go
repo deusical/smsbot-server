@@ -49,8 +49,25 @@ func (v *Vault) Seal(scope string, plain []byte) (string, error) {
 }
 func (v *Vault) Open(scope, encoded string) ([]byte, error) {
 	b, e := base64.RawStdEncoding.DecodeString(encoded)
-	if e != nil || len(b) < v.aead.NonceSize() {
+	if e != nil {
 		return nil, errors.New("invalid ciphertext")
 	}
-	return v.aead.Open(nil, b[:v.aead.NonceSize()], b[v.aead.NonceSize():], []byte(scope))
+	return v.OpenBytes(scope, b)
+}
+
+// SealBytes is Seal without the text encoding, for payloads stored as BLOBs.
+func (v *Vault) SealBytes(scope string, plain []byte) ([]byte, error) {
+	n := make([]byte, v.aead.NonceSize(), v.aead.NonceSize()+len(plain)+v.aead.Overhead())
+	if _, e := rand.Read(n); e != nil {
+		return nil, e
+	}
+	return v.aead.Seal(n, n, plain, []byte(scope)), nil
+}
+
+// OpenBytes opens what SealBytes sealed under the same scope.
+func (v *Vault) OpenBytes(scope string, sealed []byte) ([]byte, error) {
+	if len(sealed) < v.aead.NonceSize() {
+		return nil, errors.New("invalid ciphertext")
+	}
+	return v.aead.Open(nil, sealed[:v.aead.NonceSize()], sealed[v.aead.NonceSize():], []byte(scope))
 }
