@@ -50,7 +50,7 @@ func recordSteps(q execer, job string, p Plan) error {
 		if i == 0 {
 			continue // the trigger
 		}
-		if _, err := q.Exec("INSERT OR IGNORE INTO job_steps VALUES(?,?,?,?,?)", job, i, step.ID, step.Module, step.Done); err != nil {
+		if _, err := q.Exec("INSERT OR IGNORE INTO job_steps VALUES(?,?,?,?,?)", job, i, step.ID, step.Module, step.Finished()); err != nil {
 			return err
 		}
 	}
@@ -63,7 +63,7 @@ func syncSteps(q execer, job string, p Plan) error {
 		return nil
 	}
 	for i, step := range p.Pipeline.Steps {
-		if i > 0 && step.Done {
+		if i > 0 && step.Finished() {
 			if _, err := q.Exec("UPDATE job_steps SET done=1 WHERE job=? AND position=? AND done=0", job, i); err != nil {
 				return err
 			}

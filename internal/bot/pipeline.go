@@ -267,7 +267,6 @@ func (h planHost) Fail(code string) error {
 
 // haltPlan ends the pipeline with a fixed reply and no AI conversation turn.
 func haltPlan(p *store.Plan, text string) {
-	p.Pipeline.Halted = true
 	p.Reply = text
 	p.Model = ""
 	p.Memory = false
@@ -313,15 +312,21 @@ func (e *Engine) acceptPipeline(ctx context.Context, m transport.Incoming, p *st
 	return true, nil
 }
 
-// runPipeline runs the job's remaining steps in order. It returns done=true
-// when this dispatch round ended in a step; otherwise the reply step has put
-// the text and files to send into the plan.
+// runPipeline runs the job's remaining steps in order and delivers the
+// Reply step's intent into the plan. It returns done=true when this dispatch
+// round ended in a step; otherwise the plan holds the text and files to send.
 func (e *Engine) runPipeline(ctx context.Context, j store.Job, p *store.Plan, cfg *Configuration) (bool, error) {
 	if p.Pipeline == nil {
 		return false, nil
 	}
 	c := &runCtx{e: e, ctx: ctx, p: p, cfg: cfg, j: j}
-	return commands.Resume(c, p.Pipeline, planHost{e: e, j: j, p: p})
+	done, err := commands.Resume(c, p.Pipeline, planHost{e: e, j: j, p: p})
+	if errors.Is(err, cmdflow.ErrFormat) || errors.Is(err, cmdflow.ErrNotAccepted) || errors.Is(err, cmdflow.ErrFailed) {
+		// A run this version can't continue, such as one stored by an
+		// earlier version before a restart, fails once instead of retrying.
+		return true, e.Store.Complete(j.ID, "failed", "pipeline_unavailable")
+	}
+	return done, err
 }
 
 // pendingImmediate rejects running an immediate step at dispatch: its inputs

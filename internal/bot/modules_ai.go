@@ -353,7 +353,7 @@ func aiChatModule() module {
 			return yielded(e.generateReply(r.ctx, r.j, r.p, r.cfg, call, history, func(text string) {
 				s.Out("text", textValue(text))
 				s.Out("context", contextValue(st.Conversation))
-				s.Done = true
+				s.Status = cmdflow.StatusDone
 			}))
 		},
 		Simulate: func(c *runCtx, s *cmdflow.Step) (cmdflow.Outcome, error) {

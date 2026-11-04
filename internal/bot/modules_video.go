@@ -105,7 +105,7 @@ func videoDownloadModule() module {
 			} else {
 				s.Out("source", cmdflow.Value{Type: typeStoredVideo, Handle: workerJob(r.j, s.ID)})
 			}
-			s.Done = true
+			s.Status = cmdflow.StatusDone
 			return yielded(e.finishWorkerStep(r.j, r.p))
 		},
 		Simulate: func(_ *runCtx, s *cmdflow.Step) (cmdflow.Outcome, error) {
@@ -194,7 +194,7 @@ func videoCompressModule() module {
 				return cmdflow.Yield(), err
 			}
 			s.Out("video", mediaValue(file))
-			s.Done = true
+			s.Status = cmdflow.StatusDone
 			return yielded(e.finishWorkerStep(r.j, r.p))
 		},
 		Simulate: func(_ *runCtx, s *cmdflow.Step) (cmdflow.Outcome, error) {
