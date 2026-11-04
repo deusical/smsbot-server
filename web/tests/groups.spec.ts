@@ -1,12 +1,9 @@
-import { test, expect, type Page } from "@playwright/test";
-import { readFileSync } from "node:fs";
+import { test, expect, type Page, nextPoll, signIn } from "./fixtures";
+import { origin } from "./server";
 
-const headers = { Origin: "http://127.0.0.1:8788" };
+const headers = { Origin: origin };
 async function login(page: Page, path = "/") {
-  const c = JSON.parse(readFileSync(".test-state/connection.json", "utf8"));
-  await page.goto(path);
-  await page.getByLabel("Owner credential").fill(readFileSync(c.owner, "utf8"));
-  await page.getByRole("button", { name: "Sign in" }).click();
+  await signIn(page, path);
   await expect(page.getByRole("button", { name: "Sign out" }).or(page.getByRole("navigation", { name: "Main navigation" }))).toBeVisible();
 }
 type Inbox = Record<string, unknown>;
@@ -42,6 +39,7 @@ test("a group is saved with who sent each message and shown that way", async ({ 
     }
     await page.getByRole("navigation", { name: "Main navigation" }).getByRole("button", { name: "Conversations", exact: true }).click();
     const row = page.locator(".conversation").filter({ hasText: "Group example" });
+    await nextPoll(page);
     await row.getByRole("button").first().click();
     await expect(page.getByRole("heading", { name: "Group example" })).toBeVisible();
     await expect(page.locator(".thread-title")).toContainText("Group, 2 people");

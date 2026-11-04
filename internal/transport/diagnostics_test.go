@@ -15,6 +15,7 @@ import (
 )
 
 func TestAccountSnapshotDoesNotInvalidateReadiness(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name       string
 		event      any
@@ -49,6 +50,7 @@ func TestAccountSnapshotDoesNotInvalidateReadiness(t *testing.T) {
 }
 
 func TestDiagnosticNeverIncludesUpstreamData(t *testing.T) {
+	t.Parallel()
 	var emitted AuthDiagnostic
 	g := &Google{Diagnostic: func(d AuthDiagnostic) { emitted = d }}
 	err := events.RequestError{Data: &gmproto.ErrorResponse{Type: 16, Message: "SYNTHETIC_COOKIE_DETAIL"}, HTTP: &events.HTTPError{Resp: &http.Response{StatusCode: 401}, Body: []byte("SYNTHETIC_COOKIE_DETAIL")}}
@@ -59,6 +61,7 @@ func TestDiagnosticNeverIncludesUpstreamData(t *testing.T) {
 	}
 }
 func TestRefreshPersistenceCreatesEncryptedUpdatedState(t *testing.T) {
+	t.Parallel()
 	g, original := cookieUpdateFixture(t, syntheticSession)
 	plain, err := g.vault.Open("google-session", string(original))
 	if err != nil {

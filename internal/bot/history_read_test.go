@@ -34,6 +34,7 @@ func historyJobs(t *testing.T, e *Engine) int {
 // text history needs enrollment only, collected inbox history needs collection
 // consent only. Neither routes commands or changes Live/Pause.
 func TestHistoryEntryPointsKeepTheirOwnGrants(t *testing.T) {
+	t.Parallel()
 	t.Run("enrolled without collection", func(t *testing.T) {
 		e, _ := setup(t)
 		if err := e.Store.Enroll("demo-chat", "demo-peer"); err != nil {

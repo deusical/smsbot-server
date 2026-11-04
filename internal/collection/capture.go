@@ -1,6 +1,7 @@
 package collection
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"github.com/deusical/smsbot-server/internal/store"
@@ -85,7 +86,7 @@ func (svc *Service) RunCapture(ctx context.Context) {
 	workers.Add(1)
 	go func() {
 		defer workers.Done()
-		ticker := time.NewTicker(time.Second)
+		ticker := time.NewTicker(cmp.Or(svc.CaptureInterval, time.Second))
 		defer ticker.Stop()
 		for {
 			select {

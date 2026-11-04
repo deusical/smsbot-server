@@ -11,6 +11,7 @@ import (
 )
 
 func TestNotificationDevicesHaveTheirOwnSettings(t *testing.T) {
+	t.Parallel()
 	s := apiSetup(t)
 	if w := ownerRequest(s, "GET", "/api/v1/notifications", ""); w.Code != 503 {
 		t.Fatal("notifications answered before the service was wired", w.Code)

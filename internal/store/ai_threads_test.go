@@ -32,6 +32,7 @@ func answerAI(t *testing.T, s *Store, id, wire string, p Plan, now time.Time) {
 }
 
 func TestAIThreadsBranchPersistenceAndEncryption(t *testing.T) {
+	t.Parallel()
 	s := inboxStore(t)
 	if err := s.Enroll("fixture-chat", "fixture-peer"); err != nil {
 		t.Fatal(err)
@@ -93,6 +94,7 @@ func TestAIThreadsBranchPersistenceAndEncryption(t *testing.T) {
 }
 
 func TestAIThreadsAtomicAcceptanceResetAndExpiry(t *testing.T) {
+	t.Parallel()
 	s := inboxStore(t)
 	s.Enroll("fixture-chat", "fixture-peer")
 	now := time.Now()
@@ -161,6 +163,7 @@ func TestAIThreadsAtomicAcceptanceResetAndExpiry(t *testing.T) {
 }
 
 func TestAIAnswerProofUncertaintyAndNoEchoLifetimeExtension(t *testing.T) {
+	t.Parallel()
 	s := inboxStore(t)
 	s.Enroll("fixture-chat", "fixture-peer")
 	now := time.Now()
@@ -220,6 +223,7 @@ func TestAIAnswerProofUncertaintyAndNoEchoLifetimeExtension(t *testing.T) {
 }
 
 func TestAIThreadBackupExcludesAncestryAndRestoresNoTriggers(t *testing.T) {
+	t.Parallel()
 	s := inboxStore(t)
 	s.Enroll("fixture-chat", "fixture-peer")
 	p := aiPlan("root", "", "prompt")

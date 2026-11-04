@@ -21,6 +21,7 @@ func (o *outageTransport) OutagesSince(after uint64) (time.Time, uint64, bool) {
 }
 
 func TestMissedSinceCoversServiceDowntimeThenOutages(t *testing.T) {
+	t.Parallel()
 	svc, f := setup(t)
 	newest := time.Now().Add(-time.Hour).UTC().Truncate(time.Second)
 	if err := svc.Store.SaveObserved("chat", "m1", "", "incoming", "Synthetic text", "phone", "", newest.Add(-time.Hour)); err != nil {

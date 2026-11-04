@@ -10,6 +10,7 @@ import (
 )
 
 func TestPersistenceAndEncryption(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "test.db")
 	v, _ := vault.New(make([]byte, 32))
 	s, e := Open(path, v)
@@ -40,6 +41,7 @@ func TestPersistenceAndEncryption(t *testing.T) {
 	}
 }
 func TestFutureSchemaRejected(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "test.db")
 	v, _ := vault.New(make([]byte, 32))
 	s, _ := Open(path, v)
@@ -50,6 +52,7 @@ func TestFutureSchemaRejected(t *testing.T) {
 	}
 }
 func TestCredentialRevocationAndExpiry(t *testing.T) {
+	t.Parallel()
 	v, _ := vault.New(make([]byte, 32))
 	s, e := Open(filepath.Join(t.TempDir(), "test.db"), v)
 	if e != nil {
@@ -64,6 +67,7 @@ func TestCredentialRevocationAndExpiry(t *testing.T) {
 }
 
 func TestRequestLimitsCountBotRepliesOnly(t *testing.T) {
+	t.Parallel()
 	v, _ := vault.New(make([]byte, 32))
 	s, err := Open(filepath.Join(t.TempDir(), "test.db"), v)
 	if err != nil {

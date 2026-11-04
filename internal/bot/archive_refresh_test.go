@@ -25,6 +25,7 @@ func (f *viewedHistoryTransport) FetchHistory(ctx context.Context, conv, peer, c
 	return transport.HistoryPage{}, nil
 }
 func TestViewedRefreshRepairsGapsAndEditsWithoutReplacingDeepImport(t *testing.T) {
+	t.Parallel()
 	e, f := setup(t)
 	settings := enableInbox(t, e)
 	settings.ArchiveRetentionDays = 0
@@ -75,6 +76,7 @@ func TestViewedRefreshRepairsGapsAndEditsWithoutReplacingDeepImport(t *testing.T
 }
 
 func TestExplicitDeepImportPreservesViewedRefresh(t *testing.T) {
+	t.Parallel()
 	e, _ := setup(t)
 	enableInbox(t, e)
 	a, err := e.Collection.RequestArchiveRefresh(context.Background(), "demo-chat", time.Now().Add(-time.Hour).UTC().Format(time.RFC3339Nano), "")
@@ -104,6 +106,7 @@ func (f *revokeViewedTransport) FetchHistory(ctx context.Context, conv, peer, cu
 	return f.viewedHistoryTransport.FetchHistory(ctx, conv, peer, cursor)
 }
 func TestViewedRefreshCannotPublishAfterConsentRevocation(t *testing.T) {
+	t.Parallel()
 	e, f := setup(t)
 	enableInbox(t, e)
 	at := time.Now().Add(-time.Hour)

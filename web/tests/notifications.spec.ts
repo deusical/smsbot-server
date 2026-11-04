@@ -1,11 +1,11 @@
-import { test, expect, type Page } from "@playwright/test";
-import { readFileSync } from "node:fs";
+import { test, expect, type Page, signIn } from "./fixtures";
+import { origin } from "./server";
 
 // Headless browsers cannot reach a real push service, so the browser's push
 // subscription is stubbed; registration, settings and storage are real.
 test.use({ serviceWorkers: "allow", permissions: ["notifications"] });
 
-const headers = { Origin: "http://127.0.0.1:8788" };
+const headers = { Origin: origin };
 
 async function login(page: Page) {
   await page.addInitScript(() => {
@@ -19,10 +19,7 @@ async function login(page: Page) {
     PushManager.prototype.subscribe = async function () { localStorage.setItem("synthetic-push", "1"); return fake as unknown as PushSubscription; };
     PushManager.prototype.getSubscription = async function () { return (localStorage.getItem("synthetic-push") ? fake : null) as PushSubscription | null; };
   });
-  await page.goto("/");
-  const d = JSON.parse(readFileSync(".test-state/connection.json", "utf8"));
-  await page.getByLabel("Owner credential").fill(readFileSync(d.owner, "utf8"));
-  await page.getByRole("button", { name: "Sign in" }).click();
+  await signIn(page);
   await expect(page.getByRole("heading", { name: "Home", exact: true })).toBeVisible();
 }
 

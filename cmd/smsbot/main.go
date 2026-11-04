@@ -54,6 +54,7 @@ type options struct {
 	ownerFile                           string
 	init                                bool
 	fixture                             bool
+	fixtureSpeed                        int
 	pair                                bool
 	updateCookies                       bool
 	cookiesStdin                        bool
@@ -80,6 +81,7 @@ func parseOptions(args []string) (*options, error) {
 	flags.StringVar(&o.ownerFile, "owner-file", "", "file for initial owner credential")
 	flags.BoolVar(&o.init, "init", false, "initialize encrypted state and owner credential")
 	flags.BoolVar(&o.fixture, "fixture", false, "explicit offline fixture mode")
+	flags.IntVar(&o.fixtureSpeed, "fixture-speed", 1, "fixture only: run background polling this many times faster (1-100), for tests")
 	flags.BoolVar(&o.pair, "pair", false, "pair Google Messages locally with owner emoji approval")
 	flags.BoolVar(&o.updateCookies, "update-cookies", false, "replace cookies in the existing encrypted pairing offline")
 	flags.BoolVar(&o.cookiesStdin, "cookies-stdin", false, "read Google cookies from stdin, never command arguments")
@@ -109,6 +111,9 @@ func (o *options) validate() error {
 	}
 	if (o.pair || o.updateCookies) && !o.cookiesStdin {
 		return errors.New("pairing and cookie updates require --cookies-stdin")
+	}
+	if o.fixtureSpeed != 1 && (!o.fixture || o.fixtureSpeed < 1 || o.fixtureSpeed > 100) {
+		return errors.New("--fixture-speed requires --fixture and a value from 1 to 100")
 	}
 	if o.data == "" || o.key == "" {
 		return errors.New("--data and --key are required")
@@ -449,6 +454,7 @@ func (o *options) serve(s *store.Store, v *vault.Vault, sessionPath string) erro
 	if o.fixture {
 		// Offline: video steps complete with a synthetic file, no worker.
 		service.Engine.Downloader = &bot.FixtureDownloader{}
+		service.Accelerate(o.fixtureSpeed)
 	}
 	// Push services require a contact for the sending server: its origin.
 	service.Notify.Subject = origin

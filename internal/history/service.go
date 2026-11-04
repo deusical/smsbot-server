@@ -2,6 +2,7 @@
 package history
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -114,6 +115,8 @@ type Service struct {
 	Host         Host
 	tickMu       sync.Mutex
 	wake         chan struct{}
+	// ActiveInterval spaces work while imports are active; zero means activeInterval.
+	ActiveInterval time.Duration
 }
 
 const (
@@ -187,7 +190,7 @@ func (s *Service) nextInterval() time.Duration {
 	for _, at := range pendingDeadlines(archives, s.allowed) {
 		consider(at)
 	}
-	return max(activeInterval, next.Sub(now))
+	return max(s.active(), next.Sub(now))
 }
 
 // allowed reports whether a record is an individual conversation the owner
@@ -199,6 +202,7 @@ func (s *Service) allowed(a store.Archive) bool {
 	_, err := s.Host.Policy(a.Conversation)
 	return err == nil
 }
+func (s *Service) active() time.Duration { return cmp.Or(s.ActiveInterval, activeInterval) }
 func activeState(state string) bool {
 	return state == "queued" || state == "running" || state == "retrying"
 }
@@ -298,7 +302,7 @@ func (s *Service) Tick(ctx context.Context) {
 		} else {
 			pending := isPaged && paged.DiscoveryPending()
 			if pending {
-				s.nextDiscovery = s.now().Add(activeInterval)
+				s.nextDiscovery = s.now().Add(s.active())
 			}
 			for _, c := range list {
 				if !eligibleArchive(store.NewArchive(c)) {

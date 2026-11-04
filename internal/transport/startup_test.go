@@ -11,6 +11,7 @@ import (
 // An unreachable phone at startup leaves the service running and unready,
 // recovering with backoff, instead of exiting.
 func TestStartupWithUnreachablePhoneRecoversInBackground(t *testing.T) {
+	t.Parallel()
 	g := NewGoogle(nil, "")
 	if err := g.startUnready(context.DeadlineExceeded); err != nil {
 		t.Fatal("startup failed for an unreachable phone:", err)
@@ -34,6 +35,7 @@ func TestStartupWithUnreachablePhoneRecoversInBackground(t *testing.T) {
 }
 
 func TestStartupWithRejectedCredentialsStops(t *testing.T) {
+	t.Parallel()
 	g := NewGoogle(nil, "")
 	if g.startUnready(events.ErrInvalidCredentials) == nil {
 		t.Fatal("rejected credentials started the service")

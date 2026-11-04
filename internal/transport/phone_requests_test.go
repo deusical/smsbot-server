@@ -7,6 +7,7 @@ import (
 )
 
 func TestPhoneRequestCountsTotalAndLastHour(t *testing.T) {
+	t.Parallel()
 	var p phoneRequests
 	start := time.Unix(1_800_000_000, 0)
 	p.add(phoneList, start)
@@ -32,6 +33,7 @@ func TestPhoneRequestCountsTotalAndLastHour(t *testing.T) {
 }
 
 func TestPhoneRequestCountsIgnoreSlotsAheadOfABackwardClock(t *testing.T) {
+	t.Parallel()
 	var p phoneRequests
 	now := time.Unix(1_800_000_000, 0)
 	p.add(phoneList, now.Add(10*time.Minute))
@@ -41,6 +43,7 @@ func TestPhoneRequestCountsIgnoreSlotsAheadOfABackwardClock(t *testing.T) {
 }
 
 func TestPhoneRequestCountsSurviveAClockBefore1970(t *testing.T) {
+	t.Parallel()
 	var p phoneRequests
 	before := time.Unix(-90, 0)
 	p.add(phoneList, before)
@@ -50,6 +53,7 @@ func TestPhoneRequestCountsSurviveAClockBefore1970(t *testing.T) {
 }
 
 func TestEveryPhoneRequestIsLoggedWithLabelsOnly(t *testing.T) {
+	t.Parallel()
 	var logged []PhoneRequestLog
 	g := &Google{RequestLog: func(r PhoneRequestLog) { logged = append(logged, r) }}
 	g.countPhone(WithPhonePurpose(context.Background(), "discovery"), phoneLookup)

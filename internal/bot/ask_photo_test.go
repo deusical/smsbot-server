@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"github.com/deusical/smsbot-server/internal/racetest"
 	"image"
 	"image/png"
 	"math/rand"
@@ -47,6 +48,7 @@ func setModalities(t *testing.T, e *Engine, modalities ...string) {
 }
 
 func TestAskAboutAQuotedPhotoSendsItOnce(t *testing.T) {
+	t.Parallel()
 	e, _ := setup(t)
 	enableInbox(t, e)
 	arm(t, e)
@@ -86,6 +88,7 @@ func TestAskAboutAQuotedPhotoSendsItOnce(t *testing.T) {
 }
 
 func TestBareAskOnAQuotedPhotoWithText(t *testing.T) {
+	t.Parallel()
 	e, _ := setup(t)
 	enableInbox(t, e)
 	arm(t, e)
@@ -99,6 +102,7 @@ func TestBareAskOnAQuotedPhotoWithText(t *testing.T) {
 }
 
 func TestAskOnAPhotoTheModelCannotRead(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, mime string
 		size       int
@@ -147,6 +151,7 @@ func sentContains(f *transport.Fixture, text string) bool {
 }
 
 func TestAskOnAPhotoThatIsNotAnImageIsExplained(t *testing.T) {
+	t.Parallel()
 	e, fixture := setup(t)
 	enableInbox(t, e)
 	arm(t, e)
@@ -170,6 +175,7 @@ func TestAskOnAPhotoThatIsNotAnImageIsExplained(t *testing.T) {
 }
 
 func TestProvidersSendThePhotoWithThePrompt(t *testing.T) {
+	t.Parallel()
 	var request struct {
 		Messages []json.RawMessage `json:"messages"`
 	}
@@ -214,6 +220,7 @@ func TestProvidersSendThePhotoWithThePrompt(t *testing.T) {
 }
 
 func TestCatalogsRecordImageInput(t *testing.T) {
+	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`{"data":[{"id":"vendor/vision","architecture":{"input_modalities":["text","image"],"output_modalities":["text"]},"pricing":{"prompt":"0","completion":"0"}},{"id":"vendor/text","architecture":{"input_modalities":["text"],"output_modalities":["text"]},"pricing":{"prompt":"0","completion":"0"}},{"id":"vendor/unknown","pricing":{"prompt":"0","completion":"0"}}]}`))
 	}))
@@ -252,6 +259,7 @@ func (f *photoTransport) DownloadFile(ctx context.Context, file media.File) ([]b
 }
 
 func TestAskDownloadsAPhotoOnlyFromACollectedConversation(t *testing.T) {
+	t.Parallel()
 	for _, collected := range []bool{true, false} {
 		e, fixture := setup(t)
 		s := enableInbox(t, e)
@@ -300,6 +308,8 @@ func noisePNG(t *testing.T) []byte {
 }
 
 func TestPhotoSizeSettingDecidesWhatIsShrunk(t *testing.T) {
+	t.Parallel()
+	racetest.SkipHeavy(t)
 	big := noisePNG(t)
 	if len(big) <= defaultPhotoMB<<20 || len(big) >= maxPhotoMB<<20 {
 		t.Fatalf("test photo is %d bytes", len(big))
@@ -351,6 +361,7 @@ func TestPhotoSizeSettingDecidesWhatIsShrunk(t *testing.T) {
 }
 
 func TestPhotoSizeSettingIsValidated(t *testing.T) {
+	t.Parallel()
 	for limit, ok := range map[int]bool{-1: false, 0: true, 1: true, maxPhotoMB: true, maxPhotoMB + 1: false} {
 		c := DefaultConfiguration()
 		c.Settings.AIPhotoMaxMB = limit
@@ -361,6 +372,7 @@ func TestPhotoSizeSettingIsValidated(t *testing.T) {
 }
 
 func TestAskAboutAnIPhonePhotoSendsItAsAJPEG(t *testing.T) {
+	t.Parallel()
 	heic, err := os.ReadFile("../media/testdata/sample.heic")
 	if err != nil {
 		t.Fatal(err)

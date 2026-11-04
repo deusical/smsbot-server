@@ -7,6 +7,7 @@ import (
 )
 
 func TestFixtureDownloaderAdvancesPerJobAndRespectsTheLimit(t *testing.T) {
+	t.Parallel()
 	f := &FixtureDownloader{}
 	ctx, deadline := context.Background(), time.Now().Add(time.Minute)
 	if stage, err := f.PollSource(ctx, "a", "scope", "https://douyin.com/x", deadline); stage != "downloading" || err != nil {
@@ -30,6 +31,7 @@ func TestFixtureDownloaderAdvancesPerJobAndRespectsTheLimit(t *testing.T) {
 }
 
 func TestCommandPipelineForEveryTemplate(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		command Command
 		modules []string

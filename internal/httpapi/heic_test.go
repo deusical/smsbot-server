@@ -15,6 +15,7 @@ import (
 )
 
 func TestAnInlineHEICPhotoIsShownAsAJPEGAndTheOriginalStaysADownload(t *testing.T) {
+	t.Parallel()
 	s := apiSetup(t)
 	settings, _ := s.Collection.Settings()
 	settings.Enabled = true

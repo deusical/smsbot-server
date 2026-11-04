@@ -17,6 +17,7 @@ type metricsRoundTrip func(*http.Request) (*http.Response, error)
 
 func (f metricsRoundTrip) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 func TestRelayMetricsCountInternalCallsAndRetriesWithoutChangingRequests(t *testing.T) {
+	t.Parallel()
 	for _, jsonEncoding := range []bool{false, true} {
 		action, _ := proto.Marshal(&gmproto.OutgoingRPCData{Action: gmproto.ActionType_NOTIFY_DITTO_ACTIVITY, EncryptedProtoData: []byte("synthetic private bytes")})
 		envelope := &gmproto.OutgoingRPCMessage{Data: &gmproto.OutgoingRPCMessage_Data{MessageData: action}}
@@ -51,6 +52,7 @@ func TestRelayMetricsCountInternalCallsAndRetriesWithoutChangingRequests(t *test
 	}
 }
 func TestPurposeLabelsAreBoundedAndDoNotReplaceOperationCounts(t *testing.T) {
+	t.Parallel()
 	var g Google
 	g.countPhone(WithPhonePurpose(context.Background(), "backfill"), phoneMessages)
 	g.countPhone(WithPhonePurpose(context.Background(), "synthetic-private-identifier"), phoneLookup)

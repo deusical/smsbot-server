@@ -27,6 +27,7 @@ func commitStep(e *Engine, w history.Work, a store.Archive, p history.Policy, pa
 }
 
 func TestImportedSendAliasDoesNotCountAsNewSavedMessage(t *testing.T) {
+	t.Parallel()
 	e, _ := setup(t)
 	cfg := enableInbox(t, e)
 	arm(t, e)

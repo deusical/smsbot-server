@@ -48,6 +48,7 @@ func req(s *Server, method, path, body, token, origin string) *httptest.Response
 	return w
 }
 func TestAuthAndHost(t *testing.T) {
+	t.Parallel()
 	s := apiSetup(t)
 	if w := req(s, "GET", "/api/v1/state", "", "", " "); w.Code != 401 {
 		t.Fatal(w.Code)
@@ -66,6 +67,7 @@ func TestAuthAndHost(t *testing.T) {
 	}
 }
 func TestClientCredentialEndpointsAreGone(t *testing.T) {
+	t.Parallel()
 	s := apiSetup(t)
 	for _, c := range []struct{ method, path string }{{"POST", "/api/v1/clients"}, {"GET", "/api/v1/clients"}, {"DELETE", "/api/v1/clients/x"}, {"GET", "/api/v1/conversations"}} {
 		if w := req(s, c.method, c.path, "", "fixture-client", ""); w.Code < 400 {
@@ -75,6 +77,7 @@ func TestClientCredentialEndpointsAreGone(t *testing.T) {
 }
 
 func TestLoginCookieAndCSRF(t *testing.T) {
+	t.Parallel()
 	s := apiSetup(t)
 	w := req(s, "POST", "/api/v1/login", `{"token":"fixture-owner"}`, "", "http://localhost:8787")
 	if w.Code != 200 {
@@ -104,6 +107,7 @@ func TestLoginCookieAndCSRF(t *testing.T) {
 }
 
 func TestFailedLoginsDoNotLockOutAndWhitespaceIsTrimmed(t *testing.T) {
+	t.Parallel()
 	s := apiSetup(t)
 	for i := 0; i < 10; i++ {
 		if w := req(s, "POST", "/api/v1/login", `{"token":"wrong"}`, "", s.Origin); w.Code != 401 {
@@ -116,6 +120,7 @@ func TestFailedLoginsDoNotLockOutAndWhitespaceIsTrimmed(t *testing.T) {
 }
 
 func TestRememberedLoginNeverExpiresAndRevokesEverywhere(t *testing.T) {
+	t.Parallel()
 	s := apiSetup(t)
 	short := req(s, "POST", "/api/v1/login", `{"token":"fixture-owner"}`, "", s.Origin).Result().Cookies()[0]
 	long := req(s, "POST", "/api/v1/login", `{"token":"fixture-owner","remember":true}`, "", s.Origin).Result().Cookies()[0]
@@ -154,6 +159,7 @@ func TestRememberedLoginNeverExpiresAndRevokesEverywhere(t *testing.T) {
 }
 
 func TestInstallableAppShellHeaders(t *testing.T) {
+	t.Parallel()
 	s := apiSetup(t)
 	w := req(s, "GET", "/manifest.webmanifest", "", "", "")
 	if w.Code != 200 || w.Header().Get("Content-Type") != "application/manifest+json" || w.Header().Get("Cache-Control") != "no-cache" {
@@ -168,6 +174,7 @@ func TestInstallableAppShellHeaders(t *testing.T) {
 }
 
 func TestBearerCredentialsAreNeverHonoured(t *testing.T) {
+	t.Parallel()
 	s := apiSetup(t)
 	w := req(s, "POST", "/api/v1/login", `{"token":"fixture-owner"}`, "", s.Origin)
 	cookie := w.Result().Cookies()[0]
@@ -190,6 +197,7 @@ func TestBearerCredentialsAreNeverHonoured(t *testing.T) {
 	}
 }
 func TestEnrollmentValidation(t *testing.T) {
+	t.Parallel()
 	s := apiSetup(t)
 	for _, body := range []string{`{"conversation_id":"demo-group","participant_id":"demo-peer"}`, `{"conversation_id":"demo-chat","participant_id":"wrong"}`, `{"conversation_id":"demo-chat","participant_id":"demo-peer","extra":true}`} {
 		if w := req(s, "POST", "/api/v1/enrollment", body, "fixture-client", ""); w.Code != 400 {
@@ -201,6 +209,7 @@ func TestEnrollmentValidation(t *testing.T) {
 	}
 }
 func TestEndToEndFixture(t *testing.T) {
+	t.Parallel()
 	s := apiSetup(t)
 	req(s, "POST", "/api/v1/enrollment", `{"conversation_id":"demo-chat","participant_id":"demo-peer"}`, "fixture-client", "")
 	req(s, "POST", "/api/v1/pause", `{"paused":false}`, "fixture-client", "")
@@ -222,6 +231,7 @@ func TestEndToEndFixture(t *testing.T) {
 	}
 }
 func TestFixtureEndpointUnavailableInLiveMode(t *testing.T) {
+	t.Parallel()
 	s := apiSetup(t)
 	s.Fixture = false
 	if w := req(s, "POST", "/api/v1/fixture/incoming", `{}`, "fixture-client", ""); w.Code != 404 {

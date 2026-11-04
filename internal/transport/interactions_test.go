@@ -8,6 +8,7 @@ import (
 )
 
 func TestInteractionNormalization(t *testing.T) {
+	t.Parallel()
 	if CanonicalEmoji("❤") != CanonicalEmoji("❤️") {
 		t.Fatal("equivalent emoji forms differ")
 	}
@@ -28,6 +29,7 @@ func TestInteractionNormalization(t *testing.T) {
 }
 
 func TestConversationEventsPopulateOwnerAndPreserveIdentityBaseline(t *testing.T) {
+	t.Parallel()
 	g := &Google{}
 	c := &gmproto.Conversation{ConversationID: "synthetic-conv", DefaultOutgoingID: "synthetic-self", Participants: []*gmproto.Participant{{ID: &gmproto.SmallInfo{ParticipantID: "synthetic-peer"}, IsVisible: true}}}
 	if g.rememberConversationEvent(c) {

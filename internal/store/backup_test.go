@@ -7,6 +7,7 @@ import (
 )
 
 func TestBackupRestoreEncryptedExcludedCredentialsAndNoReplay(t *testing.T) {
+	t.Parallel()
 	source := inboxStore(t)
 	if e := source.Enroll("fixture-chat", "fixture-peer"); e != nil {
 		t.Fatal(e)
@@ -87,6 +88,7 @@ func TestBackupRestoreEncryptedExcludedCredentialsAndNoReplay(t *testing.T) {
 	}
 }
 func TestBackupRejectsFutureSchemaTamperingAndRollsBack(t *testing.T) {
+	t.Parallel()
 	source := inboxStore(t)
 	data, e := source.ExportBackup()
 	if e != nil {

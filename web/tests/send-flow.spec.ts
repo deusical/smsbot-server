@@ -1,5 +1,5 @@
-import {test, expect, type Page, type Route} from "@playwright/test";
-import {readFileSync} from "node:fs";
+import { test, expect, type Page, type Route, nextPoll, signIn } from "./fixtures";
+
 type Msg = {id:string;direction:string;text:string;at:string;origin?:string;status?:string};
 async function prepare(page: Page) {
   const world = {
@@ -25,10 +25,7 @@ async function prepare(page: Page) {
     if (world.composeGate) await world.composeGate;
     await route.fulfill({status: 202, json: {id: "job-1", queued: true}});
   });
-  const descriptor = JSON.parse(readFileSync(".test-state/connection.json", "utf8"));
-  await page.goto("/");
-  await page.getByLabel("Owner credential").fill(readFileSync(descriptor.owner, "utf8"));
-  await page.getByRole("button", {name: "Sign in", exact: true}).click();
+  await signIn(page);
   await page.getByRole("button", {name: "Conversations", exact: true}).click();
   await page.locator(".conversation").getByRole("button", {name: /Send chat/}).click();
   await expect(page.getByLabel("Message", {exact: true})).toBeVisible();
@@ -57,8 +54,10 @@ test("sending clears the box at once and follows sending, sent and saved states"
   await expect(saved).toHaveCount(1);
   await expect(saved.locator(".msg-status")).toHaveText("Sent");
   world.messages = [{...world.messages[0], status: "delivered"}];
+  await nextPoll(page);
   await expect(saved.locator(".msg-status")).toHaveText("Delivered", {timeout: 10000});
   world.messages = [{...world.messages[0], status: "read"}];
+  await nextPoll(page);
   await expect(saved.locator(".msg-status")).toHaveText("Read", {timeout: 10000});
 });
 

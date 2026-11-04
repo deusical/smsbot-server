@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"github.com/deusical/smsbot-server/internal/racetest"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -16,6 +17,8 @@ import (
 )
 
 func TestUnlimitedAttachmentsRemoveOldBodyAndDownloadCaps(t *testing.T) {
+	t.Parallel()
+	racetest.SkipHeavy(t)
 	s := apiSetup(t)
 	settings, _ := s.Collection.Settings()
 	settings.Enabled = true
@@ -52,6 +55,7 @@ func TestUnlimitedAttachmentsRemoveOldBodyAndDownloadCaps(t *testing.T) {
 }
 
 func TestAttachmentOwnerAccessDownloadHeadersAndRevocation(t *testing.T) {
+	t.Parallel()
 	s := apiSetup(t)
 	settings, _ := s.Collection.Settings()
 	settings.Enabled = true
@@ -88,6 +92,7 @@ func TestAttachmentOwnerAccessDownloadHeadersAndRevocation(t *testing.T) {
 }
 
 func TestFileOnlyComposeAPIAndPayloadValidation(t *testing.T) {
+	t.Parallel()
 	s := apiSetup(t)
 	settings, _ := s.Collection.Settings()
 	settings.Enabled = true
@@ -110,6 +115,7 @@ func TestFileOnlyComposeAPIAndPayloadValidation(t *testing.T) {
 }
 
 func TestLegacyHistoryNeverContainsAttachmentMetadata(t *testing.T) {
+	t.Parallel()
 	s := apiSetup(t)
 	s.Store.Enroll("demo-chat", "demo-peer")
 	files, _ := media.Prepare([]media.Upload{{Name: "synthetic-private-file.txt", Data: []byte("Synthetic file")}})

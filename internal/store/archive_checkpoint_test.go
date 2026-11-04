@@ -26,6 +26,7 @@ func newCheckpointStore(t *testing.T) *Store {
 // The checkpoint split is internal: stored and API JSON keep the flat keys
 // written before it, plus only the new optional view generation.
 func TestArchiveJSONKeepsFlatLegacyKeys(t *testing.T) {
+	t.Parallel()
 	b, err := json.Marshal(Archive{})
 	if err != nil {
 		t.Fatal(err)
@@ -60,6 +61,7 @@ func TestArchiveJSONKeepsFlatLegacyKeys(t *testing.T) {
 }
 
 func TestUpdateArchiveIsScopedAndAtomic(t *testing.T) {
+	t.Parallel()
 	s := newCheckpointStore(t)
 	c := transport.Conversation{ID: "chat", ParticipantID: "peer", Writable: true}
 	if _, err := s.UpdateArchive("chat", 0, func(a *Archive, exists bool) error {

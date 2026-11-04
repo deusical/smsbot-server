@@ -33,6 +33,7 @@ func (f *askReplyTransport) Send(ctx context.Context, conv, txn, text string) (t
 }
 
 func TestAskReplyFallback(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name                     string
 		replyErr                 error

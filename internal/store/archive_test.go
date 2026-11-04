@@ -13,6 +13,7 @@ import (
 )
 
 func TestArchiveEditsChangesAndRetention(t *testing.T) {
+	t.Parallel()
 	s := inboxStore(t)
 	at := time.Now().AddDate(-1, 0, 0)
 	for i := 0; i < 125; i++ {
@@ -66,6 +67,7 @@ func TestArchiveEditsChangesAndRetention(t *testing.T) {
 }
 
 func TestVerifiedArchiveClearsPendingAndRestoreRejectsExistingArchive(t *testing.T) {
+	t.Parallel()
 	s := inboxStore(t)
 	if _, err := s.DB.Exec("INSERT INTO archive_pending VALUES('chat')"); err != nil {
 		t.Fatal(err)
@@ -93,6 +95,7 @@ func TestVerifiedArchiveClearsPendingAndRestoreRejectsExistingArchive(t *testing
 // It never opens the real key or decrypts personal payloads. Migrations run twice
 // only on the disposable copy; output contains no contacts or message content.
 func TestMigrationOnRealDatabaseCopy(t *testing.T) {
+	t.Parallel()
 	source := os.Getenv("SMSBOT_MIGRATION_SOURCE")
 	if source == "" {
 		t.Skip("real database snapshot not requested")

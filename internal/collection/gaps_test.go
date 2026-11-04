@@ -39,6 +39,7 @@ func seedGap(t *testing.T, e *Service, at time.Time) {
 	e.flushCaptureGaps()
 }
 func TestCompletedImportResolvesOnlyCoveredEarlierCaptureFailures(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, state   string
 		cutoff, newer bool
@@ -101,6 +102,7 @@ func TestCompletedImportResolvesOnlyCoveredEarlierCaptureFailures(t *testing.T) 
 	}
 }
 func TestHistoricalCaptureFailureTargetsMessageTimeAndPersistsObservation(t *testing.T) {
+	t.Parallel()
 	e, _ := setup(t)
 	enableInbox(t, e)
 	at := time.Now().AddDate(-1, 0, 0).UTC()
@@ -127,6 +129,7 @@ func TestHistoricalCaptureFailureTargetsMessageTimeAndPersistsObservation(t *tes
 	}
 }
 func TestRepairReconcilesAnImportCompletedBeforeRestart(t *testing.T) {
+	t.Parallel()
 	e, f := setup(t)
 	cfg := enableInbox(t, e)
 	source := &gapTransport{Fixture: f}
@@ -149,6 +152,7 @@ func TestRepairReconcilesAnImportCompletedBeforeRestart(t *testing.T) {
 	}
 }
 func TestCaptureGapPersistsRepairsAndNeverRunsCommands(t *testing.T) {
+	t.Parallel()
 	e, f := setup(t)
 	enableInbox(t, e)
 	arm(t, e)
@@ -194,6 +198,7 @@ func TestCaptureGapPersistsRepairsAndNeverRunsCommands(t *testing.T) {
 	}
 }
 func TestNewCaptureFailureCannotBeClearedByOlderRepair(t *testing.T) {
+	t.Parallel()
 	e, f := setup(t)
 	enableInbox(t, e)
 	at := time.Now().Add(-time.Minute)
@@ -210,6 +215,7 @@ func TestNewCaptureFailureCannotBeClearedByOlderRepair(t *testing.T) {
 	}
 }
 func TestCaptureRepairHonorsConsentRevocationAndRetries(t *testing.T) {
+	t.Parallel()
 	for _, revoke := range []bool{false, true} {
 		e, f := setup(t)
 		enableInbox(t, e)
@@ -242,6 +248,7 @@ func TestCaptureRepairHonorsConsentRevocationAndRetries(t *testing.T) {
 	}
 }
 func TestCaptureGapAggregationIsBoundedAndUnknownScopeIsExplicit(t *testing.T) {
+	t.Parallel()
 	e, _ := setup(t)
 	enableInbox(t, e)
 	epoch := e.consent.Load().epoch
@@ -257,6 +264,7 @@ func TestCaptureGapAggregationIsBoundedAndUnknownScopeIsExplicit(t *testing.T) {
 	}
 }
 func TestDeepProgressCountsCheckedNewAndUpdatedSeparately(t *testing.T) {
+	t.Parallel()
 	e, _ := setup(t)
 	cfg := enableInbox(t, e)
 	at := time.Now().Add(-time.Minute)
@@ -287,6 +295,7 @@ func TestDeepProgressCountsCheckedNewAndUpdatedSeparately(t *testing.T) {
 }
 
 func TestRepairDoesNotFetchExcludedGroupsOrChangedParticipants(t *testing.T) {
+	t.Parallel()
 	for _, group := range []bool{false, true} {
 		e, f := setup(t)
 		enableInbox(t, e)
@@ -309,6 +318,7 @@ func TestRepairDoesNotFetchExcludedGroupsOrChangedParticipants(t *testing.T) {
 }
 
 func TestCaptureGapRemainsVisibleWhileWaitingToPersist(t *testing.T) {
+	t.Parallel()
 	e, _ := setup(t)
 	enableInbox(t, e)
 	e.noteCaptureGap(transport.Incoming{ConversationID: "demo-chat", At: time.Now()}, e.consent.Load().epoch, "capture_delayed")
@@ -334,6 +344,7 @@ func TestCaptureGapRemainsVisibleWhileWaitingToPersist(t *testing.T) {
 }
 
 func TestSameRangeOwnerRequestPromotesAutomaticJob(t *testing.T) {
+	t.Parallel()
 	e, _ := setup(t)
 	enableInbox(t, e)
 	a := store.Archive{Conversation: transport.Conversation{ID: "demo-chat", ParticipantID: "demo-peer", Writable: true}, State: "running", Generation: 3, Cursor: "existing-deep-page", Checked: 100}
@@ -351,6 +362,7 @@ func TestSameRangeOwnerRequestPromotesAutomaticJob(t *testing.T) {
 }
 
 func TestGapScheduleRespectsRetryAndUnknownScope(t *testing.T) {
+	t.Parallel()
 	e, _ := setup(t)
 	enableInbox(t, e)
 	seedGap(t, e, time.Now())

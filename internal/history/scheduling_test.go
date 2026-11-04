@@ -41,6 +41,7 @@ func (h *replayHost) Fetch(ctx context.Context, c transport.Conversation, cursor
 	return transport.HistoryPage{}, nil
 }
 func TestBacklogDoesNotAccelerateCompletedArchivePolling(t *testing.T) {
+	t.Parallel()
 	v, _ := vault.New(make([]byte, 32))
 	db, err := store.Open(filepath.Join(t.TempDir(), "state.db"), v)
 	if err != nil {
@@ -119,6 +120,7 @@ func TestBacklogDoesNotAccelerateCompletedArchivePolling(t *testing.T) {
 	}
 }
 func TestSavedAutomaticImportAdvancesDespiteDiscoveryFailure(t *testing.T) {
+	t.Parallel()
 	v, _ := vault.New(make([]byte, 32))
 	db, err := store.Open(filepath.Join(t.TempDir(), "state.db"), v)
 	if err != nil {
@@ -146,6 +148,7 @@ type futureGapHost struct {
 
 func (h *futureGapHost) NextGapAttempt() (time.Time, bool) { return h.at, true }
 func TestGapBackoffAndUnfinishedRecentRetryDoNotSpin(t *testing.T) {
+	t.Parallel()
 	v, _ := vault.New(make([]byte, 32))
 	db, err := store.Open(filepath.Join(t.TempDir(), "state.db"), v)
 	if err != nil {
@@ -172,6 +175,7 @@ func TestGapBackoffAndUnfinishedRecentRetryDoNotSpin(t *testing.T) {
 }
 
 func TestContinuousOwnerImportDoesNotStarveDueFallback(t *testing.T) {
+	t.Parallel()
 	v, _ := vault.New(make([]byte, 32))
 	db, err := store.Open(filepath.Join(t.TempDir(), "state.db"), v)
 	if err != nil {

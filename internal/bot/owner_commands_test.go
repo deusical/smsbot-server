@@ -26,6 +26,7 @@ func allowOwnerCommands(t *testing.T, e *Engine, on bool) {
 }
 
 func TestOwnerCommandsAreOffByDefault(t *testing.T) {
+	t.Parallel()
 	e, f := setup(t)
 	arm(t, e)
 	if ok, err := e.Accept(context.Background(), ownerCommand("!ping")); ok || err != nil {
@@ -37,6 +38,7 @@ func TestOwnerCommandsAreOffByDefault(t *testing.T) {
 }
 
 func TestOwnerCommandRepliesInEnrolledConversation(t *testing.T) {
+	t.Parallel()
 	e, f := setup(t)
 	arm(t, e)
 	allowOwnerCommands(t, e, true)
@@ -63,6 +65,7 @@ func TestOwnerCommandRepliesInEnrolledConversation(t *testing.T) {
 }
 
 func TestOwnerCommandsStayInsideEnrolledConversationsAndGroups(t *testing.T) {
+	t.Parallel()
 	for name, edit := range map[string]func(*transport.Incoming){
 		"unenrolled": func(m *transport.Incoming) { m.ConversationID = "demo-sms" },
 		"stale":      func(m *transport.Incoming) { m.At = time.Now().Add(-3 * time.Minute) },
@@ -84,6 +87,7 @@ func TestOwnerCommandsStayInsideEnrolledConversationsAndGroups(t *testing.T) {
 // A reply that itself looks like a command must not start another job,
 // whether the phone's echo carries our transaction or not.
 func TestBotNeverAnswersItsOwnReplies(t *testing.T) {
+	t.Parallel()
 	e, f := setup(t)
 	arm(t, e)
 	allowOwnerCommands(t, e, true)
@@ -121,6 +125,7 @@ func TestBotNeverAnswersItsOwnReplies(t *testing.T) {
 // The phone reports a sent message again at each status change; a command
 // ignored at its first report (here while paused) stays ignored.
 func TestOwnerCommandCountsOnlyItsFirstSighting(t *testing.T) {
+	t.Parallel()
 	e, _ := setup(t)
 	arm(t, e)
 	allowOwnerCommands(t, e, true)
@@ -141,6 +146,7 @@ func TestOwnerCommandCountsOnlyItsFirstSighting(t *testing.T) {
 }
 
 func TestTurningOwnerCommandsOffStopsQueuedReplies(t *testing.T) {
+	t.Parallel()
 	e, f := setup(t)
 	arm(t, e)
 	allowOwnerCommands(t, e, true)
@@ -161,6 +167,7 @@ func TestTurningOwnerCommandsOffStopsQueuedReplies(t *testing.T) {
 // one typed on the phone, without a second archived copy; the bot's reply to
 // it does not run again.
 func TestDashboardSendRunsAsOwnerCommand(t *testing.T) {
+	t.Parallel()
 	e, f := setup(t)
 	arm(t, e)
 	enableInbox(t, e)

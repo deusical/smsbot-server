@@ -24,6 +24,7 @@ func (h *pagedHost) Fetch(_ context.Context, _ transport.Conversation, cursor st
 // Each step publishes only its own checkpoint, so steps from one snapshot can
 // commit in any order without erasing one another's progress.
 func TestLaneCommitsFromOneSnapshotKeepEachOthersProgress(t *testing.T) {
+	t.Parallel()
 	v, _ := vault.New(make([]byte, 32))
 	s, err := store.Open(filepath.Join(t.TempDir(), "state.db"), v)
 	if err != nil {

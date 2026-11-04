@@ -10,6 +10,7 @@ import (
 )
 
 func TestInteractionMetadataArchiveRoundTrip(t *testing.T) {
+	t.Parallel()
 	s, manager := setup(t)
 	seed(t, s, nil)
 	v := &transport.MessageInteraction{UpstreamID: "message", Protocol: "RCS", OwnerID: "synthetic-self", ReplyTo: "synthetic-missing", ObservedAt: time.Now(), Reactions: []transport.Reaction{{Emoji: "👍", Participants: []string{"synthetic-self"}}}}

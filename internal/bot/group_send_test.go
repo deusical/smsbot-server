@@ -34,6 +34,7 @@ func jobCount(t *testing.T, e *Engine) int {
 }
 
 func TestTheOwnerSendsToAGroupAsTheyAreShownIt(t *testing.T) {
+	t.Parallel()
 	e, f, roster := groupSetup(t)
 	ctx := context.Background()
 	id, err := e.ComposeInboxTo(ctx, "demo-group", roster, "hello everyone", "group-request-0001", nil)
@@ -53,6 +54,7 @@ func TestTheOwnerSendsToAGroupAsTheyAreShownIt(t *testing.T) {
 }
 
 func TestASendToAGroupNeedsTheRosterTheOwnerSawAndNothingElse(t *testing.T) {
+	t.Parallel()
 	e, f, roster := groupSetup(t)
 	ctx := context.Background()
 	for name, given := range map[string]string{"missing": "", "someone else's": "group:not-this-one"} {
@@ -75,6 +77,7 @@ func TestASendToAGroupNeedsTheRosterTheOwnerSawAndNothingElse(t *testing.T) {
 }
 
 func TestAQueuedGroupSendIsCancelledIfThePeopleChange(t *testing.T) {
+	t.Parallel()
 	e, f, roster := groupSetup(t)
 	ctx := context.Background()
 	id, err := e.ComposeInboxTo(ctx, "demo-group", roster, "hello", "group-request-0002", nil)
@@ -92,6 +95,7 @@ func TestAQueuedGroupSendIsCancelledIfThePeopleChange(t *testing.T) {
 }
 
 func TestOnlyTheOwnerSendsToAGroupAndOnlyWhereItIsSaved(t *testing.T) {
+	t.Parallel()
 	e, f := setup(t)
 	e.Pause(false)
 	ctx := context.Background()
@@ -112,6 +116,7 @@ func TestOnlyTheOwnerSendsToAGroupAndOnlyWhereItIsSaved(t *testing.T) {
 }
 
 func TestTheBotStillNeverActsInAGroup(t *testing.T) {
+	t.Parallel()
 	e, f, _ := groupSetup(t)
 	ctx := context.Background()
 	if err := e.Store.Enroll("demo-group", "group:demo-group"); err != nil {

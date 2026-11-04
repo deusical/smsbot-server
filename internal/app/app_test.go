@@ -29,6 +29,7 @@ func assemble(t *testing.T, s *store.Store) *Service {
 // Opted-in history is marked for preservation before the legacy expiry pass;
 // without collection the same old message expires.
 func TestInitPreservesOptedInHistoryBeforeExpiry(t *testing.T) {
+	t.Parallel()
 	for _, enabled := range []bool{true, false} {
 		s := openStore(t)
 		old := time.Now().AddDate(0, 0, -30)
@@ -53,6 +54,7 @@ func TestInitPreservesOptedInHistoryBeforeExpiry(t *testing.T) {
 }
 
 func TestPrepareStorePausesEveryStart(t *testing.T) {
+	t.Parallel()
 	s := openStore(t)
 	if err := s.Pause(false); err != nil {
 		t.Fatal(err)
@@ -77,6 +79,7 @@ func (h *heldEvents) Run(ctx context.Context, _ func(transport.Incoming), _ func
 
 // Stop returns only after every worker, including the event loop, has exited.
 func TestStopWaitsForEveryWorker(t *testing.T) {
+	t.Parallel()
 	s := openStore(t)
 	svc := assemble(t, s)
 	if err := svc.Init(); err != nil {
@@ -100,5 +103,21 @@ func TestStopWaitsForEveryWorker(t *testing.T) {
 	case <-events.stopped:
 	default:
 		t.Fatal("Stop returned before the event loop exited")
+	}
+}
+
+// The fixture speed-up shortens every background loop, and a factor of one
+// leaves the production intervals in place.
+func TestAccelerateOnlyShortensWhenAsked(t *testing.T) {
+	t.Parallel()
+	a := assemble(t, openStore(t))
+	notifyInterval := a.Notify.Interval
+	a.Accelerate(1)
+	if a.History.ActiveInterval != 0 || a.Archive.Interval != 0 || a.Collection.CaptureInterval != 0 || a.Collection.GapRecheck != 0 || a.Engine.WorkerPollDelay != 0 || a.Notify.Interval != notifyInterval {
+		t.Fatal("factor 1 changed intervals")
+	}
+	a.Accelerate(10)
+	if a.History.ActiveInterval != 300*time.Millisecond || a.Archive.Interval != 300*time.Millisecond || a.Collection.CaptureInterval != 100*time.Millisecond || a.Collection.GapRecheck != 300*time.Millisecond || a.Notify.Interval != notifyInterval/10 || a.Engine.WorkerPollDelay != 100*time.Millisecond {
+		t.Fatal("factor 10 not applied")
 	}
 }

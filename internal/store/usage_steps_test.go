@@ -7,6 +7,7 @@ import (
 )
 
 func TestStepUsageTotalsEachJob(t *testing.T) {
+	t.Parallel()
 	s := inboxStore(t)
 	if _, err := s.Enqueue("job-a", "synthetic-chat", "!chain", Plan{}); err != nil {
 		t.Fatal(err)
@@ -48,6 +49,7 @@ func TestStepUsageTotalsEachJob(t *testing.T) {
 }
 
 func TestUsageStepsMigrationKeepsExistingUsage(t *testing.T) {
+	t.Parallel()
 	s := inboxStore(t)
 	if _, err := s.Enqueue("job-old", "synthetic-chat", "!ask", Plan{}); err != nil {
 		t.Fatal(err)
@@ -76,6 +78,7 @@ func TestUsageStepsMigrationKeepsExistingUsage(t *testing.T) {
 }
 
 func TestRestoreRefusesLeftoverStepUsage(t *testing.T) {
+	t.Parallel()
 	s := inboxStore(t)
 	if _, err := s.DB.Exec("INSERT INTO usage_steps VALUES('orphan','x','m',0,0,0,NULL)"); err != nil {
 		t.Fatal(err)
@@ -90,6 +93,7 @@ func TestRestoreRefusesLeftoverStepUsage(t *testing.T) {
 }
 
 func TestRestoreRefusesLeftoverJobSteps(t *testing.T) {
+	t.Parallel()
 	s := inboxStore(t)
 	if _, err := s.DB.Exec("INSERT INTO job_steps VALUES('orphan',1,'x','reply',0)"); err != nil {
 		t.Fatal(err)

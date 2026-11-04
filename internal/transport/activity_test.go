@@ -8,6 +8,7 @@ import (
 )
 
 func TestTypingReportsOnlyKnownIndividualConversationsAndExpires(t *testing.T) {
+	t.Parallel()
 	g := NewGoogle(nil, "")
 	g.conversations["person"] = &gmproto.Conversation{ConversationID: "person"}
 	g.conversations["group"] = &gmproto.Conversation{ConversationID: "group", IsGroupChat: true}
@@ -31,6 +32,7 @@ func TestTypingReportsOnlyKnownIndividualConversationsAndExpires(t *testing.T) {
 }
 
 func TestActivityDropsCachedListsAtMostOncePerGap(t *testing.T) {
+	t.Parallel()
 	g := NewGoogle(nil, "")
 	g.noteActivity()
 	if !g.activity.listStale.Swap(false) {
@@ -47,6 +49,7 @@ func TestActivityDropsCachedListsAtMostOncePerGap(t *testing.T) {
 }
 
 func TestEveryActivityMarksDiscoveryChanged(t *testing.T) {
+	t.Parallel()
 	g := NewGoogle(nil, "")
 	g.noteActivity()
 	g.discovery.mu.Lock()
@@ -62,6 +65,7 @@ func TestEveryActivityMarksDiscoveryChanged(t *testing.T) {
 	}
 }
 func TestForcedDiscoveryRefreshIsSpacedAcrossClients(t *testing.T) {
+	t.Parallel()
 	g := NewGoogle(nil, "")
 	if g.RequestConversationRefresh() {
 		t.Fatal("refresh honoured while the phone is unavailable")
@@ -82,6 +86,7 @@ func TestForcedDiscoveryRefreshIsSpacedAcrossClients(t *testing.T) {
 }
 
 func TestClearedIdentitiesAdvanceTheListRevision(t *testing.T) {
+	t.Parallel()
 	g := NewGoogle(nil, "")
 	before := g.ActivityRevision()
 	g.invalidateIdentities()
@@ -91,6 +96,7 @@ func TestClearedIdentitiesAdvanceTheListRevision(t *testing.T) {
 }
 
 func TestBackwardClockDoesNotLockOutForcedRefresh(t *testing.T) {
+	t.Parallel()
 	g := NewGoogle(nil, "")
 	now := time.Now()
 	if !g.forceDiscoveryRefresh(now) || !g.forceDiscoveryRefresh(now.Add(-time.Hour)) {

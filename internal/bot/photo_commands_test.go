@@ -33,6 +33,7 @@ func photoSetup(t *testing.T, memory bool) (*Engine, *transcriptProvider) {
 }
 
 func TestPhotoOnlyReplyToAnAnswerContinuesTheThread(t *testing.T) {
+	t.Parallel()
 	e, provider := photoSetup(t, true)
 	root := threadPrompt("root", "!ask What year is it?", "")
 	threadAccept(t, e, root)
@@ -63,6 +64,7 @@ func TestPhotoOnlyReplyToAnAnswerContinuesTheThread(t *testing.T) {
 }
 
 func TestAskWithItsOwnPhoto(t *testing.T) {
+	t.Parallel()
 	e, provider := photoSetup(t, false)
 	m := withPhoto(t, e, threadPrompt("ask-own", "!ask what is this?", ""), "image/png", true)
 	p := threadAccept(t, e, m)
@@ -84,6 +86,7 @@ func TestAskWithItsOwnPhoto(t *testing.T) {
 }
 
 func TestFilesThatAreNotCommandsStayIgnored(t *testing.T) {
+	t.Parallel()
 	e, _ := photoSetup(t, true)
 	root := threadPrompt("root", "!ask hi", "")
 	threadAccept(t, e, root)
@@ -103,6 +106,7 @@ func TestFilesThatAreNotCommandsStayIgnored(t *testing.T) {
 }
 
 func TestPhotoCommandsExplainWhatTheyCannotDo(t *testing.T) {
+	t.Parallel()
 	// Photos reach the AI only from saved conversations.
 	e, _ := setup(t)
 	arm(t, e)

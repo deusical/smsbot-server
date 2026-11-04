@@ -57,6 +57,7 @@ func threadEcho(t *testing.T, e *Engine, m transport.Incoming, wire string) {
 	}
 }
 func TestAskFreshRootsNativeBranchesAndArchiveOff(t *testing.T) {
+	t.Parallel()
 	e, _ := setup(t)
 	arm(t, e)
 	configureAI(t, e, true, false)
@@ -122,6 +123,7 @@ func TestAskFreshRootsNativeBranchesAndArchiveOff(t *testing.T) {
 	}
 }
 func TestAskThreadRestartAndModelSwitch(t *testing.T) {
+	t.Parallel()
 	e, f := setup(t)
 	arm(t, e)
 	cfg := configureAI(t, e, true, false)
@@ -151,6 +153,7 @@ func TestAskThreadRestartAndModelSwitch(t *testing.T) {
 	}
 }
 func TestAskThreadFollowupAccessAndUnsupportedTargets(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"ordinary", "unknown", "sms", "historical", "stale", "wrong-peer", "wrong-chat", "paused", "memory-off", "owner-disabled"} {
 		t.Run(mode, func(t *testing.T) {
 			e, _ := setup(t)
@@ -195,6 +198,7 @@ func TestAskThreadFollowupAccessAndUnsupportedTargets(t *testing.T) {
 	}
 }
 func TestAskThreadExplicitCommandsResetAndNoResurrection(t *testing.T) {
+	t.Parallel()
 	e, f := setup(t)
 	arm(t, e)
 	configureAI(t, e, true, false)
@@ -233,6 +237,7 @@ func TestAskThreadExplicitCommandsResetAndNoResurrection(t *testing.T) {
 	}
 }
 func TestAskThreadUnknownSubmissionLateEchoAndDuplicate(t *testing.T) {
+	t.Parallel()
 	e, f := setup(t)
 	arm(t, e)
 	configureAI(t, e, true, false)
@@ -263,6 +268,7 @@ func TestAskThreadUnknownSubmissionLateEchoAndDuplicate(t *testing.T) {
 	}
 }
 func TestAskThreadExpiryNoticeAndContextLimit(t *testing.T) {
+	t.Parallel()
 	e, _ := setup(t)
 	arm(t, e)
 	configureAI(t, e, true, false)
@@ -293,6 +299,7 @@ func (t *countingThreadTransport) LookupConversation(ctx context.Context, id str
 	return transport.Lookup(ctx, t.Fixture, id)
 }
 func TestAskReplyClassificationDoesNotReadPhone(t *testing.T) {
+	t.Parallel()
 	e, f := setup(t)
 	arm(t, e)
 	configureAI(t, e, true, false)
@@ -316,6 +323,7 @@ func TestAskReplyClassificationDoesNotReadPhone(t *testing.T) {
 	}
 }
 func TestAskOwnerFollowupsRequireCurrentPermissionAndAreDeduplicated(t *testing.T) {
+	t.Parallel()
 	e, _ := setup(t)
 	arm(t, e)
 	cfg := configureAI(t, e, true, false)
@@ -355,6 +363,7 @@ func TestAskOwnerFollowupsRequireCurrentPermissionAndAreDeduplicated(t *testing.
 	}
 }
 func TestOtherAIMemoryAndStatelessAskRemainSeparate(t *testing.T) {
+	t.Parallel()
 	e, _ := setup(t)
 	arm(t, e)
 	cfg := configureAI(t, e, true, false)
@@ -380,6 +389,7 @@ func TestOtherAIMemoryAndStatelessAskRemainSeparate(t *testing.T) {
 	}
 }
 func TestAskConcurrentSiblingPromptsSnapshotSameParent(t *testing.T) {
+	t.Parallel()
 	e, _ := setup(t)
 	arm(t, e)
 	configureAI(t, e, true, false)
@@ -416,6 +426,7 @@ func TestAskConcurrentSiblingPromptsSnapshotSameParent(t *testing.T) {
 }
 
 func TestOwnerThreadFollowupMatchingAIAnswerUsesExactProvenance(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"new-transaction", "missing-transaction", "bot-transaction", "bot-message-id"} {
 		t.Run(mode, func(t *testing.T) {
 			e, _ := setup(t)
@@ -474,6 +485,7 @@ func TestOwnerThreadFollowupMatchingAIAnswerUsesExactProvenance(t *testing.T) {
 	}
 }
 func TestAskReplyingToAnOrdinaryMessageIncludesIt(t *testing.T) {
+	t.Parallel()
 	for _, memory := range []bool{true, false} {
 		e, _ := setup(t)
 		arm(t, e)

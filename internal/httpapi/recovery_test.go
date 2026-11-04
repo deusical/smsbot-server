@@ -13,6 +13,7 @@ func (*recoveringFixture) ConnectionStatus() transport.ConnectionStatus {
 	return transport.ConnectionStatus{State: "reconnecting", RetryAt: "2026-10-16T12:00:00Z"}
 }
 func TestStateReportsRecoveryWithoutChangingLiveChoice(t *testing.T) {
+	t.Parallel()
 	s := apiSetup(t)
 	fixture := transport.NewFixture()
 	fixture.Online = false

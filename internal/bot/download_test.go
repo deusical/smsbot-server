@@ -22,6 +22,7 @@ func (f downloadFunc) PollDownload(ctx context.Context, id, u string, limit int6
 }
 
 func TestExtractDownloadURL(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct{ text, want string }{
 		{"Copied share text https://v.douyin.com/Synthetic/， open it", "https://v.douyin.com/Synthetic/"},
 		{"(https://www.xiaohongshu.com/explore/synthetic?xsec_token=synthetic)", "https://www.xiaohongshu.com/explore/synthetic?xsec_token=synthetic"},
@@ -40,6 +41,7 @@ func TestExtractDownloadURL(t *testing.T) {
 }
 
 func TestDownloadCommandSafety(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"success", "slow", "pause", "unenroll", "expired", "unknown_send", "oversize", "worker_missing"} {
 		t.Run(mode, func(t *testing.T) {
 			e, fixture := setup(t)
@@ -122,6 +124,7 @@ func TestDownloadCommandSafety(t *testing.T) {
 }
 
 func TestDownloadWorkerClient(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"success", "oversize", "bad_status", "bad_type", "redirect"} {
 		t.Run(mode, func(t *testing.T) {
 			calls := 0
@@ -187,6 +190,7 @@ func TestDownloadWorkerClient(t *testing.T) {
 // Polls must yield the dispatcher, snapshot the lifetime, and leave uncertain
 // submission terminal even when another preparation poll would be safe.
 func TestDurableDownloadPolling(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"success", "pause", "unenroll", "unknown", "deadline"} {
 		t.Run(mode, func(t *testing.T) {
 			e, fixture := setup(t)
@@ -306,6 +310,7 @@ func TestDurableDownloadPolling(t *testing.T) {
 }
 
 func TestDownloadAdmissionAndLifetimeValidation(t *testing.T) {
+	t.Parallel()
 	e, _ := setup(t)
 	arm(t, e)
 	cfg := DefaultConfiguration()
@@ -364,6 +369,7 @@ func (f downloadUploadTransport) PrepareFiles(ctx context.Context, files []media
 }
 
 func TestDownloadUploadYieldsAndChecksConsentAgain(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"success", "pause", "expired"} {
 		t.Run(mode, func(t *testing.T) {
 			e, fixture := setup(t)

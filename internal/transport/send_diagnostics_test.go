@@ -10,6 +10,7 @@ import (
 )
 
 func TestSendRefusalDiagnosticsExcludePayloadAndIdentities(t *testing.T) {
+	t.Parallel()
 	var logs []SendDiagnostic
 	g := &Google{SendLog: func(d SendDiagnostic) { logs = append(logs, d) }}
 	_, err := g.SendReply(context.Background(), "synthetic-private-conversation", "synthetic-private-transaction", "synthetic-private-body", "synthetic-private-target", nil)

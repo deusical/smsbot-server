@@ -1,0 +1,22 @@
+name: Set up Go with the shared cache
+description: Installs Go and restores the newest build, module and test cache saved by main.yml.
+inputs:
+  go-version:
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-go@v5
+      with:
+        go-version: ${{ inputs.go-version }}
+        cache: false
+    - uses: actions/cache/restore@v4
+      with:
+        path: |
+          ~/.cache/go-build
+          ~/.cache/staticcheck
+          ~/go/pkg/mod
+        key: go-${{ inputs.go-version }}-${{ hashFiles('go.sum') }}-
+        restore-keys: |
+          go-${{ inputs.go-version }}-${{ hashFiles('go.sum') }}-
+          go-${{ inputs.go-version }}-

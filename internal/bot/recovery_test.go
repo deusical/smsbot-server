@@ -8,6 +8,7 @@ import (
 )
 
 func TestConnectionInterruptedPreservesChoiceAndNeverRetriesUncertain(t *testing.T) {
+	t.Parallel()
 	for _, paused := range []bool{false, true} {
 		e, f := setup(t)
 		arm(t, e)
@@ -71,6 +72,7 @@ func TestConnectionInterruptedPreservesChoiceAndNeverRetriesUncertain(t *testing
 	}
 }
 func TestPauseDuringInterruptionStaysPaused(t *testing.T) {
+	t.Parallel()
 	e, _ := setup(t)
 	arm(t, e)
 	if err := e.ConnectionInterrupted(); err != nil {
@@ -85,6 +87,7 @@ func TestPauseDuringInterruptionStaysPaused(t *testing.T) {
 }
 
 func TestConnectionInterruptionCancelsActiveGeneration(t *testing.T) {
+	t.Parallel()
 	e, f := setup(t)
 	arm(t, e)
 	configureAI(t, e, false, false)
@@ -118,6 +121,7 @@ func TestConnectionInterruptionCancelsActiveGeneration(t *testing.T) {
 	}
 }
 func TestConnectionInterruptionBlocksUploadCompletion(t *testing.T) {
+	t.Parallel()
 	e, fixture := setup(t)
 	enableInbox(t, e)
 	if err := e.Pause(false); err != nil {

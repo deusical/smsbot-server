@@ -1,5 +1,4 @@
-import {test, expect} from "@playwright/test";
-import {readFileSync} from "node:fs";
+import { test, expect, nextPoll, signIn } from "./fixtures";
 
 test("reconnection preserves Live and owner pause remains authoritative", async ({page}) => {
  let paused = false, ready = false, connection = "reconnecting";
@@ -13,10 +12,7 @@ test("reconnection preserves Live and owner pause remains authoritative", async 
   const response = await page.request.get("/api/v1/state");
   await route.fulfill({json:{...await response.json(), paused, transport_ready:ready, connection_state:connection}});
  });
- const descriptor = JSON.parse(readFileSync(".test-state/connection.json", "utf8"));
- await page.goto("/");
- await page.getByLabel("Owner credential").fill(readFileSync(descriptor.owner,"utf8"));
- await page.getByRole("button",{name:"Sign in",exact:true}).click();
+ await signIn(page);
  await expect(page.locator(".link-state")).toHaveText("Reconnecting to phone");
  await expect(page.locator(".hero-pill")).toHaveText("LIVE");
  await expect(page.locator(".hero-line")).toContainText("will resume after verification");
@@ -24,11 +20,14 @@ test("reconnection preserves Live and owner pause remains authoritative", async 
  await expect(page.locator(".hero-pill")).toHaveText("PAUSED");
  await expect(page.locator(".hero-line")).toContainText("stay paused");
  ready=true;connection="connected";
+ await nextPoll(page);
  await expect(page.locator(".link-state")).toHaveText("Phone connected");
  await expect(page.locator(".hero-pill")).toHaveText("PAUSED");
  paused=false;
+ await nextPoll(page);
  await expect(page.locator(".hero-pill")).toHaveText("LIVE");
  ready=false;connection="session_conflict";paused=true;
+ await nextPoll(page);
  await expect(page.locator(".link-state")).toHaveText("Messages session conflict");
  await expect(page.locator(".hero-line")).toContainText("Sending is blocked");
 });

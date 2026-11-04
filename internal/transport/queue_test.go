@@ -12,6 +12,7 @@ import (
 )
 
 func TestIrrelevantStartupBurstDoesNotOverflow(t *testing.T) {
+	t.Parallel()
 	g := NewGoogle(nil, "")
 	g.ready.Store(true)
 	for i := 0; i < 1024; i++ {
@@ -24,6 +25,7 @@ func TestIrrelevantStartupBurstDoesNotOverflow(t *testing.T) {
 }
 
 func TestOverflowPausesDrainsAndRecoversWithoutReplayingCommands(t *testing.T) {
+	t.Parallel()
 	g := NewGoogle(nil, "")
 	g.updates = make(chan any, 2)
 	g.ready.Store(true)
@@ -79,6 +81,7 @@ func TestOverflowPausesDrainsAndRecoversWithoutReplayingCommands(t *testing.T) {
 }
 
 func TestDroppedFailureCannotBeRecoveredByDrainingQueue(t *testing.T) {
+	t.Parallel()
 	for _, event := range []any{
 		&events.ListenFatalError{Error: errors.New("synthetic")},
 		&events.ListenTemporaryError{Error: errors.New("synthetic")},
@@ -100,6 +103,7 @@ func TestDroppedFailureCannotBeRecoveredByDrainingQueue(t *testing.T) {
 }
 
 func TestAccountSnapshotDoesNotLatchHealthFailure(t *testing.T) {
+	t.Parallel()
 	g := NewGoogle(nil, "")
 	g.enqueue(&events.AccountChange{IsFake: true})
 	if g.healthFailure.Load() {
@@ -108,6 +112,7 @@ func TestAccountSnapshotDoesNotLatchHealthFailure(t *testing.T) {
 }
 
 func TestHistoricalOutgoingReceiptSurvivesFiltering(t *testing.T) {
+	t.Parallel()
 	g := NewGoogle(nil, "")
 	g.enqueue(&libgm.WrappedMessage{IsOld: true, Message: &gmproto.Message{
 		TmpID: "synthetic-transaction", ConversationID: "synthetic-conversation",
@@ -130,6 +135,7 @@ func TestHistoricalOutgoingReceiptSurvivesFiltering(t *testing.T) {
 }
 
 func TestOverflowCannotClearUntilQueueIsEmpty(t *testing.T) {
+	t.Parallel()
 	g := NewGoogle(nil, "")
 	g.updates = make(chan any, 1)
 	g.enqueue(&gmproto.Settings{})

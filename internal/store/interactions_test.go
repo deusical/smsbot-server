@@ -8,6 +8,7 @@ import (
 )
 
 func TestInteractionSnapshotsChangesBackupAndScope(t *testing.T) {
+	t.Parallel()
 	s := inboxStore(t)
 	conv := "synthetic-chat"
 	at := time.Now()
@@ -73,6 +74,7 @@ func TestInteractionSnapshotsChangesBackupAndScope(t *testing.T) {
 }
 
 func TestQuoteResolutionAndMissingOriginal(t *testing.T) {
+	t.Parallel()
 	s := inboxStore(t)
 	at := time.Now()
 	conv := "synthetic-quotes"
@@ -108,6 +110,7 @@ func TestQuoteResolutionAndMissingOriginal(t *testing.T) {
 }
 
 func TestMutationEvidenceSurvivesBackupWithoutReplay(t *testing.T) {
+	t.Parallel()
 	s := inboxStore(t)
 	intent := &MutationIntent{Target: "synthetic-target", WireTarget: "synthetic-wire", Protocol: "RCS", Emoji: "👍", Operation: "add", Version: "synthetic-version"}
 	if _, err := s.Enqueue("synthetic-action-job", "synthetic-chat", "reaction", Plan{Manual: true, InboxOwnerOnly: true, Participant: "synthetic-peer", Mutation: intent}); err != nil {

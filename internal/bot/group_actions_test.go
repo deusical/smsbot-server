@@ -14,6 +14,7 @@ func groupMessage(id string) transport.Incoming {
 }
 
 func TestTheOwnerRepliesAndReactsInAGroupAsTheyAreShownIt(t *testing.T) {
+	t.Parallel()
 	e, f, roster := groupSetup(t)
 	ctx := context.Background()
 	m := groupMessage("synthetic-group-action")
@@ -60,6 +61,7 @@ func TestTheOwnerRepliesAndReactsInAGroupAsTheyAreShownIt(t *testing.T) {
 }
 
 func TestAGroupThatChangedBeforeAReactionGoesGetsNoReaction(t *testing.T) {
+	t.Parallel()
 	e, f, roster := groupSetup(t)
 	ctx := context.Background()
 	m := groupMessage("synthetic-group-change")

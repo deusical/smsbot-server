@@ -13,6 +13,7 @@ import (
 )
 
 func TestVideoSettingsBounds(t *testing.T) {
+	t.Parallel()
 	for _, raw := range []string{`{"preset":"shell"}`, `{"passes":0}`, `{"passes":3}`, `{"max_attempts":0}`, `{"max_attempts":4}`, `{"copy_if_fits":1}`, `{"max_mb":0}`, `{"max_mb":20}`, `{"execution_minutes":0}`, `{"execution_minutes":61}`, `{"preset":null}`, `{"encoder":"libx264"}`} {
 		c := Command{Kind: "media.video", Settings: json.RawMessage(raw)}
 		if normalizeCommand(&c) == nil {
@@ -28,6 +29,7 @@ func TestVideoSettingsBounds(t *testing.T) {
 	}
 }
 func TestVideoSettingsSnapshotAndEffectiveCap(t *testing.T) {
+	t.Parallel()
 	e, _ := setup(t)
 	arm(t, e)
 	host, err := e.Collection.Settings()
@@ -90,6 +92,7 @@ func TestVideoSettingsSnapshotAndEffectiveCap(t *testing.T) {
 	}
 }
 func TestWorkerProtocolV2AndOutdatedFallback(t *testing.T) {
+	t.Parallel()
 	for _, outdated := range []bool{false, true} {
 		t.Run(map[bool]string{false: "v2", true: "outdated"}[outdated], func(t *testing.T) {
 			warnings := []string{}
@@ -152,6 +155,7 @@ func TestWorkerProtocolV2AndOutdatedFallback(t *testing.T) {
 }
 
 func TestWorkerCapabilitiesBusyYieldsWithoutFallback(t *testing.T) {
+	t.Parallel()
 	calls := 0
 	warned := false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -169,6 +173,7 @@ func TestWorkerCapabilitiesBusyYieldsWithoutFallback(t *testing.T) {
 	}
 }
 func TestVideoSettingsDeadlineUsesAuthoritativeSettings(t *testing.T) {
+	t.Parallel()
 	c := Command{ExecutionMinutes: 20, Settings: json.RawMessage(`{"execution_minutes":7}`)}
 	if videoSettings(c).ExecutionMinutes != 7 {
 		t.Fatal("flat execution value overrode settings")

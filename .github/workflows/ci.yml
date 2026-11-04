@@ -1,160 +1,101 @@
 name: Offline checks
+# Pull requests only: branch protection requires these checks before merge, and
+# main.yml reruns the Go suite after each merge (which also warms the cache).
+#
+# The repository is public, so hosted-runner minutes are free and only time to a
+# result matters. The three jobs therefore start together and each builds what it
+# needs (a few seconds) instead of waiting on an artifact from another job.
 on:
-  push:
-    branches: [main]
   pull_request:
   workflow_dispatch:
 permissions:
   contents: read
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: true
+env:
+  GO_VERSION: '1.27.3'
+  GOTOOLCHAIN: go1.27.3
 jobs:
+  # Frontend checks, Go lint and audits, download worker fixtures.
   build:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.27.3'
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
           cache: npm
           cache-dependency-path: web/package-lock.json
       - name: Install frontend dependencies
-        run: npm ci
-        timeout-minutes: 5
+        run: npm ci --no-audit --no-fund
         working-directory: web
       - name: Frontend unit tests
         run: npm run test:unit
-        timeout-minutes: 3
         working-directory: web
-      - name: Build dashboard
+      - name: Type-check and build dashboard
         run: npm run build
-        timeout-minutes: 3
         working-directory: web
       - name: Audit production frontend dependencies
         run: npm audit --omit=dev
-        timeout-minutes: 3
         working-directory: web
       - run: node --test scripts/sync-web-assets.test.mjs
-      - run: node scripts/sync-web-assets.mjs
-      - run: go build -trimpath -ldflags="-s -w -X main.version=ci-${GITHUB_SHA::7}" -o bin/smsbot ./cmd/smsbot
-      - uses: actions/upload-artifact@v4
-        with:
-          name: fixture-build
-          path: |
-            bin/smsbot
-            web/dist/
-          retention-days: 1
-          compression-level: 1
-  download-worker:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: Install offline worker test dependencies
+      # The synthetic FFmpeg case skips here (no FFmpeg on the runner); run it locally.
+      - name: Download worker fixtures
         run: |
-          python -m pip install 'cryptography>=45,<47'
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg
-      - name: Worker fixtures and synthetic FFmpeg verification
-        run: python -B -m unittest discover -s scripts -p test_download_worker.py
-  backend:
-    needs: build
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+          python3 -m pip install --quiet 'cryptography>=45,<47'
+          python3 -B -m unittest discover -s scripts -p test_download_worker.py
+      - uses: ./.github/actions/setup-go-cached
         with:
-          go-version: '1.27.3'
-          cache: false
-      # Rolling race-test cache: every run restores the newest one (pull requests
-      # read main's) and only main pushes save, so cold runs are rare and the cache
-      # does not go stale.
-      - name: Restore Go build cache
-        id: gocache
-        uses: actions/cache/restore@v4
-        with:
-          path: |
-            ~/.cache/go-build
-            ~/go/pkg/mod
-          key: go-race-1.27.3-${{ hashFiles('go.sum') }}-${{ github.sha }}
-          restore-keys: |
-            go-race-1.27.3-${{ hashFiles('go.sum') }}-
-            go-race-1.27.3-
-      - uses: actions/download-artifact@v4
-        with:
-          name: fixture-build
-      - run: cp -r web/dist/* internal/httpapi/assets/
-      - name: Backend race tests
-        run: go test -race -count=1 ./...
-        timeout-minutes: 8
-      - name: Go vet
-        run: go vet ./...
-        timeout-minutes: 3
+          go-version: ${{ env.GO_VERSION }}
       - name: gofmt
         run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - name: Go vet
+        run: go vet ./...
       - name: staticcheck
         run: go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...
-        timeout-minutes: 5
-        env:
-          GOTOOLCHAIN: go1.27.3
       - name: Audit Go dependencies
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
-        timeout-minutes: 5
-        env:
-          GOTOOLCHAIN: go1.27.3
-      - name: Save Go build cache
-        if: github.ref == 'refs/heads/main'
-        uses: actions/cache/save@v4
-        with:
-          path: |
-            ~/.cache/go-build
-            ~/go/pkg/mod
-          key: ${{ steps.gocache.outputs.cache-primary-key }}
-  browser:
-    needs: build
+  backend:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    # Keep the image and compatibility check aligned with web/package-lock.json.
-    # The digest pins the published multi-platform v1.64.0-noble image.
-    container:
-      image: mcr.microsoft.com/playwright:v1.64.0-noble@sha256:06a9939e57531807f8d5fd76ce44b53165ffb7d7501d87ab10e285c20b1e971f
-      options: --ipc=host
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: ./.github/actions/embed-dashboard
+      - uses: ./.github/actions/setup-go-cached
         with:
-          node-version: '24'
-          cache: npm
-          cache-dependency-path: web/package-lock.json
-      - uses: actions/download-artifact@v4
+          go-version: ${{ env.GO_VERSION }}
+      # No -count=1: packages whose code, dependencies and test inputs are unchanged
+      # since main.yml last ran reuse its cached result. A few payload-heavy tests
+      # skip under -race (internal/racetest); they run with a plain `go test ./...`.
+      - name: Backend race tests
+        run: go test -race ./...
+  browser:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/embed-dashboard
+      - uses: ./.github/actions/setup-go-cached
         with:
-          name: fixture-build
-      - run: chmod +x bin/smsbot
-      - name: Install browser test dependencies
-        run: npm ci
-        timeout-minutes: 5
-        working-directory: web
-      - name: Verify browser image and fixture compatibility
+          go-version: ${{ env.GO_VERSION }}
+      - run: go build -trimpath -o bin/smsbot ./cmd/smsbot
+      # The runner image ships Google Chrome; using it skips a browser download or
+      # container pull. Fall back to Playwright's Chromium if an image ever lacks it.
+      - name: Choose browser
         run: |
-          test "$(node -p 'require("./package-lock.json").packages["node_modules/@playwright/test"].version')" = "1.64.0"
-          npx playwright --version
-          ../bin/smsbot --version
-        timeout-minutes: 1
+          if command -v google-chrome >/dev/null; then
+            google-chrome --version
+            echo PW_CHANNEL=chrome >> "$GITHUB_ENV"
+          else
+            npx playwright install --with-deps chromium
+          fi
         working-directory: web
-      # One worker per fixture database. A single job pays container start-up once;
-      # hosted runners bill each job in whole minutes.
+      # Four workers, each with its own fixture server (see web/playwright.config.ts).
       - name: Browser tests
         run: npm test
-        timeout-minutes: 10
+        timeout-minutes: 6
         working-directory: web
       - name: Preserve failed browser diagnostics
         if: failure()

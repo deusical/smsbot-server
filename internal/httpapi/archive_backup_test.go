@@ -17,6 +17,7 @@ import (
 )
 
 func TestSavedOriginalReadOfflineRangeAndCorruption(t *testing.T) {
+	t.Parallel()
 	s := apiSetup(t)
 	settings, _ := s.Collection.Settings()
 	settings.Enabled = true
@@ -64,6 +65,7 @@ func TestSavedOriginalReadOfflineRangeAndCorruption(t *testing.T) {
 	}
 }
 func TestArchiveExportOwnerFormatAndDeletion(t *testing.T) {
+	t.Parallel()
 	s := apiSetup(t)
 	defer s.Collection.Archive.Close()
 	if w := ownerRequest(s, "PUT", "/api/v1/inbox/archive/files/policy", `{"enabled":true,"max_file_mb":-1,"quota_mb":0}`); w.Code != 400 {
@@ -110,6 +112,7 @@ func TestArchiveExportOwnerFormatAndDeletion(t *testing.T) {
 }
 
 func TestArchiveStatsOwnerOnly(t *testing.T) {
+	t.Parallel()
 	s := apiSetup(t)
 	w := ownerRequest(s, "GET", "/api/v1/inbox/archive/stats", "")
 	var value struct {

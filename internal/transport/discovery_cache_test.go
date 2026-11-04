@@ -11,6 +11,7 @@ import (
 )
 
 func TestDiscoveryCacheCoalescesRequestsAndClonesResults(t *testing.T) {
+	t.Parallel()
 	var cache conversationPageCache
 	var calls atomic.Int32
 	start := make(chan struct{})
@@ -44,6 +45,7 @@ func TestDiscoveryCacheCoalescesRequestsAndClonesResults(t *testing.T) {
 	}
 }
 func TestDiscoveryCacheWaitHonorsCancellation(t *testing.T) {
+	t.Parallel()
 	var cache conversationPageCache
 	entered := make(chan struct{})
 	release := make(chan struct{})
@@ -66,6 +68,7 @@ func TestDiscoveryCacheWaitHonorsCancellation(t *testing.T) {
 	<-done
 }
 func TestDiscoveryCacheKeepsPagesUntilActivity(t *testing.T) {
+	t.Parallel()
 	var cache conversationPageCache
 	calls := 0
 	fetch := func(context.Context) (ConversationPage, error) { calls++; return ConversationPage{}, nil }
@@ -77,6 +80,7 @@ func TestDiscoveryCacheKeepsPagesUntilActivity(t *testing.T) {
 	}
 }
 func TestDiscoveryCacheSpacesReadsAfterActivityAndMarksStalePages(t *testing.T) {
+	t.Parallel()
 	var cache conversationPageCache
 	calls := 0
 	fetch := func(context.Context) (ConversationPage, error) { calls++; return ConversationPage{}, nil }
@@ -97,6 +101,7 @@ func TestDiscoveryCacheSpacesReadsAfterActivityAndMarksStalePages(t *testing.T) 
 	}
 }
 func TestDiscoveryCacheActivityDuringReadLeavesPageStale(t *testing.T) {
+	t.Parallel()
 	var cache conversationPageCache
 	calls := 0
 	first, _ := cache.get(context.Background(), "", func(context.Context) (ConversationPage, error) {
@@ -124,6 +129,7 @@ func ageCachedPage(cache *conversationPageCache, by time.Duration) {
 }
 
 func TestDiscoveryFailureSpacingCancellationAndInvalidation(t *testing.T) {
+	t.Parallel()
 	var cache conversationPageCache
 	var calls atomic.Int32
 	fetch := func(context.Context) (ConversationPage, error) {
@@ -170,6 +176,7 @@ func TestDiscoveryFailureSpacingCancellationAndInvalidation(t *testing.T) {
 	}
 }
 func TestDiscoveryCacheRetriesPartialPages(t *testing.T) {
+	t.Parallel()
 	var cache conversationPageCache
 	calls := 0
 	fetch := func(context.Context) (ConversationPage, error) { calls++; return ConversationPage{Partial: true}, nil }
@@ -241,6 +248,7 @@ func (b *pagedInbox) pass(t *testing.T, cache *conversationPageCache) int {
 }
 
 func TestUnchangedPageConfirmsTheRestOfTheInbox(t *testing.T) {
+	t.Parallel()
 	var cache conversationPageCache
 	inbox := newPagedInbox(16)
 	if n := inbox.pass(t, &cache); n != 16 {
@@ -264,6 +272,7 @@ func TestUnchangedPageConfirmsTheRestOfTheInbox(t *testing.T) {
 }
 
 func TestMovedConversationRereadsUpToWhereItLeft(t *testing.T) {
+	t.Parallel()
 	var cache conversationPageCache
 	inbox := newPagedInbox(8)
 	inbox.pass(t, &cache)
@@ -285,6 +294,7 @@ func TestMovedConversationRereadsUpToWhereItLeft(t *testing.T) {
 }
 
 func TestPagesAreReadAtLeastDaily(t *testing.T) {
+	t.Parallel()
 	var cache conversationPageCache
 	inbox := newPagedInbox(4)
 	inbox.pass(t, &cache)

@@ -1,9 +1,7 @@
-import {test, expect, type Page} from "@playwright/test";
-import {readFileSync} from "node:fs";
+import { test, expect, type Page, signIn } from "./fixtures";
+
 async function open(page: Page) {
- const descriptor=JSON.parse(readFileSync(".test-state/connection.json","utf8"));
- await page.goto("/");await page.getByLabel("Owner credential").fill(readFileSync(descriptor.owner,"utf8"));
- await page.getByRole("button",{name:"Sign in",exact:true}).click();
+ await signIn(page);
  await page.getByRole("button",{name:"Conversations",exact:true}).click();
  await page.locator(".conversation").filter({hasText:"Demo conversation"}).getByRole("button",{name:/Demo conversation/}).click();
 }

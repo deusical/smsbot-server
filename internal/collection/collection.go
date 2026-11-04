@@ -37,6 +37,10 @@ type Service struct {
 	// bounds collected messages read through the legacy inbox routes.
 	MessageRetentionDays func() (int, error)
 
+	// CaptureInterval spaces capture-queue flushes (zero: one second) and
+	// GapRecheck delays the next check of a repaired gap (zero: three seconds).
+	CaptureInterval, GapRecheck time.Duration
+
 	// mu is the control lock shared with the bot engine: settings and consent
 	// changes serialize with send decisions and protected commits.
 	mu           *sync.Mutex

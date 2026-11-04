@@ -1,5 +1,5 @@
-import {test, expect, type Page} from "@playwright/test";
-import {readFileSync} from "node:fs";
+import { test, expect, type Page, nextPoll, signIn } from "./fixtures";
+
 type Row = {id:string;label:string;last_message_at?:string;unread?:boolean;pinned?:boolean};
 async function prepare(page: Page, rows: Row[], messageCount = 3) {
   const state = {rows, revision: 1};
@@ -14,10 +14,7 @@ async function prepare(page: Page, rows: Row[], messageCount = 3) {
   });
   await page.route(/\/api\/v1\/inbox\/conversations(\?refresh=1)?$/, route => route.fulfill({json: {conversations: state.rows.map(r => ({participant_id: `peer-${r.id}`, protocol: "RCS", writable: true, archived: true, enrolled: false, ...r})), next_cursor: ""}}));
   await page.route("**/api/v1/inbox/conversations/*/history?*", route => route.fulfill({json: {messages: Array.from({length: messageCount}, (_, i) => ({id: `m${i}`, direction: i % 2 ? "outgoing" : "incoming", text: `Synthetic message ${i}`, at: new Date(Date.UTC(2026, 9, 16, 12, i)).toISOString()})), next_cursor: ""}}));
-  const descriptor = JSON.parse(readFileSync(".test-state/connection.json", "utf8"));
-  await page.goto("/");
-  await page.getByLabel("Owner credential").fill(readFileSync(descriptor.owner, "utf8"));
-  await page.getByRole("button", {name: "Sign in", exact: true}).click();
+  await signIn(page);
   await page.getByRole("button", {name: "Conversations", exact: true}).click();
   return state;
 }
@@ -37,6 +34,7 @@ test("conversations order by recency with pinned first and reorder on new activi
   await expect(page.locator(".conversation").filter({hasText: "Pinned chat"}).locator(".conversation-flags svg")).toHaveCount(1);
   state.rows[0].last_message_at = iso(0);
   state.revision++;
+  await nextPoll(page);
   await expect.poll(() => names(page), {timeout: 10000}).toEqual(["Pinned chat", "Older chat", "Newest chat", "Middle chat"]);
 });
 

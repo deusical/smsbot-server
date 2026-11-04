@@ -7,6 +7,7 @@ import (
 )
 
 func TestCaptureWaitCancellation(t *testing.T) {
+	t.Parallel()
 	var reads captureReads
 	release, err := reads.acquire(context.Background(), "synthetic")
 	if err != nil {

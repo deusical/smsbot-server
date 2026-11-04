@@ -8,6 +8,7 @@ import (
 )
 
 func TestStatsIncludesDatabaseOriginalsExportsAndWorkingFiles(t *testing.T) {
+	t.Parallel()
 	s, manager := setup(t)
 	seed(t, s, nil)
 	empty, err := manager.Stats(context.Background())

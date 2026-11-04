@@ -1,6 +1,6 @@
-import { test, expect, type Page } from "@playwright/test";
-import { readFileSync } from "node:fs";
+import { test, expect, type Page, nextPoll, signIn } from "./fixtures";
 import type { Configuration } from "../src/lib/api";
+
 const initial: Configuration = {
   settings: {
     default_model: "fixture/model",
@@ -63,14 +63,7 @@ async function setup(page: Page) {
       json: { base_url: "https://api.openai.com/v1", configured: false },
     }),
   );
-  const descriptor = JSON.parse(
-    readFileSync(".test-state/connection.json", "utf8"),
-  );
-  await page.goto("/");
-  await page
-    .getByLabel("Owner credential")
-    .fill(readFileSync(descriptor.owner, "utf8"));
-  await page.getByRole("button", { name: "Sign in" }).click();
+  await signIn(page);
   await expect(
     page.getByRole("heading", { name: "Home", exact: true }),
   ).toBeVisible();
@@ -200,7 +193,9 @@ test("activity filters distinguish approvals and unknown outcomes without invent
     }),
   );
   await page.getByRole("button", { name: "Activity", exact: true }).click();
+  await nextPoll(page);
   await expect(page.locator(".feed-row")).toHaveCount(2);
+  await nextPoll(page);
   await expect(page.locator(".activity-metrics")).toContainText(
     "1 request with unavailable cost",
   );
@@ -311,6 +306,7 @@ test("conversation filters preserve enrollment and theme switches do not write b
     .getByRole("button", { name: "Conversations", exact: true })
     .click();
   // The mocked rows arrive after the fixture's own; wait for them, not a count.
+  await nextPoll(page);
   await expect(page.locator("li.conversation").filter({ hasText: "Synthetic Group" })).toBeVisible({
     timeout: 10000,
   });
@@ -411,6 +407,7 @@ for (const viewport of [
           },
         }),
     );
+    await nextPoll(page);
     await expect(page.locator(".hero-pill")).toHaveText("LIVE");
     for (const screen of [
       "Home",

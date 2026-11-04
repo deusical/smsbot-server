@@ -1,5 +1,5 @@
-import {test, expect, type Page} from "@playwright/test";
-import {readFileSync} from "node:fs";
+import { test, expect, type Page, nextPoll, signIn } from "./fixtures";
+import { origin } from "./server";
 
 async function prepare(page: Page, protocol = "RCS", actionGate?: Promise<void>) {
   const at = new Date().toISOString();
@@ -14,8 +14,7 @@ async function prepare(page: Page, protocol = "RCS", actionGate?: Promise<void>)
   await page.route("**/api/v1/inbox/conversations/*/actions/*", route => route.fulfill({json: {id: "synthetic-reaction", state: world.actionState}}));
   await page.route("**/api/v1/inbox/conversations/*/compose", route => {world.compose.push(route.request().postDataJSON());return route.fulfill({status: 202, json: {id: "synthetic-compose"}});});
   await page.route("**/api/v1/inbox/conversations/*/read", route => route.fulfill({json: {ok: true}}));
-  const descriptor = JSON.parse(readFileSync(".test-state/connection.json", "utf8"));
-  await page.goto("/");await page.getByLabel("Owner credential").fill(readFileSync(descriptor.owner, "utf8"));await page.getByRole("button", {name: "Sign in", exact: true}).click();
+  await signIn(page);
   await page.getByRole("button", {name: "Conversations", exact: true}).click();
   await page.locator(".conversation").filter({hasText: "Avery Quinn"}).getByRole("button", {name: /Avery Quinn/}).click();
   await expect(page.locator('[data-message-id="original"]')).toBeVisible();
@@ -120,6 +119,7 @@ test("reaction remove, uncertain status, and Unicode picker", async ({page}) => 
   expect(world.reactions[0].operation).toBe("remove");
   world.actionState = "unknown_submission";
   await expect(original(page)).toContainText("Reaction outcome uncertain", {timeout: 6000});
+  await nextPoll(page);
   await expect(original(page).getByRole("button", {name: "Retry"})).toHaveCount(0);
   world.actionState = "reaction_confirmed";await expect(original(page).locator(".reaction-progress")).toHaveCount(0, {timeout: 6000});
   await original(page).getByRole("button", {name: "Message actions", exact: true}).click();
@@ -174,7 +174,7 @@ test("a single reaction shows no count and the details view can go back", async 
 });
 
 test("touch: tapping the message opens the bottom sheet", async ({browser}) => {
-  const context = await browser.newContext({baseURL: "http://127.0.0.1:8788", serviceWorkers: "block", viewport: {width: 390, height: 844}, hasTouch: true, isMobile: true});
+  const context = await browser.newContext({baseURL: origin, serviceWorkers: "block", viewport: {width: 390, height: 844}, hasTouch: true, isMobile: true});
   try {
     const page = await context.newPage();await prepare(page);
     await original(page).locator("p").tap();

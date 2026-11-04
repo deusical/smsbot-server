@@ -1,0 +1,48 @@
+name: Main
+# After each merge: rerun the Go checks on main and save the build, module, test
+# and staticcheck caches that pull requests restore (they can only read caches
+# saved on main). Weekly, it also keeps the cache from expiring and audits
+# dependencies against newly published advisories.
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: main-checks
+  cancel-in-progress: true
+env:
+  GO_VERSION: '1.27.3'
+  GOTOOLCHAIN: go1.27.3
+jobs:
+  go:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/embed-dashboard
+      - uses: ./.github/actions/setup-go-cached
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: Backend race tests
+        run: go test -race ./...
+      - name: Compile what pull requests build
+        if: always()
+        run: |
+          go build -trimpath -o /dev/null ./cmd/smsbot
+          go vet ./...
+          go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...
+      - name: Audit Go dependencies
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
+      - name: Save Go cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/.cache/staticcheck
+            ~/go/pkg/mod
+          key: go-${{ env.GO_VERSION }}-${{ hashFiles('go.sum') }}-${{ github.run_id }}

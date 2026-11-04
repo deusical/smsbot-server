@@ -47,6 +47,7 @@ func seed(t *testing.T, s *store.Store, files []media.File) {
 	}
 }
 func TestEncryptedAndReadableArchiveRoundTrip(t *testing.T) {
+	t.Parallel()
 	s, manager := setup(t)
 	files, _ := media.Prepare([]media.Upload{{Name: "synthetic.txt", MIME: "text/plain", Data: []byte("Synthetic original bytes")}})
 	files = append(files, media.File{Info: media.Info{ID: "expired", Name: "expired.txt"}, RemoteID: "remote-reference", Key: bytes.Repeat([]byte{7}, 32)})
@@ -142,6 +143,7 @@ func TestEncryptedAndReadableArchiveRoundTrip(t *testing.T) {
 	}
 }
 func TestTamperCancellationAndFailedWritesDoNotPublish(t *testing.T) {
+	t.Parallel()
 	s, manager := setup(t)
 	seed(t, s, nil)
 	var packageBytes bytes.Buffer
@@ -189,6 +191,7 @@ func (h *repairCountingHost) Repair(context.Context, transport.Conversation, str
 	return false, nil
 }
 func TestFileRetryDeadlinePrecedesRepair(t *testing.T) {
+	t.Parallel()
 	s, manager := setup(t)
 	file := media.File{Info: media.Info{ID: "retry", ArchiveState: "failed"}, RemoteID: "synthetic", RetryAt: time.Now().Add(time.Hour).Format(time.RFC3339Nano)}
 	seed(t, s, []media.File{file})
@@ -217,6 +220,7 @@ func (r *repeatedReader) Read(b []byte) (int, error) {
 	return n, nil
 }
 func TestStreamingArchiveBeyondLogicalJSONLimit(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("large streaming acceptance")
 	}
@@ -276,6 +280,7 @@ func TestStreamingArchiveBeyondLogicalJSONLimit(t *testing.T) {
 	t.Logf("streaming package bytes=%d observed export heap delta=%d", info.Size(), int64(peak.HeapAlloc)-int64(before.HeapAlloc))
 }
 func TestScopeFilterAndConcurrentCaptureSnapshot(t *testing.T) {
+	t.Parallel()
 	s, manager := setup(t)
 	seed(t, s, nil)
 	var packageBytes bytes.Buffer
@@ -356,6 +361,7 @@ func (h *fileHost) CommitFile(ctx context.Context, c transport.Conversation, rev
 	return h.s.UpdateArchivedFile(ctx, message, expected, updated)
 }
 func TestFileArchiveRestartQuotasAndRevocation(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"saved", "near-quota", "quota", "unknown-size-limit", "revoked", "cancelled", "storage-failed"} {
 		t.Run(mode, func(t *testing.T) {
 			s, manager := setup(t)
@@ -462,6 +468,7 @@ func TestFileArchiveRestartQuotasAndRevocation(t *testing.T) {
 	}
 }
 func TestExportJobIdempotencyCancellationAndInterruptedStatus(t *testing.T) {
+	t.Parallel()
 	s, manager := setup(t)
 	seed(t, s, nil)
 	manager.mu.Lock() // hold publication/export to make the concurrent start deterministic
@@ -502,6 +509,7 @@ func jsonMarshalJob(j Job) ([]byte, error) {
 }
 
 func TestArchivedSentOriginalSurvivesEchoAndCollection(t *testing.T) {
+	t.Parallel()
 	s, manager := setup(t)
 	seed(t, s, nil)
 	files, err := media.Prepare([]media.Upload{{Name: "synthetic.bin", Data: []byte("Synthetic sent original")}})
@@ -548,6 +556,7 @@ func TestArchivedSentOriginalSurvivesEchoAndCollection(t *testing.T) {
 }
 
 func TestIncomingChangedSourceReplacesArchivedReference(t *testing.T) {
+	t.Parallel()
 	s, manager := setup(t)
 	file := media.File{Info: media.Info{ID: "part-1", Name: "synthetic.bin", Size: 7}, RemoteID: "source-one", Key: make([]byte, 32)}
 	seed(t, s, []media.File{file})
@@ -574,6 +583,7 @@ func TestIncomingChangedSourceReplacesArchivedReference(t *testing.T) {
 }
 
 func TestRestoreIgnoresBackgroundAcquisitionQuota(t *testing.T) {
+	t.Parallel()
 	s, source := setup(t)
 	files, err := media.Prepare([]media.Upload{{Name: "synthetic-large.bin", Data: make([]byte, 2<<20)}})
 	if err != nil {
@@ -608,6 +618,7 @@ func TestRestoreIgnoresBackgroundAcquisitionQuota(t *testing.T) {
 }
 
 func TestTerminalFilesWaitForChangedConditions(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"unavailable", "policy", "quota-space"} {
 		t.Run(mode, func(t *testing.T) {
 			s, manager := setup(t)
@@ -679,6 +690,7 @@ func TestTerminalFilesWaitForChangedConditions(t *testing.T) {
 }
 
 func TestIdleArchiveScanSleepsAndWakesForNewFiles(t *testing.T) {
+	t.Parallel()
 	s, manager := setup(t)
 	seed(t, s, nil)
 	host := &fileHost{s: s, data: []byte("new file")}
@@ -704,6 +716,7 @@ func TestIdleArchiveScanSleepsAndWakesForNewFiles(t *testing.T) {
 }
 
 func TestGoogleReportedSizeDoesNotReplaceMeasuredOriginalSize(t *testing.T) {
+	t.Parallel()
 	for _, unverified := range []bool{false, true} {
 		s, manager := setup(t)
 		f := media.File{Info: media.Info{ID: "original", MIME: "image/jpeg", Size: 794}, SizeUnverified: unverified, RemoteID: "synthetic-original"}
@@ -735,6 +748,7 @@ func (h *viewedFileHost) Open(ctx context.Context, f media.File) (io.ReadCloser,
 	return h.fileHost.Open(ctx, f)
 }
 func TestViewedOriginalPriorityKeepsBackgroundProgress(t *testing.T) {
+	t.Parallel()
 	s, manager := setup(t)
 	now := time.Now()
 	global := media.File{Info: media.Info{ID: "global", Size: 8}, RemoteID: "global-original"}

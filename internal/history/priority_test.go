@@ -27,6 +27,7 @@ func (h *priorityHost) Fetch(_ context.Context, c transport.Conversation, cursor
 	return transport.HistoryPage{NextCursor: "next-" + cursor}, nil
 }
 func TestExplicitRequestsAdvanceBeforeDiscoveryAndRotate(t *testing.T) {
+	t.Parallel()
 	v, _ := vault.New(make([]byte, 32))
 	s, err := store.Open(filepath.Join(t.TempDir(), "state.db"), v)
 	if err != nil {
@@ -61,6 +62,7 @@ func (h *priorityHost) Policy(c transport.Conversation) (Policy, error) {
 	return Policy{}, nil
 }
 func TestInaccessibleManualJobCannotStarveOtherRequests(t *testing.T) {
+	t.Parallel()
 	v, _ := vault.New(make([]byte, 32))
 	s, err := store.Open(filepath.Join(t.TempDir(), "state.db"), v)
 	if err != nil {
@@ -81,6 +83,7 @@ func TestInaccessibleManualJobCannotStarveOtherRequests(t *testing.T) {
 }
 
 func TestExistingDateLimitedQueuedImportGetsPriorityOnUpgrade(t *testing.T) {
+	t.Parallel()
 	v, _ := vault.New(make([]byte, 32))
 	s, err := store.Open(filepath.Join(t.TempDir(), "state.db"), v)
 	if err != nil {

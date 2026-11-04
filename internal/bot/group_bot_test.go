@@ -33,6 +33,7 @@ func groupCommand(id, member, text string) transport.Incoming {
 }
 
 func TestAnEnrolledMemberRunsCommandsInAGroupAndTheGroupSeesTheAnswer(t *testing.T) {
+	t.Parallel()
 	e, f, roster := botGroup(t)
 	ctx := context.Background()
 	ok, err := e.Accept(ctx, groupCommand("group-ping-1", "demo-member-a", "!ping"))
@@ -52,6 +53,7 @@ func TestAnEnrolledMemberRunsCommandsInAGroupAndTheGroupSeesTheAnswer(t *testing
 }
 
 func TestOnlyEnrolledMembersAndNotTheOwnerWithoutTheSettingRunCommandsInAGroup(t *testing.T) {
+	t.Parallel()
 	e, f, _ := botGroup(t)
 	ctx := context.Background()
 	for name, m := range map[string]transport.Incoming{
@@ -81,6 +83,7 @@ func ownerGroupCommand(id, text string) transport.Incoming {
 }
 
 func TestTheOwnerRunsCommandsInAnyGroupTheyCanSendTo(t *testing.T) {
+	t.Parallel()
 	e, f, roster := botGroup(t)
 	ctx := context.Background()
 	allowOwnerCommands(t, e, false)
@@ -126,6 +129,7 @@ func TestTheOwnerRunsCommandsInAnyGroupTheyCanSendTo(t *testing.T) {
 }
 
 func TestTheBotGoesSilentInAGroupWhosePeopleChangedUntilTheOwnerApproves(t *testing.T) {
+	t.Parallel()
 	e, f, roster := botGroup(t)
 	ctx := context.Background()
 	queued, err := e.Accept(ctx, groupCommand("group-ping-2", "demo-member-a", "!ping"))
@@ -162,6 +166,7 @@ func TestTheBotGoesSilentInAGroupWhosePeopleChangedUntilTheOwnerApproves(t *test
 }
 
 func TestApprovingAGroupDropsMembersWhoLeft(t *testing.T) {
+	t.Parallel()
 	e, f, _ := botGroup(t)
 	ctx := context.Background()
 	c, _ := transport.Lookup(ctx, f, "demo-group")
@@ -180,6 +185,7 @@ func TestApprovingAGroupDropsMembersWhoLeft(t *testing.T) {
 }
 
 func TestStoppingOneMemberCancelsWaitingWorkAndOthersKeepTheirAccess(t *testing.T) {
+	t.Parallel()
 	e, f, roster := botGroup(t)
 	ctx := context.Background()
 	if err := e.EnrollMember("demo-group", "demo-member-b", roster); err != nil {
@@ -210,6 +216,7 @@ func TestStoppingOneMemberCancelsWaitingWorkAndOthersKeepTheirAccess(t *testing.
 }
 
 func TestEachMemberOfAGroupHasTheirOwnAIMemory(t *testing.T) {
+	t.Parallel()
 	a := store.Plan{Participant: "demo-member-a", Roster: "group:r"}
 	b := store.Plan{Participant: "demo-member-b", Roster: "group:r"}
 	individual := store.Plan{Participant: "demo-peer"}
@@ -229,6 +236,7 @@ func groupPrompt(id, member, text, wire string) transport.Incoming {
 }
 
 func TestAnAIThreadInAGroupBelongsToWhoStartedIt(t *testing.T) {
+	t.Parallel()
 	e, _, roster := botGroup(t)
 	configureAI(t, e, true, false)
 	provider := &transcriptProvider{}
@@ -258,6 +266,7 @@ func TestAnAIThreadInAGroupBelongsToWhoStartedIt(t *testing.T) {
 }
 
 func TestTheOwnerContinuesAnAIThreadInAGroupByReplyingToTheAnswer(t *testing.T) {
+	t.Parallel()
 	e, _, _ := botGroup(t)
 	configureAI(t, e, true, false)
 	cfg, err := e.Configuration()
@@ -288,6 +297,7 @@ func TestTheOwnerContinuesAnAIThreadInAGroupByReplyingToTheAnswer(t *testing.T) 
 }
 
 func TestOneMembersNewLeavesTheOthersConversationsAlone(t *testing.T) {
+	t.Parallel()
 	e, _, roster := botGroup(t)
 	configureAI(t, e, true, false)
 	e.Provider = &transcriptProvider{}
@@ -316,6 +326,7 @@ func TestOneMembersNewLeavesTheOthersConversationsAlone(t *testing.T) {
 }
 
 func TestAskerIsNamedTheSameWayWhoeverIsAsking(t *testing.T) {
+	t.Parallel()
 	mine := transport.Incoming{Outgoing: true}
 	theirs := transport.Incoming{ParticipantID: "p1"}
 	for _, c := range []struct {
@@ -343,6 +354,7 @@ func TestAskerIsNamedTheSameWayWhoeverIsAsking(t *testing.T) {
 }
 
 func TestAGroupCanShareOneAIConversationAndOnlyTheOwnerClearsIt(t *testing.T) {
+	t.Parallel()
 	e, _, roster := botGroup(t)
 	configureAI(t, e, true, false)
 	cfg, err := e.Configuration()
@@ -399,6 +411,7 @@ func TestAGroupCanShareOneAIConversationAndOnlyTheOwnerClearsIt(t *testing.T) {
 }
 
 func TestSwitchingAGroupToSharedStartsItsConversationsOver(t *testing.T) {
+	t.Parallel()
 	e, _, _ := botGroup(t)
 	configureAI(t, e, true, false)
 	e.Provider = &transcriptProvider{}

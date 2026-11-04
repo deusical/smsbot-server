@@ -34,6 +34,7 @@ func enableChainAsk(t *testing.T, e *Engine) {
 }
 
 func TestAskFollowsTheWholeReplyChain(t *testing.T) {
+	t.Parallel()
 	e, _ := setup(t)
 	saveChained(t, e, "m1", "", "outgoing", "phone", "Want to get dinner Friday?")
 	saveChained(t, e, "m2", "m1", "incoming", "phone", "Sure, where?")
@@ -56,6 +57,7 @@ func TestAskFollowsTheWholeReplyChain(t *testing.T) {
 }
 
 func TestReplyChainStopsAtLoopsGapsAndTheDepthLimit(t *testing.T) {
+	t.Parallel()
 	e, _ := setup(t)
 	// A message and its reply that point at each other.
 	saveChained(t, e, "loop-a", "loop-b", "incoming", "phone", "Synthetic A")
@@ -81,6 +83,7 @@ func TestReplyChainStopsAtLoopsGapsAndTheDepthLimit(t *testing.T) {
 }
 
 func TestReplyChainTextIsBounded(t *testing.T) {
+	t.Parallel()
 	e, _ := setup(t)
 	saveChained(t, e, "big-1", "", "incoming", "phone", "Synthetic oldest "+strings.Repeat("a", 1900))
 	prev := "big-1"
@@ -99,6 +102,7 @@ func TestReplyChainTextIsBounded(t *testing.T) {
 }
 
 func TestReplyChainPhotoIsOnlyTheOneRepliedToDirectly(t *testing.T) {
+	t.Parallel()
 	e, _ := setup(t)
 	enableInbox(t, e)
 	savePhoto(t, e, "chain-photo", "image/png", "Synthetic caption", syntheticPNG)

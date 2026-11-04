@@ -21,6 +21,7 @@ func inboxStore(t *testing.T) *Store {
 	return s
 }
 func TestMessagePageStableCursorAndBoundedSearch(t *testing.T) {
+	t.Parallel()
 	s := inboxStore(t)
 	for i := 0; i < 5; i++ {
 		id := fmt.Sprintf("fixture-%d", i)
@@ -55,6 +56,7 @@ func TestMessagePageStableCursorAndBoundedSearch(t *testing.T) {
 	}
 }
 func TestRetentionPreservesDedupAndUncertainMarkers(t *testing.T) {
+	t.Parallel()
 	s := inboxStore(t)
 	if e := s.SaveMessage("fixture-old", "fixture-chat", "incoming", "synthetic old"); e != nil {
 		t.Fatal(e)

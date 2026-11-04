@@ -2,6 +2,7 @@ package bot
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -183,7 +184,7 @@ func (e *Engine) pollWorker(ctx context.Context, j store.Job, p *store.Plan, pol
 		return false, loaderr
 	}
 	if workerr == nil && stage != "complete" {
-		if err := e.Store.DeferWork(j.ID, stage, time.Now().Add(time.Second).UnixMilli()); err != nil {
+		if err := e.Store.DeferWork(j.ID, stage, time.Now().Add(e.workerPollDelay()).UnixMilli()); err != nil {
 			return false, err
 		}
 		_, err := e.Store.Transition(j.ID, "generating", "queued")
@@ -247,6 +248,10 @@ func inboxLimitsAllow(e *Engine, files []media.File) error {
 
 // Download uploads run in a bounded background lane. Only the dispatch loop
 // commits their result and returns a job to the send queue.
+// workerPollDelay spaces polls of the local download worker; zero
+// WorkerPollDelay means one second.
+func (e *Engine) workerPollDelay() time.Duration { return cmp.Or(e.WorkerPollDelay, time.Second) }
+
 type downloadUploadResult struct {
 	files []media.File
 	err   error
@@ -261,7 +266,7 @@ func (e *Engine) prepareDownloadUpload(ctx context.Context, j store.Job, p *stor
 		return false, nil
 	}
 	if len(e.downloadUploads) > 0 {
-		return true, e.Store.DeferWork(j.ID, "waiting_upload", time.Now().Add(time.Second).UnixMilli())
+		return true, e.Store.DeferWork(j.ID, "waiting_upload", time.Now().Add(e.workerPollDelay()).UnixMilli())
 	}
 	preparer, ok := e.Transport.(transport.FilePreparer)
 	if !ok {

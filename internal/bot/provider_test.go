@@ -11,6 +11,7 @@ import (
 )
 
 func TestProviderRequestAndUsageContracts(t *testing.T) {
+	t.Parallel()
 	var request map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer SYNTHETIC_KEY" {
@@ -39,6 +40,7 @@ func TestProviderRequestAndUsageContracts(t *testing.T) {
 	}
 }
 func TestProviderDefaultAndFailures(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, body string
 		status     int
@@ -73,6 +75,7 @@ func TestProviderDefaultAndFailures(t *testing.T) {
 	}
 }
 func TestUnsupportedGenerationNeverContactsProvider(t *testing.T) {
+	t.Parallel()
 	calls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { calls++ }))
 	defer server.Close()
@@ -95,6 +98,7 @@ func TestUnsupportedGenerationNeverContactsProvider(t *testing.T) {
 	}
 }
 func TestModelCatalogReasoningNullAndAbsent(t *testing.T) {
+	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`{"data":[{"id":"fixture/all","name":"All","architecture":{"input_modalities":["text"],"output_modalities":["text"]},"reasoning":{"supported_efforts":null},"pricing":{"prompt":"0.1","completion":"0.2"}},{"id":"fixture/none","name":"None","architecture":{"input_modalities":["text"],"output_modalities":["text"]},"reasoning":{}}]}`))
 	}))

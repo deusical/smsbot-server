@@ -37,6 +37,7 @@ func stuckGap(t *testing.T, svc *Service) {
 // A gap in a conversation collection does not apply to closes after one
 // lookup instead of retrying every few minutes forever.
 func TestUncollectableGapSettlesWithoutRetrying(t *testing.T) {
+	t.Parallel()
 	svc, f := setup(t)
 	enableInbox(t, svc)
 	source := &lookupOnly{Fixture: f, result: func(id string) (transport.Conversation, error) {
@@ -70,6 +71,7 @@ func TestUncollectableGapSettlesWithoutRetrying(t *testing.T) {
 
 // Repeated lookup failures back off toward a daily retry.
 func TestFailingGapLookupsBackOffToDaily(t *testing.T) {
+	t.Parallel()
 	svc, f := setup(t)
 	enableInbox(t, svc)
 	svc.Transport = &lookupOnly{Fixture: f, result: func(string) (transport.Conversation, error) {

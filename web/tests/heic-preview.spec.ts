@@ -1,5 +1,4 @@
-import { test, expect } from "@playwright/test";
-import { readFileSync } from "node:fs";
+import { test, expect, signIn } from "./fixtures";
 
 // A 1x1 JPEG, standing in for what the server makes of a HEIC photo.
 const jpeg = Buffer.from(
@@ -38,10 +37,7 @@ test("a HEIC photo is shown inline, from the preview the server makes", async ({
     requested.push(route.request().url());
     return route.fulfill({ status: 200, contentType: "image/jpeg", body: jpeg });
   });
-  const descriptor = JSON.parse(readFileSync(".test-state/connection.json", "utf8"));
-  await page.goto("/");
-  await page.getByLabel("Owner credential").fill(readFileSync(descriptor.owner, "utf8"));
-  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await signIn(page);
   await page.getByRole("button", { name: "Conversations", exact: true }).click();
   await page.locator(".conversation").filter({ hasText: "Avery Quinn" }).getByRole("button", { name: /Avery Quinn/ }).click();
   const photo = page.getByRole("img", { name: "IMG_8862.heic" });
