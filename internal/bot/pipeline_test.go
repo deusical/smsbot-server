@@ -86,7 +86,7 @@ func TestTemplatesAreValidPipelines(t *testing.T) {
 			t.Fatalf("%s/%s: %v", c.Name, c.Type, err)
 		}
 	}
-	if !commandPipeline(Command{Name: "ask", Type: "ai", Memory: true}).has("context.thread") || !commandPipeline(Command{Name: "translate", Type: "ai", Memory: true}).has("context.rolling") {
+	if !commandPipeline(Command{Name: "ask", Type: "ai", Memory: true}).Has("context.thread") || !commandPipeline(Command{Name: "translate", Type: "ai", Memory: true}).Has("context.rolling") {
 		t.Fatal("memory mapped to the wrong conversation")
 	}
 	if commandPipeline(Command{Type: "download", ExecutionMinutes: 20}).ExecutionMinutes != 20 {

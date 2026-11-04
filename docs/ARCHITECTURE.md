@@ -34,6 +34,7 @@ flowchart LR
 | `internal/transport` | Conversation and message types, the Google adapter (libgm) and the offline fixture used by the demo and tests. |
 | `internal/store` | SQLite with migrations and encrypted payloads: jobs, messages, enrollment, AI threads, credentials, backups. |
 | `internal/vault` | The master key and AES-GCM encryption. Windows uses DPAPI; Linux uses an owner-only key file. |
+| `internal/pipeline` | The command engine: a standard-library-only Go library that validates, snapshots, runs and previews pipelines of typed modules, with effects only through the host. See its README. |
 | `internal/bot` | Command routing, AI generation, and the dispatcher that sends replies and your own messages. |
 | `internal/collection` | Which conversations are archived, capturing their messages, and read receipts. It never sends. |
 | `internal/history` | Background reads that fill the archive. History never runs commands. |
@@ -134,7 +135,8 @@ sends twice.
 
 A command is configuration: the trigger (the command message) followed by a
 linear list of steps. Each step runs one registered module
-(`internal/bot/pipeline.go`, `modules_*.go`). A module declares typed input and
+(the engine is `internal/pipeline`; SmsBot is its host in `internal/bot/pipeline.go`,
+and its modules are `modules_*.go`). A module declares typed input and
 output ports (`text`, `url`, `file`, `video`, `stored_video`, `message`, `context`), a strict
 settings schema, an effect class and retry/resource classes. Each input is bound
 to `trigger.<output>` or an earlier `<step>.<output>` of a compatible type;

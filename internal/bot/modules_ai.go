@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/deusical/smsbot-server/internal/pipeline"
 	"github.com/deusical/smsbot-server/internal/store"
 )
 
@@ -25,7 +26,7 @@ type questionSettings struct {
 // replies to (unless it continues an AI thread, which has its own history).
 func questionModule() module {
 	return module{
-		ModuleDefinition: ModuleDefinition{
+		Definition: ModuleDefinition{
 			ID: "message.question", Version: 1, Title: "Question", Description: "Builds a question from the command text, its file and the messages it replies to.",
 			Inputs: []Port{
 				{Name: "text", Title: "Question text", Types: []string{typeText}, Required: true},
@@ -40,17 +41,18 @@ func questionModule() module {
 				"require_question": {Type: "boolean", Title: "Ask for a question when none is given", Default: false},
 			}},
 		},
-		settings: func(raw json.RawMessage, _ pipelineEnv) (json.RawMessage, error) {
+		Settings: func(raw json.RawMessage, _ any) (json.RawMessage, error) {
 			var q questionSettings
 			if err := strictSettings(raw, &q); err != nil {
 				return nil, err
 			}
 			return json.Marshal(q)
 		},
-		accept: func(e *Engine, a *acceptRun, s *stepRun) (acceptOutcome, error) {
+		Accept: func(a *runCtx, s *pipeline.Step) (pipeline.Outcome, error) {
+			e := a.e
 			var q questionSettings
-			_ = s.decode(&q)
-			input := s.text("text")
+			_ = s.Decode(&q)
+			input := s.Text("text")
 			own := ownFile(a.m)
 			var file *store.FileRef
 			if own != nil {
@@ -59,8 +61,7 @@ func questionModule() module {
 					reply = "I can only read files in conversations you archive. Turn that on in Settings, or reply to the file with !" + a.cmd.Name + " once it's saved."
 				}
 				if reply != "" {
-					a.halt = reply
-					return stepHalt, nil
+					return pipeline.Halt(textValue(reply)), nil
 				}
 				input = ownFilePrompt(input, own)
 				file = own
@@ -71,28 +72,26 @@ func questionModule() module {
 					input = quoted
 					if qf != nil && own == nil {
 						if reply := fileUnreadable(*qf, a.cfg.Settings.AIPhotoMaxMB); reply != "" {
-							a.halt = reply
-							return stepHalt, nil
+							return pipeline.Halt(textValue(reply)), nil
 						}
 						file = qf
 					}
 				}
 			}
 			if q.RequireQuestion && input == "" {
-				a.halt = "Send !" + a.cmd.Name + " followed by a question. Reply to an AI answer to continue it."
-				return stepHalt, nil
+				return pipeline.Halt(textValue("Send !" + a.cmd.Name + " followed by a question. Reply to an AI answer to continue it.")), nil
 			}
-			s.out("prompt", store.Value{Type: typeText, Text: input})
+			s.Out("prompt", textValue(input))
 			if file != nil {
-				s.out("file", store.Value{Type: typeFile, File: file})
+				s.Out("file", fileValue(file))
 			}
-			return stepDone, nil
+			return pipeline.Done(), nil
 		},
-		acceptOnly: true,
-		run:        pendingImmediate,
-		simulate: func(_ *simRun, s *stepRun) error {
-			s.out("prompt", store.Value{Type: typeText, Text: s.text("text")})
-			return nil
+		AcceptOnly: true,
+		Run:        pendingImmediate,
+		Simulate: func(_ *runCtx, s *pipeline.Step) (pipeline.Outcome, error) {
+			s.Out("prompt", textValue(s.Text("text")))
+			return pipeline.Done(), nil
 		},
 	}
 }
@@ -101,29 +100,23 @@ func questionModule() module {
 // that reads the conversation loads it with its own model and context budget,
 // and the reply records the new turn once it is submitted.
 func contextModule(id, title, description, kind string) module {
-	set := func(s *stepRun) {
-		s.out("context", store.Value{Type: typeContext, Context: &store.ConversationRef{Kind: kind}})
-		s.Done = true
+	set := func(_ *runCtx, s *pipeline.Step) (pipeline.Outcome, error) {
+		s.Out("context", contextValue(kind))
+		return pipeline.Done(), nil
 	}
 	return module{
-		ModuleDefinition: ModuleDefinition{
+		Definition: ModuleDefinition{
 			ID: id, Version: 1, Title: title, Description: description,
 			Inputs:  []Port{},
 			Outputs: []Port{{Name: "context", Title: "Conversation", Types: []string{typeContext}}},
 			Effect:  effectPure, RetryClass: "none", ResourceClass: "local", Immediate: true,
 			Schema: SettingsSchema{Type: "object", Properties: map[string]SettingsSchema{}},
 		},
-		settings: noSettings,
-		accept: func(_ *Engine, _ *acceptRun, s *stepRun) (acceptOutcome, error) {
-			set(s)
-			return stepDone, nil
-		},
-		acceptOnly: true,
-		run:        pendingImmediate,
-		simulate: func(_ *simRun, s *stepRun) error {
-			set(s)
-			return nil
-		},
+		Settings:   noSettings,
+		Accept:     set,
+		AcceptOnly: true,
+		Run:        pendingImmediate,
+		Simulate:   set,
 	}
 }
 
@@ -177,27 +170,28 @@ func resolveAI(cfg Configuration, s aiSettings) (string, string, Generation) {
 func aiChatModule() module {
 	// admitAI declines the command, as before pipelines, when no usable model is
 	// configured: the message is then not a command at all.
-	admit := func(e *Engine, a *acceptRun, s *stepRun) (Model, aiSettings, string, string, Generation, acceptOutcome, error) {
+	admit := func(a *runCtx, s *pipeline.Step) (Model, string, string, Generation, bool, error) {
+		e := a.e
 		var set aiSettings
-		_ = s.decode(&set)
-		model, instructions, g := resolveAI(a.cfg, set)
+		_ = s.Decode(&set)
+		model, instructions, g := resolveAI(*a.cfg, set)
 		if model == "" {
-			return Model{}, set, "", "", g, stepDecline, nil
+			return Model{}, "", "", g, false, nil
 		}
 		selected, err := e.model(model)
 		if err != nil {
-			return Model{}, set, "", "", g, stepDecline, err
+			return Model{}, "", "", g, false, err
 		}
 		if !e.ProviderConfiguredFor(selected) {
-			return Model{}, set, "", "", g, stepDecline, nil
+			return Model{}, "", "", g, false, nil
 		}
 		if err = validateModel(g, selected); err != nil {
-			return Model{}, set, "", "", g, stepDecline, err
+			return Model{}, "", "", g, false, err
 		}
-		return selected, set, model, instructions, g, stepPending, nil
+		return selected, model, instructions, g, true, nil
 	}
 	return module{
-		ModuleDefinition: ModuleDefinition{
+		Definition: ModuleDefinition{
 			ID: "ai.chat", Version: 1, Title: "AI answer", Description: "Asks the AI model, optionally continuing a conversation.",
 			Inputs: []Port{
 				{Name: "prompt", Title: "Prompt", Types: []string{typeText}, Required: true},
@@ -221,7 +215,8 @@ func aiChatModule() module {
 				}},
 			}},
 		},
-		settings: func(raw json.RawMessage, env pipelineEnv) (json.RawMessage, error) {
+		Settings: func(raw json.RawMessage, rawEnv any) (json.RawMessage, error) {
+			env := envOf(rawEnv)
 			var set aiSettings
 			if err := strictSettings(raw, &set); err != nil {
 				return nil, err
@@ -239,19 +234,20 @@ func aiChatModule() module {
 			}
 			return json.Marshal(set)
 		},
-		admit: func(e *Engine, a *acceptRun, s *stepRun) (bool, error) {
-			_, _, _, _, _, outcome, err := admit(e, a, s)
-			return outcome == stepPending, err
+		Admit: func(a *runCtx, s *pipeline.Step) (bool, error) {
+			_, _, _, _, ok, err := admit(a, s)
+			return ok, err
 		},
-		accept: func(e *Engine, a *acceptRun, s *stepRun) (acceptOutcome, error) {
-			selected, _, model, instructions, g, outcome, err := admit(e, a, s)
-			if outcome != stepPending || err != nil {
-				return outcome, err
+		Accept: func(a *runCtx, s *pipeline.Step) (pipeline.Outcome, error) {
+			e := a.e
+			selected, model, instructions, g, ok, err := admit(a, s)
+			if !ok || err != nil {
+				return pipeline.Decline(), err
 			}
 			st := aiState{Model: model, Instructions: instructions, Conversation: "none"}
 			st.Generation, _ = json.Marshal(g)
-			if v, ok := s.in("context"); ok && v.Context != nil {
-				st.Conversation = v.Context.Kind
+			if v, ok := s.In("context"); ok {
+				st.Conversation = valueContext(v)
 			}
 			// The conversation is fixed when the command arrives, even when the
 			// prompt is built by an earlier step at dispatch.
@@ -260,43 +256,42 @@ func aiChatModule() module {
 				p.Memory = true
 				p.MemoryHours = a.cfg.Settings.MemoryHours
 				if p.MemoryEpoch, err = e.Store.MemoryEpoch(a.m.ConversationID, p.MemberOf()); err != nil {
-					return stepDecline, err
+					return pipeline.Decline(), err
 				}
 			}
 			if st.Conversation == "rolling" {
 				if st.History, err = e.Store.Memory(memoryScope(a.m.ConversationID, "!"+a.cmd.Name, model, p.MemberOf()), e.now()); err != nil {
-					return stepDecline, err
+					return pipeline.Decline(), err
 				}
 			}
-			prompt, known := s.in("prompt")
+			prompt, known := s.In("prompt")
 			if !known {
 				// Built from a later value; prepared when the step runs. A
 				// thread needs its prompt now, which validation guarantees.
-				if turnStep(s.steps) == s.ID {
+				if turnStep(s.Steps()) == s.ID {
 					mirrorAI(p, st)
 				}
-				s.save(st)
-				return stepPending, nil
+				s.Save(st)
+				return pipeline.Pending(), nil
 			}
 			st.Input = prompt.Text
-			if f, ok := s.in("file"); ok {
-				st.File = f.File
+			if f, ok := s.In("file"); ok {
+				st.File = valueFile(f)
 			}
 			switch st.Conversation {
 			case "thread":
 				thread, history, note, halt, err := e.planAIThread(a.m, p, a.parent, "!"+a.cmd.Name, selected, g, a.cfg.Settings, st.Input, st.Instructions, st.File)
 				if err != nil {
-					return stepDecline, err
+					return pipeline.Decline(), err
 				}
 				if halt != "" {
-					a.halt = halt
-					return stepHalt, nil
+					return pipeline.Halt(textValue(halt)), nil
 				}
 				p.Thread = thread
 				st.History = history
 				st.Instructions += note
 			}
-			if p.Shared && turnStep(s.steps) == s.ID {
+			if p.Shared && turnStep(s.Steps()) == s.ID {
 				// One conversation among several people: each question says who
 				// asked it. Other AI steps (translating, extracting) don't need it.
 				st.Input = askerLabel(*p) + ": " + st.Input
@@ -304,30 +299,31 @@ func aiChatModule() module {
 			}
 			// A job makes one AI request; the plan records it, and with a
 			// conversation it is the turn recorded when the reply is sent.
-			if turnStep(s.steps) == s.ID {
+			if turnStep(s.Steps()) == s.ID {
 				mirrorAI(p, st)
 			}
 			st.Prepared = true
-			s.save(st)
-			return stepPending, nil
+			s.Save(st)
+			return pipeline.Pending(), nil
 		},
-		run: func(e *Engine, r *execRun, s *stepRun) (bool, error) {
+		Run: func(r *runCtx, s *pipeline.Step) (pipeline.Outcome, error) {
+			e := r.e
 			var st aiState
-			if err := s.load(&st); err != nil {
-				return true, e.Store.Complete(r.j.ID, "failed", "pipeline_state_invalid")
+			if err := s.Load(&st); err != nil {
+				return pipeline.Fail("pipeline_state_invalid"), nil
 			}
 			if !st.Prepared {
-				st.Input = s.text("prompt")
-				if f, ok := s.in("file"); ok {
-					st.File = f.File
+				st.Input = s.Text("prompt")
+				if f, ok := s.In("file"); ok {
+					st.File = valueFile(f)
 				}
-				if r.p.Shared && turnStep(s.steps) == s.ID {
+				if r.p.Shared && turnStep(s.Steps()) == s.ID {
 					st.Input = askerLabel(*r.p) + ": " + st.Input
 					st.Instructions += "\nThis conversation is shared by a group chat. Each question starts with who asked it; answer the one who asked."
 				}
 				st.Prepared = true
-				s.save(st)
-				if turnStep(s.steps) == s.ID {
+				s.Save(st)
+				if turnStep(s.Steps()) == s.ID {
 					mirrorAI(r.p, st)
 				}
 			}
@@ -336,7 +332,7 @@ func aiChatModule() module {
 				// Memory cleared, or consent withdrawn, since acceptance.
 				epoch, err := e.Store.MemoryEpoch(r.j.ConversationID, r.p.MemberOf())
 				if err != nil {
-					return true, err
+					return pipeline.Yield(), err
 				}
 				cmd, _, _, _, enabled := resolve(*r.cfg, strings.TrimPrefix(r.j.Command, "!"))
 				if epoch != r.p.MemoryEpoch || !enabled || !cmd.Memory {
@@ -346,16 +342,19 @@ func aiChatModule() module {
 				}
 			}
 			call := aiCall{Step: s.ID, Model: st.Model, Instructions: st.Instructions, Generation: st.Generation, Input: st.Input, File: st.File}
-			return e.generateReply(r.ctx, r.j, r.p, r.cfg, call, history, func(text string) {
-				s.out("text", store.Value{Type: typeText, Text: text})
-				s.out("context", store.Value{Type: typeContext, Context: &store.ConversationRef{Kind: st.Conversation}})
+			// The answer is recorded in the step before the plan is saved, so
+			// approval asked for after generating never regenerates it.
+			return yielded(e.generateReply(r.ctx, r.j, r.p, r.cfg, call, history, func(text string) {
+				s.Out("text", textValue(text))
+				s.Out("context", contextValue(st.Conversation))
 				s.Done = true
-			})
+			}))
 		},
-		simulate: func(sim *simRun, s *stepRun) error {
+		Simulate: func(c *runCtx, s *pipeline.Step) (pipeline.Outcome, error) {
+			sim := c.sim
 			var set aiSettings
-			_ = s.decode(&set)
-			if model, _, _ := resolveAI(sim.cfg, set); model != "" {
+			_ = s.Decode(&set)
+			if model, _, _ := resolveAI(*c.cfg, set); model != "" {
 				if sim.model == "Local" || sim.model == "" {
 					sim.model = model
 				} else if !strings.Contains(", "+sim.model+", ", ", "+model+", ") {
@@ -363,12 +362,12 @@ func aiChatModule() module {
 				}
 			}
 			kind := "none"
-			if v, ok := s.in("context"); ok && v.Context != nil {
-				kind = v.Context.Kind
+			if v, ok := s.In("context"); ok {
+				kind = valueContext(v)
 			}
-			s.out("text", store.Value{Type: typeText, Text: "Simulated AI response. No provider request was made."})
-			s.out("context", store.Value{Type: typeContext, Context: &store.ConversationRef{Kind: kind}})
-			return nil
+			s.Out("text", textValue("Simulated AI response. No provider request was made."))
+			s.Out("context", contextValue(kind))
+			return pipeline.Done(), nil
 		},
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"math"
 	"time"
 
+	"github.com/deusical/smsbot-server/internal/pipeline"
 	"github.com/deusical/smsbot-server/internal/store"
 )
 
@@ -53,29 +54,30 @@ type sourceState struct {
 // to it that only this job's later steps can use.
 func videoDownloadModule() module {
 	return module{
-		ModuleDefinition: ModuleDefinition{
+		Definition: ModuleDefinition{
 			ID: "video.download", Version: 2, Title: "Download Douyin/Xiaohongshu video", Description: "Downloads the linked Douyin or Xiaohongshu video on the server. The original stays on the server.",
 			Inputs:  []Port{{Name: "url", Title: "Link", Types: []string{typeURL}, Required: true}},
 			Outputs: []Port{{Name: "source", Title: "Original video", Types: []string{typeStoredVideo}}},
 			Effect:  effectLocal, RetryClass: "idempotent-poll", ResourceClass: "media", LongRunning: true,
 			Schema: SettingsSchema{Type: "object", Properties: map[string]SettingsSchema{}},
 		},
-		settings: noSettings,
-		accept: func(_ *Engine, _ *acceptRun, s *stepRun) (acceptOutcome, error) {
-			if u, ok := s.in("url"); ok {
-				s.save(sourceState{URL: u.Text})
+		Settings: noSettings,
+		Accept: func(_ *runCtx, s *pipeline.Step) (pipeline.Outcome, error) {
+			if u, ok := s.In("url"); ok {
+				s.Save(sourceState{URL: u.Text})
 			}
-			return stepPending, nil
+			return pipeline.Pending(), nil
 		},
-		run: func(e *Engine, r *execRun, s *stepRun) (bool, error) {
+		Run: func(r *runCtx, s *pipeline.Step) (pipeline.Outcome, error) {
+			e := r.e
 			var st sourceState
-			_ = s.load(&st)
+			_ = s.Load(&st)
 			if st.URL == "" {
-				st.URL = s.text("url")
-				s.save(st)
+				st.URL = s.Text("url")
+				s.Save(st)
 			}
 			if st.URL == "" {
-				return true, e.Store.Complete(r.j.ID, "failed", "download_failed")
+				return pipeline.Fail("download_failed"), nil
 			}
 			worker, separate := e.Downloader.(videoWorkerV3)
 			combined := !separate
@@ -91,20 +93,20 @@ func videoDownloadModule() module {
 				return stage, err
 			})
 			if !complete || err != nil {
-				return true, err
+				return pipeline.Yield(), err
 			}
 			if combined {
 				// The compress step downloads and compresses in one older job.
-				s.out("source", store.Value{Type: typeStoredVideo, Text: st.URL})
+				s.Out("source", pipeline.Value{Type: typeStoredVideo, Text: st.URL})
 			} else {
-				s.out("source", store.Value{Type: typeStoredVideo, Handle: workerJob(r.j, s.ID)})
+				s.Out("source", pipeline.Value{Type: typeStoredVideo, Handle: workerJob(r.j, s.ID)})
 			}
 			s.Done = true
-			return e.finishWorkerStep(r.j, r.p)
+			return yielded(e.finishWorkerStep(r.j, r.p))
 		},
-		simulate: func(_ *simRun, s *stepRun) error {
-			s.out("source", store.Value{Type: typeStoredVideo, Text: "(original kept on the server)"})
-			return nil
+		Simulate: func(_ *runCtx, s *pipeline.Step) (pipeline.Outcome, error) {
+			s.Out("source", pipeline.Value{Type: typeStoredVideo, Text: "(original kept on the server)"})
+			return pipeline.Done(), nil
 		},
 	}
 }
@@ -118,7 +120,7 @@ type compressState struct {
 // video.compress makes a copy of an original video small enough to send.
 func videoCompressModule() module {
 	return module{
-		ModuleDefinition: ModuleDefinition{
+		Definition: ModuleDefinition{
 			ID: "video.compress", Version: 1, Title: "Compress video", Description: "Makes a copy of the original video that is small enough to send.",
 			Inputs:  []Port{{Name: "source", Title: "Original video", Types: []string{typeStoredVideo}, Required: true}},
 			Outputs: []Port{{Name: "video", Title: "Video", Types: []string{typeVideo}}},
@@ -131,7 +133,7 @@ func videoCompressModule() module {
 				"max_mb":       {Type: "number", Title: "Maximum video size (MB)", Default: 19.99, Minimum: bound(0.1), Maximum: bound(19.99), Unit: "MB"},
 			}},
 		},
-		settings: func(raw json.RawMessage, _ pipelineEnv) (json.RawMessage, error) {
+		Settings: func(raw json.RawMessage, _ any) (json.RawMessage, error) {
 			v := defaultVideoStep()
 			if err := strictSettings(raw, &v); err != nil {
 				return nil, err
@@ -141,24 +143,25 @@ func videoCompressModule() module {
 			}
 			return json.Marshal(v)
 		},
-		accept: func(e *Engine, a *acceptRun, s *stepRun) (acceptOutcome, error) {
-			return stepPending, prepareCompressState(e, a.pipeline.ExecutionMinutes, s)
+		Accept: func(a *runCtx, s *pipeline.Step) (pipeline.Outcome, error) {
+			return pipeline.Pending(), prepareCompressState(a.e, a.pipeline.ExecutionMinutes, s)
 		},
-		run: func(e *Engine, r *execRun, s *stepRun) (bool, error) {
+		Run: func(r *runCtx, s *pipeline.Step) (pipeline.Outcome, error) {
+			e := r.e
 			var st compressState
-			if err := s.load(&st); err != nil || st.MaxBytes == 0 {
-				return true, e.Store.Complete(r.j.ID, "failed", "download_failed")
+			if err := s.Load(&st); err != nil || st.MaxBytes == 0 {
+				return pipeline.Fail("download_failed"), nil
 			}
 			host, err := e.Collection.Settings()
 			if err != nil {
-				return true, err
+				return pipeline.Yield(), err
 			}
 			if st.MaxBytes > videoHostLimit(host.FileLimits()) {
-				return true, e.Store.Complete(r.j.ID, "cancelled", "attachment_limits_changed")
+				return yielded(true, e.Store.Complete(r.j.ID, "cancelled", "attachment_limits_changed"))
 			}
-			source, ok := s.in("source")
+			source, ok := s.In("source")
 			if !ok || source.Handle == "" && source.Text == "" {
-				return true, e.Store.Complete(r.j.ID, "failed", "download_failed")
+				return pipeline.Fail("download_failed"), nil
 			}
 			var data []byte
 			complete, err := e.pollWorker(r.ctx, r.j, r.p, func(ctx context.Context, deadline time.Time) (string, error) {
@@ -180,28 +183,28 @@ func videoCompressModule() module {
 				return stage, err
 			})
 			if !complete || err != nil {
-				return true, err
+				return pipeline.Yield(), err
 			}
 			file, done, err := e.sendableVideo(r.ctx, r.j, r.p, data, st.MaxBytes)
 			if done || err != nil {
-				return true, err
+				return pipeline.Yield(), err
 			}
-			s.out("video", store.Value{Type: typeVideo, Media: file})
+			s.Out("video", mediaValue(file))
 			s.Done = true
-			return e.finishWorkerStep(r.j, r.p)
+			return yielded(e.finishWorkerStep(r.j, r.p))
 		},
-		simulate: func(_ *simRun, s *stepRun) error {
-			s.out("video", store.Value{Type: typeVideo, Text: videoPreview})
-			return nil
+		Simulate: func(_ *runCtx, s *pipeline.Step) (pipeline.Outcome, error) {
+			s.Out("video", pipeline.Value{Type: typeVideo, Text: videoPreview})
+			return pipeline.Done(), nil
 		},
 	}
 }
 
 // prepareCompressState fixes the step's effective settings: the configured
 // size ceiling, lowered to the server's attachment limits.
-func prepareCompressState(e *Engine, minutes int, s *stepRun) error {
+func prepareCompressState(e *Engine, minutes int, s *pipeline.Step) error {
 	v := defaultVideoStep()
-	if err := s.decode(&v); err != nil {
+	if err := s.Decode(&v); err != nil {
 		return err
 	}
 	st := compressState{Settings: v.full(minutes)}
@@ -211,7 +214,7 @@ func prepareCompressState(e *Engine, minutes int, s *stepRun) error {
 	}
 	st.MaxBytes = min(videoHostLimit(host.FileLimits()), int64(math.Round(v.MaxMB*1e6)))
 	st.Settings.MaxMB = float64(st.MaxBytes) / 1e6
-	s.save(st)
+	s.Save(st)
 	return nil
 }
 

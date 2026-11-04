@@ -77,17 +77,7 @@ func templatePipeline(c Command) Pipeline {
 	return Pipeline{}
 }
 
-func clonePipeline(p Pipeline) Pipeline {
-	p.Steps = append([]PipelineStep(nil), p.Steps...)
-	for i := range p.Steps {
-		inputs := map[string]string{}
-		for k, v := range p.Steps[i].Inputs {
-			inputs[k] = v
-		}
-		p.Steps[i].Inputs = inputs
-	}
-	return p
-}
+func clonePipeline(p Pipeline) Pipeline { return p.Clone() }
 
 // commandPipeline is the validated pipeline a command runs.
 func commandPipeline(c Command) Pipeline {
@@ -117,7 +107,7 @@ func commandKind(c Command) string {
 }
 
 // commandThreads reports whether a command continues AI reply threads.
-func commandThreads(c Command) bool { return commandPipeline(c).has("context.thread") }
+func commandThreads(c Command) bool { return commandPipeline(c).Has("context.thread") }
 
 type commandSettings struct {
 	Instructions     string      `json:"instructions,omitempty"`
@@ -153,7 +143,7 @@ func normalizeCommand(c *Command) error {
 		// with no text, which they never send.
 		c.Kind, c.Type, c.Pipeline, c.Settings = id, "fixed", &pl, nil
 		c.Instructions, c.Model, c.ProfileID, c.Generation = "", "", "", nil
-		c.Memory = pl.has("context.rolling") || pl.has("context.thread")
+		c.Memory = pl.Has("context.rolling") || pl.Has("context.thread")
 		c.ExecutionMinutes = pl.ExecutionMinutes
 		return nil
 	}
@@ -229,9 +219,9 @@ func normalizeCommand(c *Command) error {
 func memoryKind(c Command) string {
 	pl := commandPipeline(c)
 	switch {
-	case pl.has("context.thread"):
+	case pl.Has("context.thread"):
 		return "thread"
-	case pl.has("context.rolling"):
+	case pl.Has("context.rolling"):
 		return "rolling"
 	}
 	return ""
@@ -245,21 +235,6 @@ func normalizeCommands(c *Configuration) error {
 	return nil
 }
 
-// SettingsSchema is the small, bounded form vocabulary exposed to clients.
-type SettingsSchema struct {
-	Type             string                    `json:"type"`
-	Properties       map[string]SettingsSchema `json:"properties,omitempty"`
-	Title            string                    `json:"title,omitempty"`
-	UI               string                    `json:"ui,omitempty"`
-	Default          any                       `json:"default,omitempty"`
-	Minimum          *float64                  `json:"minimum,omitempty"`
-	EffectiveMaximum *float64                  `json:"effective_maximum,omitempty"`
-	Maximum          *float64                  `json:"maximum,omitempty"`
-	Enum             []string                  `json:"enum,omitempty"`
-	Unit             string                    `json:"unit,omitempty"`
-}
-
-func bound(v float64) *float64 { return &v }
 func kindSchema(id string) SettingsSchema {
 	fields := map[string]SettingsSchema{}
 	if id != "media.video" {

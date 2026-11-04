@@ -1,27 +1,33 @@
 package bot
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"io"
-	"regexp"
-	"sort"
 	"strings"
 	"time"
 
+	"github.com/deusical/smsbot-server/internal/media"
+	"github.com/deusical/smsbot-server/internal/pipeline"
 	"github.com/deusical/smsbot-server/internal/store"
 	"github.com/deusical/smsbot-server/internal/transport"
 )
 
-// A command is a pipeline: the trigger (the command message) followed by a
-// linear list of steps. Each step runs one registered module. A module declares
-// typed input ports, typed output ports and a settings schema; each input is
-// bound to the trigger or to an earlier step's output. The last step is always
-// the reply module, the only one whose result can be sent, and only through the
-// dispatcher's checks. Commands are configuration; capabilities are modules.
+// SmsBot is a host of the pipeline engine (internal/pipeline). A command is a
+// pipeline started by the "message" trigger (the command message); SmsBot
+// registers the modules, keeps runs in its encrypted job plans, and is the
+// only gate for the Reply step's effect: the dispatcher's checks, persisted
+// intent and uncertain-send handling.
+
+type (
+	Pipeline         = pipeline.Pipeline
+	PipelineStep     = pipeline.StepConfig
+	ModuleDefinition = pipeline.Definition
+	Port             = pipeline.Port
+	SettingsSchema   = pipeline.Schema
+	PipelineError    = pipeline.Error
+	module           = pipeline.Module[*runCtx]
+)
 
 // Value types passed between steps.
 const (
@@ -36,94 +42,46 @@ const (
 	typeContext     = "context"
 )
 
-// Module effect classes. Only a sink can lead to a send, and a pipeline has one.
 const (
-	effectPure  = "pure"
-	effectLocal = "local"
-	effectPaid  = "paid"
-	effectSink  = "sink"
+	effectPure  = pipeline.Pure
+	effectLocal = pipeline.Local
+	effectPaid  = pipeline.Paid
+	effectSink  = pipeline.Sink
 )
 
-const (
-	maxPipelineSteps = 8
-	triggerID        = "trigger"
-)
+const maxPipelineSteps = 8
 
-// Port is one named, typed input or output of a module.
-type Port struct {
-	Name     string   `json:"name"`
-	Title    string   `json:"title"`
-	Types    []string `json:"types"`
-	Required bool     `json:"required,omitempty"`
-}
+// commands is SmsBot's engine. Its policy: at most 8 steps, ending with the
+// one Reply, which every effect goes through.
+var commands = pipeline.New[*runCtx](pipeline.Policy{
+	MaxSteps:       maxPipelineSteps,
+	MaxEffects:     1,
+	EffectLast:     true,
+	RequireEffect:  true,
+	DefaultTrigger: "message",
+	Check:          conversationRules,
+})
 
-// ModuleDefinition is what clients (and, later, an assistant composing
-// commands) see of a module.
-type ModuleDefinition struct {
-	ID            string `json:"id"`
-	Version       int    `json:"version"`
-	Title         string `json:"title"`
-	Description   string `json:"description"`
-	Inputs        []Port `json:"inputs"`
-	Outputs       []Port `json:"outputs"`
-	Effect        string `json:"effect"`
-	RetryClass    string `json:"retry_class"`
-	ResourceClass string `json:"resource_class"`
-	// Immediate modules finish when the command is accepted, from values that
-	// are known then. Their outputs are fixed in the accepted plan.
-	Immediate bool `json:"immediate,omitempty"`
-	// LongRunning modules give the job an execution deadline instead of the
-	// two-minute freshness window.
-	LongRunning bool           `json:"long_running,omitempty"`
-	Schema      SettingsSchema `json:"settings"`
-}
-
-type acceptOutcome int
-
-const (
-	stepDone    acceptOutcome = iota // outputs are set
-	stepPending                      // the module runs when the job is dispatched
-	stepHalt                         // the pipeline ends with acceptRun.halt as the reply
-	stepDecline                      // the command is not accepted at all
-)
-
-type module struct {
-	ModuleDefinition
-	// settings decodes raw settings strictly, applies defaults and validates
-	// them, returning the normalized form saved with the command.
-	settings func(raw json.RawMessage, env pipelineEnv) (json.RawMessage, error)
-	// acceptOnly modules work only from what the command message provides, so
-	// every input must be known at acceptance.
-	acceptOnly bool
-	// admit, when set, runs for every step before any step is accepted: false
-	// declines the command, as when its AI model isn't usable.
-	admit  func(*Engine, *acceptRun, *stepRun) (bool, error)
-	accept func(*Engine, *acceptRun, *stepRun) (acceptOutcome, error)
-	// run is called by the dispatcher with the control lock held. It returns
-	// yield=true when this dispatch round ends here: the module moved the job
-	// to another state, deferred it, or completed it.
-	run      func(*Engine, *execRun, *stepRun) (yield bool, err error)
-	simulate func(*simRun, *stepRun) error
-}
-
-var modules = map[string]module{}
-
-func registerModule(m module) {
-	if _, exists := modules[m.ID]; exists {
-		panic("duplicate module " + m.ID)
+func init() {
+	for _, t := range []pipeline.Type{
+		{ID: typeText, Title: "Text"},
+		{ID: typeURL, Title: "Link"},
+		{ID: typeFile, Title: "File"},
+		{ID: typeVideo, Title: "Video"},
+		{ID: typeStoredVideo, Title: "Original video"},
+		{ID: typeMessage, Title: "Message"},
+		{ID: typeContext, Title: "Conversation"},
+	} {
+		commands.RegisterType(t)
 	}
-	modules[m.ID] = m
+	commands.RegisterTrigger(pipeline.Trigger{ID: "message", Title: "Command message", Outputs: triggerOutputs})
+	commands.RegisterUpgrade(upgradeVideoSteps)
 }
+
+func registerModule(m module) { commands.Register(m) }
 
 // ModuleDefinitions lists the registered modules, in a stable order.
-func ModuleDefinitions() []ModuleDefinition {
-	out := []ModuleDefinition{}
-	for _, m := range modules {
-		out = append(out, m.ModuleDefinition)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
-	return out
-}
+func ModuleDefinitions() []ModuleDefinition { return commands.Definitions() }
 
 // triggerOutputs are what the command message provides to the first steps.
 var triggerOutputs = []Port{
@@ -131,224 +89,79 @@ var triggerOutputs = []Port{
 	{Name: "message", Title: "The command message", Types: []string{typeMessage}},
 }
 
-// Pipeline is a command's recipe as configured.
-type Pipeline struct {
-	// ExecutionMinutes bounds a pipeline with a long-running step, from
-	// acceptance to send. Zero means 15.
-	ExecutionMinutes int            `json:"execution_minutes,omitempty"`
-	Steps            []PipelineStep `json:"steps"`
-}
-
-type PipelineStep struct {
-	ID       string            `json:"id"`
-	Module   string            `json:"module"`
-	Version  int               `json:"version,omitempty"`
-	Inputs   map[string]string `json:"inputs,omitempty"`
-	Settings json.RawMessage   `json:"settings,omitempty"`
-}
-
-var stepPattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,23}$`)
-
 type pipelineEnv struct {
 	profiles map[string]bool
 }
 
-// PipelineError explains why a pipeline is invalid, naming the step and port.
-type PipelineError struct {
-	Step, Port, Reason string
+func envOf(env any) pipelineEnv {
+	e, _ := env.(pipelineEnv)
+	return e
 }
 
-func (e *PipelineError) Error() string {
-	where := e.Step
-	if e.Port != "" {
-		where += "." + e.Port
-	}
-	if where == "" {
-		return "invalid pipeline: " + e.Reason
-	}
-	return "invalid pipeline step " + where + ": " + e.Reason
-}
-
-func pipelineErr(step, port, reason string) error {
-	return &PipelineError{Step: step, Port: port, Reason: reason}
-}
-
-func portOf(ports []Port, name string) (Port, bool) {
-	for _, p := range ports {
-		if p.Name == name {
-			return p, true
-		}
-	}
-	return Port{}, false
-}
-
-func accepts(port Port, typ string) bool {
-	for _, t := range port.Types {
-		if t == typ {
-			return true
-		}
-	}
-	return false
-}
-
-// validatePipeline checks a pipeline's structure and normalizes its settings
-// and versions in place. It runs whenever a command is saved or loaded.
+// validatePipeline checks a pipeline and normalizes its settings and versions
+// in place. It runs whenever a command is saved or loaded.
 func validatePipeline(p *Pipeline, env pipelineEnv) error {
 	if p.ExecutionMinutes < 0 || p.ExecutionMinutes > 60 {
-		return pipelineErr("", "", "execution minutes must be between 1 and 60, or 0 for 15")
+		return pipeline.Errorf("", "", "execution minutes must be between 1 and 60, or 0 for 15")
 	}
-	upgradeVideoSteps(p)
-	if len(p.Steps) == 0 {
-		return pipelineErr("", "", "add at least a reply step")
-	}
-	if len(p.Steps) > maxPipelineSteps {
-		return pipelineErr("", "", fmt.Sprintf("at most %d steps", maxPipelineSteps))
-	}
-	// outputs[step][port] = type; immediate[step] = known at acceptance
-	outputs := map[string]map[string]string{triggerID: {}}
-	immediate := map[string]bool{triggerID: true}
-	for _, o := range triggerOutputs {
-		outputs[triggerID][o.Name] = o.Types[0]
-	}
+	return commands.Validate(p, env)
+}
+
+// conversationRules are SmsBot's rules for AI conversations and replies. An
+// AI conversation (recent memory or a thread) is one turn per job: the AI
+// step that reads it must be the one whose conversation the reply continues.
+func conversationRules(p *Pipeline, info pipeline.Info) error {
 	threads := 0
-	consumers := map[string][]string{} // binding -> step ids using it
-	for i := range p.Steps {
-		s := &p.Steps[i]
-		if !stepPattern.MatchString(s.ID) || s.ID == triggerID {
-			return pipelineErr(s.ID, "", "step ids are 1–24 lowercase letters, digits or _")
-		}
-		if _, dup := outputs[s.ID]; dup {
-			return pipelineErr(s.ID, "", "duplicate step id")
-		}
-		m, ok := modules[s.Module]
-		if !ok {
-			return pipelineErr(s.ID, "", "unknown module")
-		}
-		if s.Version == 0 {
-			s.Version = m.Version
-		}
-		if s.Version != m.Version {
-			return pipelineErr(s.ID, "", "unsupported module version")
-		}
-		if m.Effect == effectSink && i != len(p.Steps)-1 {
-			return pipelineErr(s.ID, "", "the reply must be the last step")
-		}
-		if i == len(p.Steps)-1 && m.Effect != effectSink {
-			return pipelineErr(s.ID, "", "the last step must be the reply")
-		}
-		if s.Module == "context.thread" {
-			if threads++; threads > 1 {
-				return pipelineErr(s.ID, "", "a command can continue one AI thread")
-			}
-		}
-		for port := range s.Inputs {
-			if _, ok := portOf(m.Inputs, port); !ok {
-				return pipelineErr(s.ID, port, "unknown input")
-			}
-		}
-		known := m.Immediate
-		for _, in := range m.Inputs {
-			binding := s.Inputs[in.Name]
-			if binding == "" {
-				if in.Required {
-					return pipelineErr(s.ID, in.Name, "required input is not connected")
-				}
-				delete(s.Inputs, in.Name)
-				continue
-			}
-			from, port, ok := strings.Cut(binding, ".")
-			typ, exists := outputs[from][port]
-			if !ok || !exists {
-				return pipelineErr(s.ID, in.Name, "connect it to the trigger or an earlier step's output")
-			}
-			if !accepts(in, typ) {
-				return pipelineErr(s.ID, in.Name, "a "+typ+" output can't connect to this input")
-			}
-			known = known && immediate[from]
-			consumers[binding] = append(consumers[binding], s.ID)
-		}
-		settings, err := m.settings(s.Settings, env)
-		if err != nil {
-			return pipelineErr(s.ID, "", err.Error())
-		}
-		s.Settings = settings
-		outputs[s.ID] = map[string]string{}
-		for _, o := range m.Outputs {
-			outputs[s.ID][o.Name] = o.Types[0]
-		}
-		if m.acceptOnly && !known {
-			return pipelineErr(s.ID, "", "this step needs inputs that are known when the command arrives")
-		}
-		immediate[s.ID] = known
-	}
-	// An AI conversation (rolling memory or a thread) is one turn per job: the
-	// AI step that reads it must be the one whose answer the reply continues,
-	// and the prompt must be known at acceptance, when the turn is recorded.
-	for i, s := range p.Steps {
+	reply := p.Steps[len(p.Steps)-1]
+	for _, s := range p.Steps {
 		if s.Module != "context.rolling" && s.Module != "context.thread" {
 			continue
 		}
-		users := consumers[s.ID+".context"]
+		if s.Module == "context.thread" {
+			if threads++; threads > 1 {
+				return pipeline.Errorf(s.ID, "", "a command can continue one AI thread")
+			}
+		}
+		users := info.Consumers[s.ID+".context"]
 		if len(users) != 1 {
-			return pipelineErr(s.ID, "", "connect this conversation to exactly one AI step")
+			return pipeline.Errorf(s.ID, "", "connect this conversation to exactly one AI step")
 		}
-		ai := stepByID(p.Steps, users[0])
+		ai := p.StepByID(users[0])
 		if ai == nil || ai.Module != "ai.chat" {
-			return pipelineErr(s.ID, "", "connect this conversation to an AI step")
+			return pipeline.Errorf(s.ID, "", "connect this conversation to an AI step")
 		}
-		reply := p.Steps[len(p.Steps)-1]
 		if reply.Inputs["continues"] != ai.ID+".context" {
-			return pipelineErr(reply.ID, "continues", "the reply must continue the AI step's conversation")
+			return pipeline.Errorf(reply.ID, "continues", "the reply must continue the AI step's conversation")
 		}
 		// A thread records the question when the command arrives; recent
 		// memory records the turn when the reply is sent.
 		for _, port := range []string{"prompt", "file"} {
 			if b := ai.Inputs[port]; b != "" && s.Module == "context.thread" {
 				from, _, _ := strings.Cut(b, ".")
-				if !immediate[from] {
-					return pipelineErr(ai.ID, port, "with reply threads, this must come from a step that finishes when the command arrives")
+				if !info.Immediate[from] {
+					return pipeline.Errorf(ai.ID, port, "with reply threads, this must come from a step that finishes when the command arrives")
 				}
 			}
 		}
-		_ = i
 	}
-	reply := p.Steps[len(p.Steps)-1]
 	if reply.Inputs["text"] == "" && reply.Inputs["file"] == "" {
-		return pipelineErr(reply.ID, "", "connect text or a file to send")
+		return pipeline.Errorf(reply.ID, "", "connect text or a file to send")
 	}
 	// The conversation remembers what the reply sends, which may be the AI
 	// answer itself or a later step's version of it (a translation, say).
 	if reply.Inputs["continues"] != "" && reply.Inputs["text"] == "" {
-		return pipelineErr(reply.ID, "continues", "a reply that continues a conversation sends text")
+		return pipeline.Errorf(reply.ID, "continues", "a reply that continues a conversation sends text")
 	}
 	return nil
-}
-
-func stepByID(steps []PipelineStep, id string) *PipelineStep {
-	for i := range steps {
-		if steps[i].ID == id {
-			return &steps[i]
-		}
-	}
-	return nil
-}
-
-func (p Pipeline) has(moduleID string) bool {
-	for _, s := range p.Steps {
-		if s.Module == moduleID {
-			return true
-		}
-	}
-	return false
 }
 
 // longRunning reports whether the pipeline's work can outlast the two-minute
 // freshness window: a long-running step, or several AI requests one after
 // another. Such a job gets the pipeline's execution deadline instead.
-func (p Pipeline) longRunning() bool {
+func longRunning(p Pipeline) bool {
 	paid := 0
 	for _, s := range p.Steps {
-		m := modules[s.Module]
+		m, _ := commands.Module(s.Module)
 		if m.LongRunning {
 			return true
 		}
@@ -363,7 +176,7 @@ func (p Pipeline) longRunning() bool {
 // one reading a conversation, else the first AI step. Only it sets the plan's
 // AI request fields (model, prompt, earlier turns) that the dispatcher uses
 // to record the turn and that Activity shows.
-func turnStep(steps []store.StepRun) string {
+func turnStep(steps []pipeline.StepRun) string {
 	first := ""
 	for _, s := range steps {
 		if s.Module != "ai.chat" {
@@ -382,127 +195,74 @@ func turnStep(steps []store.StepRun) string {
 	return first
 }
 
-// strictSettings decodes raw settings into v, rejecting unknown fields and
-// trailing data. Empty settings leave v's defaults.
-func strictSettings(raw json.RawMessage, v any) error {
-	raw = bytes.TrimSpace(raw)
-	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
-		return nil
-	}
-	if raw[0] != '{' {
-		return errors.New("settings must be an object")
-	}
-	d := json.NewDecoder(bytes.NewReader(raw))
-	d.DisallowUnknownFields()
-	if d.Decode(v) != nil || d.Decode(new(any)) != io.EOF {
-		return errors.New("invalid settings")
+var strictSettings = pipeline.StrictSettings
+
+var bound = pipeline.Bound
+
+func noSettings(raw json.RawMessage, env any) (json.RawMessage, error) {
+	return pipeline.NoSettings(raw, env)
+}
+
+// runCtx is what SmsBot's modules receive: the engine and, depending on the
+// phase, the command being accepted, the job being dispatched, or a preview.
+type runCtx struct {
+	e   *Engine
+	ctx context.Context
+	p   *store.Plan
+	cfg *Configuration
+	// Acceptance.
+	m        transport.Incoming
+	cmd      Command
+	pipeline Pipeline
+	parent   *store.AIParent
+	// Dispatch.
+	j store.Job
+	// Preview.
+	sim *simState
+}
+
+// simState is what a preview collects.
+type simState struct {
+	model, text string
+}
+
+// planHost is SmsBot's side of a run: the Reply step's intent fills the
+// plan's text and attachment, which the dispatcher then checks and sends; a
+// halt replies with a fixed text instead.
+type planHost struct {
+	e *Engine
+	j store.Job
+	p *store.Plan
+}
+
+func (h planHost) Effect(s *pipeline.Step) error {
+	h.p.Reply = s.Text("text")
+	// The plan carries a file's bytes once, as the reply's attachment.
+	if v, ok := s.Take("file"); ok {
+		if f := valueMedia(v); f != nil {
+			h.p.Attachments = []media.File{*f}
+		}
 	}
 	return nil
 }
 
-func noSettings(raw json.RawMessage, _ pipelineEnv) (json.RawMessage, error) {
-	var v struct{}
-	if err := strictSettings(raw, &v); err != nil {
-		return nil, err
+func (h planHost) Halt(_ *pipeline.Step, v pipeline.Value) error {
+	haltPlan(h.p, v.Text)
+	return nil
+}
+
+func (h planHost) Save() error {
+	if h.j.ID == "" {
+		return nil // acceptance: the plan is enqueued afterwards
 	}
-	return nil, nil
+	return h.e.Store.SavePlan(h.j.ID, *h.p)
 }
 
-// stepRun is a step being accepted, run or simulated, with its inputs resolved
-// against the run's earlier steps.
-type stepRun struct {
-	*store.StepRun
-	steps []store.StepRun
-}
-
-func (s *stepRun) in(port string) (store.Value, bool) {
-	binding := s.Inputs[port]
-	if binding == "" {
-		return store.Value{}, false
+func (h planHost) Fail(code string) error {
+	if h.j.ID == "" {
+		return errors.New(code)
 	}
-	from, name, _ := strings.Cut(binding, ".")
-	for _, step := range s.steps {
-		if step.ID == from {
-			if !step.Done {
-				return store.Value{}, false
-			}
-			v, ok := step.Outputs[name]
-			return v, ok
-		}
-	}
-	return store.Value{}, false
-}
-
-// bound reports whether port is connected, whether or not its value is known yet.
-func (s *stepRun) bound(port string) bool { return s.Inputs[port] != "" }
-
-func (s *stepRun) text(port string) string {
-	v, _ := s.in(port)
-	return v.Text
-}
-
-func (s *stepRun) out(port string, v store.Value) {
-	if s.Outputs == nil {
-		s.Outputs = map[string]store.Value{}
-	}
-	s.Outputs[port] = v
-}
-
-func (s *stepRun) decode(v any) error { return json.Unmarshal(s.Settings, v) }
-
-func (s *stepRun) load(v any) error {
-	if len(s.State) == 0 {
-		return nil
-	}
-	return json.Unmarshal(s.State, v)
-}
-
-func (s *stepRun) save(v any) {
-	s.State, _ = json.Marshal(v)
-}
-
-// acceptRun is a pipeline being accepted for one command message.
-type acceptRun struct {
-	ctx      context.Context
-	m        transport.Incoming
-	p        *store.Plan
-	cfg      Configuration
-	cmd      Command
-	pipeline Pipeline
-	args     string
-	parent   *store.AIParent
-	halt     string
-}
-
-// execRun is an accepted job being dispatched.
-type execRun struct {
-	ctx context.Context
-	j   store.Job
-	p   *store.Plan
-	cfg *Configuration
-}
-
-// simRun previews a pipeline offline: no provider, worker or transport calls.
-type simRun struct {
-	cfg   Configuration
-	cmd   Command
-	args  string
-	model string
-	text  string
-}
-
-// snapshotPipeline fixes the command's pipeline into the plan.
-func snapshotPipeline(p Pipeline, args string, m transport.Incoming) *store.PipelineRun {
-	run := &store.PipelineRun{}
-	trigger := store.StepRun{ID: triggerID, Module: "trigger", Version: 1, Done: true, Outputs: map[string]store.Value{
-		"args":    {Type: typeText, Text: args},
-		"message": {Type: typeMessage, Message: &store.MessageRef{ID: m.ID}},
-	}}
-	run.Steps = append(run.Steps, trigger)
-	for _, s := range p.Steps {
-		run.Steps = append(run.Steps, store.StepRun{ID: s.ID, Module: s.Module, Version: s.Version, Inputs: s.Inputs, Settings: s.Settings})
-	}
-	return run
+	return h.e.Store.Complete(h.j.ID, "failed", code)
 }
 
 // haltPlan ends the pipeline with a fixed reply and no AI conversation turn.
@@ -516,59 +276,39 @@ func haltPlan(p *store.Plan, text string) {
 	p.Attachments = nil
 }
 
+func triggerValues(args string, m transport.Incoming) map[string]pipeline.Value {
+	return map[string]pipeline.Value{
+		"args":    {Type: typeText, Text: args},
+		"message": {Type: typeMessage, Handle: m.ID},
+	}
+}
+
 // acceptPipeline snapshots the command's pipeline into the plan and runs every
 // step that can finish at acceptance. ok is false when the command declines
 // the message, as when its AI model isn't available.
 func (e *Engine) acceptPipeline(ctx context.Context, m transport.Incoming, p *store.Plan, cfg Configuration, cmd Command, args string, parent *store.AIParent) (bool, error) {
 	pl := commandPipeline(cmd)
-	if parent != nil && !pl.has("context.thread") {
+	if parent != nil && !pl.Has("context.thread") {
 		// Only a command that continues AI threads answers a native reply.
 		return false, nil
 	}
-	p.Pipeline = snapshotPipeline(pl, args, m)
+	p.Pipeline = pipeline.Snapshot(pl, triggerValues(args, m))
 	p.Approval = cmd.Approval
-	if pl.longRunning() {
+	if longRunning(pl) {
 		minutes := pl.ExecutionMinutes
 		if minutes == 0 {
 			minutes = 15
 		}
 		p.ExecutionDeadline = e.now().Add(time.Duration(minutes) * time.Minute).UTC().Format(time.RFC3339Nano)
 	}
-	a := &acceptRun{ctx: ctx, m: m, p: p, cfg: cfg, cmd: cmd, pipeline: pl, args: args, parent: parent}
-	for i := 1; i < len(p.Pipeline.Steps); i++ {
-		s := &stepRun{StepRun: &p.Pipeline.Steps[i], steps: p.Pipeline.Steps}
-		mod, ok := modules[s.Module]
-		if !ok || mod.Version != s.Version {
-			return false, errors.New("invalid command pipeline")
-		}
-		if mod.admit != nil {
-			if ok, err := mod.admit(e, a, s); err != nil || !ok {
-				return false, err
-			}
-		}
-	}
-	for i := 1; i < len(p.Pipeline.Steps); i++ {
-		s := &stepRun{StepRun: &p.Pipeline.Steps[i], steps: p.Pipeline.Steps}
-		mod, ok := modules[s.Module]
-		if !ok || mod.Version != s.Version {
-			return false, errors.New("invalid command pipeline")
-		}
-		outcome, err := mod.accept(e, a, s)
-		if err != nil {
-			return false, err
-		}
-		switch outcome {
-		case stepDecline:
-			return false, nil
-		case stepHalt:
-			// The step ran and ended the command with its reply.
-			s.Done = true
-			haltPlan(p, a.halt)
-			p.ExecutionDeadline = ""
-			return true, nil
-		case stepDone:
-			s.Done = true
-		}
+	c := &runCtx{e: e, ctx: ctx, p: p, cfg: &cfg, m: m, cmd: cmd, pipeline: pl, parent: parent}
+	switch result, err := commands.Accept(c, p.Pipeline, planHost{e: e, p: p}); {
+	case err != nil:
+		return false, err
+	case result == pipeline.Declined:
+		return false, nil
+	case result == pipeline.Halted:
+		p.ExecutionDeadline = ""
 	}
 	return true, nil
 }
@@ -577,78 +317,111 @@ func (e *Engine) acceptPipeline(ctx context.Context, m transport.Incoming, p *st
 // when this dispatch round ended in a step; otherwise the reply step has put
 // the text and files to send into the plan.
 func (e *Engine) runPipeline(ctx context.Context, j store.Job, p *store.Plan, cfg *Configuration) (bool, error) {
-	if p.Pipeline == nil || p.Pipeline.Halted {
+	if p.Pipeline == nil {
 		return false, nil
 	}
-	r := &execRun{ctx: ctx, j: j, p: p, cfg: cfg}
-	for i := range p.Pipeline.Steps {
-		s := &stepRun{StepRun: &p.Pipeline.Steps[i], steps: p.Pipeline.Steps}
-		if s.Done {
-			continue
-		}
-		mod, ok := modules[s.Module]
-		if !ok || mod.Version != s.Version {
-			return true, e.Store.Complete(j.ID, "failed", "pipeline_module_unavailable")
-		}
-		yield, err := mod.run(e, r, s)
-		if err != nil || yield {
-			return true, err
-		}
-		if !s.Done {
-			return true, e.Store.Complete(j.ID, "failed", "pipeline_step_incomplete")
-		}
-		if err = e.Store.SavePlan(j.ID, *p); err != nil {
-			return true, err
-		}
-		if p.Pipeline.Halted {
-			break
-		}
-	}
-	return false, nil
+	c := &runCtx{e: e, ctx: ctx, p: p, cfg: cfg, j: j}
+	return commands.Resume(c, p.Pipeline, planHost{e: e, j: j, p: p})
 }
 
 // pendingImmediate rejects running an immediate step at dispatch: its inputs
 // were known at acceptance, so it is already done.
-func pendingImmediate(e *Engine, r *execRun, s *stepRun) (bool, error) {
-	return true, e.Store.Complete(r.j.ID, "failed", "pipeline_step_incomplete")
+func pendingImmediate(*runCtx, *pipeline.Step) (pipeline.Outcome, error) {
+	return pipeline.Fail("pipeline_step_incomplete"), nil
+}
+
+// yielded maps a dispatcher helper's (done, err) to an outcome: done means
+// the helper already moved the job (deferred, completed or approval).
+func yielded(done bool, err error) (pipeline.Outcome, error) {
+	if err != nil {
+		return pipeline.Yield(), err
+	}
+	if done {
+		return pipeline.Yield(), nil
+	}
+	return pipeline.Done(), nil
 }
 
 // simulatePipeline previews a command offline and returns the reply text.
 func simulatePipeline(cfg Configuration, cmd Command, args string) (string, string, []map[string]any, error) {
 	pl := commandPipeline(cmd)
-	run := snapshotPipeline(pl, args, transport.Incoming{ID: "preview"})
-	sim := &simRun{cfg: cfg, cmd: cmd, args: args, model: "Local"}
+	run := pipeline.Snapshot(pl, triggerValues(args, transport.Incoming{ID: "preview"}))
+	c := &runCtx{cfg: &cfg, cmd: cmd, pipeline: pl, sim: &simState{model: "Local"}}
+	traced, halt, err := commands.Simulate(c, run)
+	if err != nil {
+		return "", "", nil, err
+	}
 	trace := []map[string]any{}
-	for i := 1; i < len(run.Steps); i++ {
-		s := &stepRun{StepRun: &run.Steps[i], steps: run.Steps}
-		mod := modules[s.Module]
-		if err := mod.simulate(sim, s); err != nil {
-			return "", "", nil, err
-		}
-		s.Done = true
+	for _, t := range traced {
 		outputs := map[string]string{}
-		for name, v := range s.Outputs {
+		for name, v := range t.Outputs {
 			outputs[name] = previewValue(v)
 		}
-		trace = append(trace, map[string]any{"id": s.ID, "module": s.Module, "outputs": outputs})
-		if sim.text != "" && mod.Effect != effectSink {
-			// A step ended the pipeline early with a reply.
-			break
-		}
+		trace = append(trace, map[string]any{"id": t.ID, "module": t.Module, "outputs": outputs})
 	}
-	return sim.text, sim.model, trace, nil
+	text := c.sim.text
+	if halt != nil {
+		text = halt.Text
+	}
+	return text, c.sim.model, trace, nil
 }
 
-func previewValue(v store.Value) string {
+func previewValue(v pipeline.Value) string {
 	switch v.Type {
 	case typeText, typeURL:
 		return v.Text
 	case typeVideo, typeFile, typeStoredVideo:
 		return "(" + v.Type + ")"
 	case typeContext:
-		if v.Context != nil {
-			return "(" + v.Context.Kind + " conversation)"
-		}
+		return "(" + v.Text + " conversation)"
 	}
 	return "(" + v.Type + ")"
+}
+
+// Values carry SmsBot's own references: an archived file in Data, produced
+// media in Data, a conversation's kind in Text.
+
+func textValue(s string) pipeline.Value { return pipeline.Value{Type: typeText, Text: s} }
+
+func fileValue(f *store.FileRef) pipeline.Value {
+	data, _ := json.Marshal(f)
+	return pipeline.Value{Type: typeFile, Data: data}
+}
+
+func valueFile(v pipeline.Value) *store.FileRef {
+	if len(v.Data) == 0 {
+		return nil
+	}
+	var f store.FileRef
+	if json.Unmarshal(v.Data, &f) != nil {
+		return nil
+	}
+	return &f
+}
+
+func mediaValue(f *media.File) pipeline.Value {
+	data, _ := json.Marshal(f)
+	return pipeline.Value{Type: typeVideo, Data: data}
+}
+
+func valueMedia(v pipeline.Value) *media.File {
+	if len(v.Data) == 0 {
+		return nil
+	}
+	var f media.File
+	if json.Unmarshal(v.Data, &f) != nil {
+		return nil
+	}
+	return &f
+}
+
+func contextValue(kind string) pipeline.Value {
+	return pipeline.Value{Type: typeContext, Text: kind}
+}
+
+func valueContext(v pipeline.Value) string {
+	if v.Type != typeContext || v.Text == "" {
+		return "none"
+	}
+	return v.Text
 }
