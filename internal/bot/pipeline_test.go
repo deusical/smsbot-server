@@ -184,8 +184,46 @@ func TestCustomPipelineSnapshotIsImmutable(t *testing.T) {
 	_, after, _ := e.Store.JobPlan(id)
 	a, _ := json.Marshal(before.Pipeline)
 	b, _ := json.Marshal(after.Pipeline)
-	if string(a) != string(b) || after.Reply != "first x" {
+	// The reply is filled from the snapshot when the job is dispatched.
+	if string(a) != string(b) || after.Pipeline.Steps[1].Outputs["text"].Text != "first x" || after.Reply != "" {
 		t.Fatal("accepted job changed with the command")
+	}
+}
+
+// A queued run stored by an earlier engine version (as after an upgrade and
+// restart) fails once and sends nothing, instead of retrying forever.
+func TestUnreadableStoredRunFailsTheJob(t *testing.T) {
+	t.Parallel()
+	e, fixture := setup(t)
+	arm(t, e)
+	c := DefaultConfiguration()
+	c.Commands = []Command{customCommand("note", Pipeline{Steps: []PipelineStep{
+		step("t", "text.template", map[string]string{"input": "trigger.args"}, `{"template":"{input}"}`),
+		reply(map[string]string{"text": "t.text"}),
+	}})}
+	if err := e.SetConfiguration(c); err != nil {
+		t.Fatal(err)
+	}
+	m := incoming()
+	m.Text = "!note x"
+	if ok, err := e.Accept(context.Background(), m); !ok || err != nil {
+		t.Fatal(ok, err)
+	}
+	id := store.Hash(m.ConversationID + "\x00" + m.ID)
+	_, p, err := e.Store.JobPlan(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Pipeline.Format = 0
+	if err := e.Store.SavePlan(id, p); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Dispatch(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	jobs, _ := e.Store.Jobs()
+	if len(jobs) != 1 || jobs[0].State != "failed" || jobs[0].Code != "pipeline_unavailable" || len(fixture.Sent) != 0 {
+		t.Fatal("an unreadable run was not failed once", jobs, fixture.Sent)
 	}
 }
 
@@ -303,7 +341,7 @@ func TestCustomVideoWithCaption(t *testing.T) {
 		t.Fatal(ok, err)
 	}
 	_, p, _ := e.Store.JobPlan(store.Hash(m.ConversationID + "\x00no-link"))
-	if p.Reply != noVideoLink || !p.Pipeline.Halted || p.ExecutionDeadline != "" {
+	if p.Reply != noVideoLink || !p.Pipeline.Halted() || p.ExecutionDeadline != "" {
 		t.Fatal("missing link not answered", p.Reply)
 	}
 }

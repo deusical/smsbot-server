@@ -165,9 +165,12 @@ Acceptance snapshots the pipeline into the encrypted plan and runs the steps
 whose inputs are known then (`immediate` modules); a step can decline the command
 (no usable model) or end it early with a reply (no link, unreadable file,
 expired thread). Dispatch runs the remaining steps in order; long steps yield
-through `job_work`. Modules never send. The reply step only fills the plan's
-text and attachments; uploads, every pre-send check, the persisted outbound
-intent and uncertain-send handling stay in the dispatcher.
+through `job_work`. Modules never send. The reply step's inputs are an intent
+that fills the plan's text and attachments only at dispatch, after every
+earlier step; uploads, every pre-send check, the persisted outbound intent and
+uncertain-send handling stay in the dispatcher. A queued job whose stored run
+this version can't read (one saved by an older version before an upgrade)
+fails once with `pipeline_unavailable` and sends nothing.
 
 An AI conversation is a value: a context module names it, `ai.chat` loads its
 earlier turns with its own model and budget, and the reply's `continues` input
