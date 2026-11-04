@@ -176,7 +176,7 @@ func (e *Engine) pollWorker(ctx context.Context, j store.Job, p *store.Plan, pol
 	cancel()
 	e.mu.Lock()
 	delete(e.pending, j.ID)
-	current, _, loaderr := e.Store.JobPlan(j.ID)
+	current, loaderr := e.Store.Job(j.ID)
 	if current.State != "" && current.State != "generating" {
 		return false, nil
 	}

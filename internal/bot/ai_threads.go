@@ -64,7 +64,7 @@ func (e *Engine) recordAIAnswer(m transport.Incoming) error {
 // Caller holds the control lock; reset/configuration already cancelled these jobs.
 func (e *Engine) cancelClearedThreadRuns() {
 	for id, cancel := range e.pending {
-		j, _, _ := e.Store.JobPlan(id)
+		j, _ := e.Store.Job(id)
 		if j.State == "cancelled" {
 			cancel()
 		}

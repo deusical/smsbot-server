@@ -136,7 +136,7 @@ func (s *Store) migrate() error {
 	if err := s.ensureGroupEnrollment(); err != nil {
 		return err
 	}
-	_, err := s.DB.Exec(`CREATE TABLE IF NOT EXISTS job_work(job TEXT PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE,stage TEXT NOT NULL,next_poll INTEGER NOT NULL);`)
+	_, err := s.DB.Exec(`CREATE TABLE IF NOT EXISTS job_work(job TEXT PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE,stage TEXT NOT NULL,next_poll INTEGER NOT NULL);` + jobFilesSchema)
 	return err
 }
 
@@ -353,11 +353,7 @@ func (s *Store) Enrolled(conv, peer string) bool {
 	return s.DB.QueryRow("SELECT participant FROM enrollment WHERE conversation=?", conv).Scan(&actual) == nil && actual == peer
 }
 func (s *Store) Enqueue(id, conv, command string, p Plan) (bool, error) {
-	b, e := json.Marshal(p)
-	if e != nil {
-		return false, e
-	}
-	enc, e := s.Vault.Seal("plan:"+id, b)
+	enc, files, writes, e := s.sealPlan(id, p, nil)
 	if e != nil {
 		return false, e
 	}
@@ -377,6 +373,12 @@ func (s *Store) Enqueue(id, conv, command string, p Plan) (bool, error) {
 	n, e := r.RowsAffected()
 	if e != nil {
 		return false, e
+	}
+	// A repeated request (same ID) keeps the files of the job it already made.
+	if n == 1 {
+		if err := s.writePlanFiles(tx, id, files, writes); err != nil {
+			return false, err
+		}
 	}
 	if n == 1 && p.Thread != nil {
 		if err := s.enqueueAIExchange(tx, id, conv, command, p, time.Now()); err != nil {
@@ -415,16 +417,16 @@ func (s *Store) Enqueue(id, conv, command string, p Plan) (bool, error) {
 func (s *Store) Next() (Job, Plan, error) {
 	var j Job
 	var enc string
-	e := s.DB.QueryRow("SELECT id,conversation,command,state,created,txn,code,plan FROM jobs WHERE state='queued' AND id NOT IN (SELECT job FROM job_work WHERE next_poll>?) ORDER BY created LIMIT 1", time.Now().UnixMilli()).Scan(&j.ID, &j.ConversationID, &j.Command, &j.State, &j.CreatedAt, &j.TransactionID, &j.Code, &enc)
+	tx, e := s.DB.Begin()
 	if e != nil {
 		return j, Plan{}, e
 	}
-	b, e := s.Vault.Open("plan:"+j.ID, enc)
+	defer tx.Rollback()
+	e = tx.QueryRow("SELECT id,conversation,command,state,created,txn,code,plan FROM jobs WHERE state='queued' AND id NOT IN (SELECT job FROM job_work WHERE next_poll>?) ORDER BY created LIMIT 1", time.Now().UnixMilli()).Scan(&j.ID, &j.ConversationID, &j.Command, &j.State, &j.CreatedAt, &j.TransactionID, &j.Code, &enc)
 	if e != nil {
 		return j, Plan{}, e
 	}
-	var p Plan
-	e = json.Unmarshal(b, &p)
+	p, _, e := s.openPlan(tx, j.ID, enc, true)
 	return j, p, e
 }
 func (s *Store) Submitting(id, txn string) error {

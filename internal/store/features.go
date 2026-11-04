@@ -49,36 +49,50 @@ func (s *Store) GetPublicSetting(key string, value any) error {
 	}
 	return json.Unmarshal([]byte(raw), value)
 }
+
+// JobPlan returns a job and its plan, attachment bytes included. Use Job when
+// only the job's state or conversation is needed.
 func (s *Store) JobPlan(id string) (Job, Plan, error) {
 	var j Job
 	var enc string
-	err := s.DB.QueryRow("SELECT id,conversation,command,state,created,txn,code,plan FROM jobs WHERE id=?", id).Scan(&j.ID, &j.ConversationID, &j.Command, &j.State, &j.CreatedAt, &j.TransactionID, &j.Code, &enc)
+	// One read transaction, so the plan and its files are the same version.
+	tx, err := s.DB.Begin()
 	if err != nil {
 		return j, Plan{}, err
 	}
-	b, err := s.Vault.Open("plan:"+id, enc)
+	defer tx.Rollback()
+	err = tx.QueryRow("SELECT id,conversation,command,state,created,txn,code,plan FROM jobs WHERE id=?", id).Scan(&j.ID, &j.ConversationID, &j.Command, &j.State, &j.CreatedAt, &j.TransactionID, &j.Code, &enc)
 	if err != nil {
 		return j, Plan{}, err
 	}
-	var p Plan
-	err = json.Unmarshal(b, &p)
+	p, _, err := s.openPlan(tx, id, enc, true)
 	return j, p, err
 }
+
+// SavePlan replaces a job's plan. Files whose bytes are unchanged are not
+// written again.
 func (s *Store) SavePlan(id string, p Plan) error {
-	b, err := json.Marshal(p)
-	if err != nil {
-		return err
-	}
-	enc, err := s.Vault.Seal("plan:"+id, b)
-	if err != nil {
-		return err
-	}
 	tx, err := s.DB.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+	var previous []planFile
+	var old string
+	if tx.QueryRow("SELECT plan FROM jobs WHERE id=?", id).Scan(&old) == nil && old != "" {
+		// A plan that does not open is replaced along with all of its files.
+		if _, refs, openErr := s.openPlan(tx, id, old, false); openErr == nil {
+			previous = refs
+		}
+	}
+	enc, refs, writes, err := s.sealPlan(id, p, previous)
+	if err != nil {
+		return err
+	}
 	if _, err = tx.Exec("UPDATE jobs SET plan=? WHERE id=?", enc, id); err != nil {
+		return err
+	}
+	if err = s.writePlanFiles(tx, id, refs, writes); err != nil {
 		return err
 	}
 	// Every step's progress passes through here, so Activity stays current.

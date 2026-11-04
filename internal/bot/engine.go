@@ -121,7 +121,7 @@ func (e *Engine) Enroll(id, peer string) error {
 // cancelRunning stops work generating for conv. The caller holds the lock.
 func (e *Engine) cancelRunning(conv string) {
 	for job, cancel := range e.pending {
-		if j, _, err := e.Store.JobPlan(job); err == nil && j.ConversationID == conv {
+		if j, err := e.Store.Job(job); err == nil && j.ConversationID == conv {
 			cancel()
 		}
 	}
@@ -910,7 +910,7 @@ func (e *Engine) generateReply(ctx context.Context, j store.Job, p *store.Plan, 
 	if err = e.Store.StepUsage(j.ID, call.Step, reportedModel, result.PromptTokens, result.CompletionTokens, result.ReasoningTokens, result.Cost); err != nil {
 		return true, err
 	}
-	current, _, loaderr := e.Store.JobPlan(j.ID)
+	current, loaderr := e.Store.Job(j.ID)
 	if loaderr != nil && current.State == "generating" {
 		return true, loaderr
 	}
@@ -984,7 +984,7 @@ func (e *Engine) prepareFiles(ctx context.Context, j store.Job, p *store.Plan) (
 	cancel()
 	e.mu.Lock()
 	delete(e.pending, j.ID)
-	current, _, loadErr := e.Store.JobPlan(j.ID)
+	current, loadErr := e.Store.Job(j.ID)
 	// Cancellation clears the plan, so a known terminal state may have a
 	// plan-decode error. A failed SQL lookup has no state and must propagate.
 	if current.State != "" && current.State != "generating" {
@@ -1017,7 +1017,7 @@ func (e *Engine) prepareFiles(ctx context.Context, j store.Job, p *store.Plan) (
 // then calls the transport once. A transport error other than a definite
 // non-submission is recorded as unknown_submission and never retried.
 func (e *Engine) submit(ctx context.Context, j store.Job, p store.Plan, cfg Configuration, history []store.Turn) error {
-	current, _, err := e.Store.JobPlan(j.ID)
+	current, err := e.Store.Job(j.ID)
 	if err != nil || current.State != "queued" {
 		return err
 	}
