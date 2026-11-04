@@ -5,7 +5,7 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/deusical/smsbot-server/internal/pipeline"
+	"github.com/deusical/cmdflow"
 )
 
 func init() {
@@ -20,11 +20,11 @@ type templateSettings struct {
 
 // text.template fills a fixed text with its input: {input} is replaced.
 func textTemplateModule() module {
-	apply := func(_ *runCtx, s *pipeline.Step) (pipeline.Outcome, error) {
+	apply := func(_ *runCtx, s *cmdflow.Step) (cmdflow.Outcome, error) {
 		var t templateSettings
 		_ = s.Decode(&t)
 		s.Out("text", textValue(strings.ReplaceAll(t.Template, "{input}", s.Text("input"))))
-		return pipeline.Done(), nil
+		return cmdflow.Done(), nil
 	}
 	return module{
 		Definition: ModuleDefinition{
@@ -46,9 +46,9 @@ func textTemplateModule() module {
 			}
 			return json.Marshal(t)
 		},
-		Accept: func(c *runCtx, s *pipeline.Step) (pipeline.Outcome, error) {
+		Accept: func(c *runCtx, s *cmdflow.Step) (cmdflow.Outcome, error) {
 			if _, ok := s.In("input"); s.Bound("input") && !ok {
-				return pipeline.Pending(), nil
+				return cmdflow.Pending(), nil
 			}
 			return apply(c, s)
 		},
@@ -62,13 +62,13 @@ const noVideoLink = "Include one Douyin or Xiaohongshu video link after the comm
 // text.extract_url finds the one supported video link in its text. Without
 // one, the command answers with how to use it.
 func extractURLModule() module {
-	find := func(_ *runCtx, s *pipeline.Step) (pipeline.Outcome, error) {
+	find := func(_ *runCtx, s *cmdflow.Step) (cmdflow.Outcome, error) {
 		u := downloadURL(s.Text("text"))
 		if u == "" {
-			return pipeline.Halt(textValue(noVideoLink)), nil
+			return cmdflow.Halt(textValue(noVideoLink)), nil
 		}
-		s.Out("url", pipeline.Value{Type: typeURL, Text: u})
-		return pipeline.Done(), nil
+		s.Out("url", cmdflow.Value{Type: typeURL, Text: u})
+		return cmdflow.Done(), nil
 	}
 	return module{
 		Definition: ModuleDefinition{
@@ -79,9 +79,9 @@ func extractURLModule() module {
 			Schema: SettingsSchema{Type: "object", Properties: map[string]SettingsSchema{}},
 		},
 		Settings: noSettings,
-		Accept: func(c *runCtx, s *pipeline.Step) (pipeline.Outcome, error) {
+		Accept: func(c *runCtx, s *cmdflow.Step) (cmdflow.Outcome, error) {
 			if _, ok := s.In("text"); !ok {
-				return pipeline.Pending(), nil
+				return cmdflow.Pending(), nil
 			}
 			return find(c, s)
 		},
@@ -109,21 +109,21 @@ func replyModule() module {
 			Schema: SettingsSchema{Type: "object", Properties: map[string]SettingsSchema{}},
 		},
 		Settings: noSettings,
-		Accept: func(_ *runCtx, s *pipeline.Step) (pipeline.Outcome, error) {
+		Accept: func(_ *runCtx, s *cmdflow.Step) (cmdflow.Outcome, error) {
 			for _, port := range []string{"text", "file"} {
 				if _, ok := s.In(port); s.Bound(port) && !ok {
-					return pipeline.Pending(), nil
+					return cmdflow.Pending(), nil
 				}
 			}
-			return pipeline.Done(), nil
+			return cmdflow.Done(), nil
 		},
-		Run: func(*runCtx, *pipeline.Step) (pipeline.Outcome, error) { return pipeline.Done(), nil },
-		Simulate: func(c *runCtx, s *pipeline.Step) (pipeline.Outcome, error) {
+		Run: func(*runCtx, *cmdflow.Step) (cmdflow.Outcome, error) { return cmdflow.Done(), nil },
+		Simulate: func(c *runCtx, s *cmdflow.Step) (cmdflow.Outcome, error) {
 			c.sim.text = s.Text("text")
 			if v, ok := s.In("file"); ok && c.sim.text == "" {
 				c.sim.text = v.Text
 			}
-			return pipeline.Done(), nil
+			return cmdflow.Done(), nil
 		},
 	}
 }

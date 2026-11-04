@@ -7,26 +7,26 @@ import (
 	"strings"
 	"time"
 
+	"github.com/deusical/cmdflow"
 	"github.com/deusical/smsbot-server/internal/media"
-	"github.com/deusical/smsbot-server/internal/pipeline"
 	"github.com/deusical/smsbot-server/internal/store"
 	"github.com/deusical/smsbot-server/internal/transport"
 )
 
-// SmsBot is a host of the pipeline engine (internal/pipeline). A command is a
+// SmsBot is a host of the cmdflow engine (github.com/deusical/cmdflow). A command is a
 // pipeline started by the "message" trigger (the command message); SmsBot
 // registers the modules, keeps runs in its encrypted job plans, and is the
 // only gate for the Reply step's effect: the dispatcher's checks, persisted
 // intent and uncertain-send handling.
 
 type (
-	Pipeline         = pipeline.Pipeline
-	PipelineStep     = pipeline.StepConfig
-	ModuleDefinition = pipeline.Definition
-	Port             = pipeline.Port
-	SettingsSchema   = pipeline.Schema
-	PipelineError    = pipeline.Error
-	module           = pipeline.Module[*runCtx]
+	Pipeline         = cmdflow.Pipeline
+	PipelineStep     = cmdflow.StepConfig
+	ModuleDefinition = cmdflow.Definition
+	Port             = cmdflow.Port
+	SettingsSchema   = cmdflow.Schema
+	PipelineError    = cmdflow.Error
+	module           = cmdflow.Module[*runCtx]
 )
 
 // Value types passed between steps.
@@ -43,17 +43,17 @@ const (
 )
 
 const (
-	effectPure  = pipeline.Pure
-	effectLocal = pipeline.Local
-	effectPaid  = pipeline.Paid
-	effectSink  = pipeline.Sink
+	effectPure  = cmdflow.Pure
+	effectLocal = cmdflow.Local
+	effectPaid  = cmdflow.Paid
+	effectSink  = cmdflow.Sink
 )
 
 const maxPipelineSteps = 8
 
 // commands is SmsBot's engine. Its policy: at most 8 steps, ending with the
 // one Reply, which every effect goes through.
-var commands = pipeline.New[*runCtx](pipeline.Policy{
+var commands = cmdflow.New[*runCtx](cmdflow.Policy{
 	MaxSteps:       maxPipelineSteps,
 	MaxEffects:     1,
 	EffectLast:     true,
@@ -63,7 +63,7 @@ var commands = pipeline.New[*runCtx](pipeline.Policy{
 })
 
 func init() {
-	for _, t := range []pipeline.Type{
+	for _, t := range []cmdflow.Type{
 		{ID: typeText, Title: "Text"},
 		{ID: typeURL, Title: "Link"},
 		{ID: typeFile, Title: "File"},
@@ -74,7 +74,7 @@ func init() {
 	} {
 		commands.RegisterType(t)
 	}
-	commands.RegisterTrigger(pipeline.Trigger{ID: "message", Title: "Command message", Outputs: triggerOutputs})
+	commands.RegisterTrigger(cmdflow.Trigger{ID: "message", Title: "Command message", Outputs: triggerOutputs})
 	commands.RegisterUpgrade(upgradeVideoSteps)
 }
 
@@ -102,7 +102,7 @@ func envOf(env any) pipelineEnv {
 // in place. It runs whenever a command is saved or loaded.
 func validatePipeline(p *Pipeline, env pipelineEnv) error {
 	if p.ExecutionMinutes < 0 || p.ExecutionMinutes > 60 {
-		return pipeline.Errorf("", "", "execution minutes must be between 1 and 60, or 0 for 15")
+		return cmdflow.Errorf("", "", "execution minutes must be between 1 and 60, or 0 for 15")
 	}
 	return commands.Validate(p, env)
 }
@@ -110,7 +110,7 @@ func validatePipeline(p *Pipeline, env pipelineEnv) error {
 // conversationRules are SmsBot's rules for AI conversations and replies. An
 // AI conversation (recent memory or a thread) is one turn per job: the AI
 // step that reads it must be the one whose conversation the reply continues.
-func conversationRules(p *Pipeline, info pipeline.Info) error {
+func conversationRules(p *Pipeline, info cmdflow.Info) error {
 	threads := 0
 	reply := p.Steps[len(p.Steps)-1]
 	for _, s := range p.Steps {
@@ -119,19 +119,19 @@ func conversationRules(p *Pipeline, info pipeline.Info) error {
 		}
 		if s.Module == "context.thread" {
 			if threads++; threads > 1 {
-				return pipeline.Errorf(s.ID, "", "a command can continue one AI thread")
+				return cmdflow.Errorf(s.ID, "", "a command can continue one AI thread")
 			}
 		}
 		users := info.Consumers[s.ID+".context"]
 		if len(users) != 1 {
-			return pipeline.Errorf(s.ID, "", "connect this conversation to exactly one AI step")
+			return cmdflow.Errorf(s.ID, "", "connect this conversation to exactly one AI step")
 		}
 		ai := p.StepByID(users[0])
 		if ai == nil || ai.Module != "ai.chat" {
-			return pipeline.Errorf(s.ID, "", "connect this conversation to an AI step")
+			return cmdflow.Errorf(s.ID, "", "connect this conversation to an AI step")
 		}
 		if reply.Inputs["continues"] != ai.ID+".context" {
-			return pipeline.Errorf(reply.ID, "continues", "the reply must continue the AI step's conversation")
+			return cmdflow.Errorf(reply.ID, "continues", "the reply must continue the AI step's conversation")
 		}
 		// A thread records the question when the command arrives; recent
 		// memory records the turn when the reply is sent.
@@ -139,18 +139,18 @@ func conversationRules(p *Pipeline, info pipeline.Info) error {
 			if b := ai.Inputs[port]; b != "" && s.Module == "context.thread" {
 				from, _, _ := strings.Cut(b, ".")
 				if !info.Immediate[from] {
-					return pipeline.Errorf(ai.ID, port, "with reply threads, this must come from a step that finishes when the command arrives")
+					return cmdflow.Errorf(ai.ID, port, "with reply threads, this must come from a step that finishes when the command arrives")
 				}
 			}
 		}
 	}
 	if reply.Inputs["text"] == "" && reply.Inputs["file"] == "" {
-		return pipeline.Errorf(reply.ID, "", "connect text or a file to send")
+		return cmdflow.Errorf(reply.ID, "", "connect text or a file to send")
 	}
 	// The conversation remembers what the reply sends, which may be the AI
 	// answer itself or a later step's version of it (a translation, say).
 	if reply.Inputs["continues"] != "" && reply.Inputs["text"] == "" {
-		return pipeline.Errorf(reply.ID, "continues", "a reply that continues a conversation sends text")
+		return cmdflow.Errorf(reply.ID, "continues", "a reply that continues a conversation sends text")
 	}
 	return nil
 }
@@ -176,7 +176,7 @@ func longRunning(p Pipeline) bool {
 // one reading a conversation, else the first AI step. Only it sets the plan's
 // AI request fields (model, prompt, earlier turns) that the dispatcher uses
 // to record the turn and that Activity shows.
-func turnStep(steps []pipeline.StepRun) string {
+func turnStep(steps []cmdflow.StepRun) string {
 	first := ""
 	for _, s := range steps {
 		if s.Module != "ai.chat" {
@@ -195,12 +195,12 @@ func turnStep(steps []pipeline.StepRun) string {
 	return first
 }
 
-var strictSettings = pipeline.StrictSettings
+var strictSettings = cmdflow.StrictSettings
 
-var bound = pipeline.Bound
+var bound = cmdflow.Bound
 
 func noSettings(raw json.RawMessage, env any) (json.RawMessage, error) {
-	return pipeline.NoSettings(raw, env)
+	return cmdflow.NoSettings(raw, env)
 }
 
 // runCtx is what SmsBot's modules receive: the engine and, depending on the
@@ -235,7 +235,7 @@ type planHost struct {
 	p *store.Plan
 }
 
-func (h planHost) Effect(s *pipeline.Step) error {
+func (h planHost) Effect(s *cmdflow.Step) error {
 	h.p.Reply = s.Text("text")
 	// The plan carries a file's bytes once, as the reply's attachment.
 	if v, ok := s.Take("file"); ok {
@@ -246,7 +246,7 @@ func (h planHost) Effect(s *pipeline.Step) error {
 	return nil
 }
 
-func (h planHost) Halt(_ *pipeline.Step, v pipeline.Value) error {
+func (h planHost) Halt(_ *cmdflow.Step, v cmdflow.Value) error {
 	haltPlan(h.p, v.Text)
 	return nil
 }
@@ -276,8 +276,8 @@ func haltPlan(p *store.Plan, text string) {
 	p.Attachments = nil
 }
 
-func triggerValues(args string, m transport.Incoming) map[string]pipeline.Value {
-	return map[string]pipeline.Value{
+func triggerValues(args string, m transport.Incoming) map[string]cmdflow.Value {
+	return map[string]cmdflow.Value{
 		"args":    {Type: typeText, Text: args},
 		"message": {Type: typeMessage, Handle: m.ID},
 	}
@@ -292,7 +292,7 @@ func (e *Engine) acceptPipeline(ctx context.Context, m transport.Incoming, p *st
 		// Only a command that continues AI threads answers a native reply.
 		return false, nil
 	}
-	p.Pipeline = pipeline.Snapshot(pl, triggerValues(args, m))
+	p.Pipeline = cmdflow.Snapshot(pl, triggerValues(args, m))
 	p.Approval = cmd.Approval
 	if longRunning(pl) {
 		minutes := pl.ExecutionMinutes
@@ -305,9 +305,9 @@ func (e *Engine) acceptPipeline(ctx context.Context, m transport.Incoming, p *st
 	switch result, err := commands.Accept(c, p.Pipeline, planHost{e: e, p: p}); {
 	case err != nil:
 		return false, err
-	case result == pipeline.Declined:
+	case result == cmdflow.Declined:
 		return false, nil
-	case result == pipeline.Halted:
+	case result == cmdflow.Halted:
 		p.ExecutionDeadline = ""
 	}
 	return true, nil
@@ -326,26 +326,26 @@ func (e *Engine) runPipeline(ctx context.Context, j store.Job, p *store.Plan, cf
 
 // pendingImmediate rejects running an immediate step at dispatch: its inputs
 // were known at acceptance, so it is already done.
-func pendingImmediate(*runCtx, *pipeline.Step) (pipeline.Outcome, error) {
-	return pipeline.Fail("pipeline_step_incomplete"), nil
+func pendingImmediate(*runCtx, *cmdflow.Step) (cmdflow.Outcome, error) {
+	return cmdflow.Fail("pipeline_step_incomplete"), nil
 }
 
 // yielded maps a dispatcher helper's (done, err) to an outcome: done means
 // the helper already moved the job (deferred, completed or approval).
-func yielded(done bool, err error) (pipeline.Outcome, error) {
+func yielded(done bool, err error) (cmdflow.Outcome, error) {
 	if err != nil {
-		return pipeline.Yield(), err
+		return cmdflow.Yield(), err
 	}
 	if done {
-		return pipeline.Yield(), nil
+		return cmdflow.Yield(), nil
 	}
-	return pipeline.Done(), nil
+	return cmdflow.Done(), nil
 }
 
 // simulatePipeline previews a command offline and returns the reply text.
 func simulatePipeline(cfg Configuration, cmd Command, args string) (string, string, []map[string]any, error) {
 	pl := commandPipeline(cmd)
-	run := pipeline.Snapshot(pl, triggerValues(args, transport.Incoming{ID: "preview"}))
+	run := cmdflow.Snapshot(pl, triggerValues(args, transport.Incoming{ID: "preview"}))
 	c := &runCtx{cfg: &cfg, cmd: cmd, pipeline: pl, sim: &simState{model: "Local"}}
 	traced, halt, err := commands.Simulate(c, run)
 	if err != nil {
@@ -366,7 +366,7 @@ func simulatePipeline(cfg Configuration, cmd Command, args string) (string, stri
 	return text, c.sim.model, trace, nil
 }
 
-func previewValue(v pipeline.Value) string {
+func previewValue(v cmdflow.Value) string {
 	switch v.Type {
 	case typeText, typeURL:
 		return v.Text
@@ -381,14 +381,14 @@ func previewValue(v pipeline.Value) string {
 // Values carry SmsBot's own references: an archived file in Data, produced
 // media in Data, a conversation's kind in Text.
 
-func textValue(s string) pipeline.Value { return pipeline.Value{Type: typeText, Text: s} }
+func textValue(s string) cmdflow.Value { return cmdflow.Value{Type: typeText, Text: s} }
 
-func fileValue(f *store.FileRef) pipeline.Value {
+func fileValue(f *store.FileRef) cmdflow.Value {
 	data, _ := json.Marshal(f)
-	return pipeline.Value{Type: typeFile, Data: data}
+	return cmdflow.Value{Type: typeFile, Data: data}
 }
 
-func valueFile(v pipeline.Value) *store.FileRef {
+func valueFile(v cmdflow.Value) *store.FileRef {
 	if v.Type != typeFile || len(v.Data) == 0 {
 		return nil
 	}
@@ -399,12 +399,12 @@ func valueFile(v pipeline.Value) *store.FileRef {
 	return &f
 }
 
-func mediaValue(f *media.File) pipeline.Value {
+func mediaValue(f *media.File) cmdflow.Value {
 	data, _ := json.Marshal(f)
-	return pipeline.Value{Type: typeVideo, Data: data}
+	return cmdflow.Value{Type: typeVideo, Data: data}
 }
 
-func valueMedia(v pipeline.Value) *media.File {
+func valueMedia(v cmdflow.Value) *media.File {
 	if v.Type != typeVideo || len(v.Data) == 0 {
 		return nil
 	}
@@ -415,11 +415,11 @@ func valueMedia(v pipeline.Value) *media.File {
 	return &f
 }
 
-func contextValue(kind string) pipeline.Value {
-	return pipeline.Value{Type: typeContext, Text: kind}
+func contextValue(kind string) cmdflow.Value {
+	return cmdflow.Value{Type: typeContext, Text: kind}
 }
 
-func valueContext(v pipeline.Value) string {
+func valueContext(v cmdflow.Value) string {
 	if v.Type != typeContext || v.Text == "" {
 		return "none"
 	}
