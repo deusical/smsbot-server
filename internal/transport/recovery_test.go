@@ -145,6 +145,45 @@ func TestRecoveryProbeStopsOnShutdown(t *testing.T) {
 	}
 }
 
+func TestEventLoopWaitsForRecoveryProbeBeforeSessionReplacement(t *testing.T) {
+	t.Parallel()
+	g := NewGoogle(nil, "")
+	entered, canceled, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	g.recoveryProbe = func(ctx context.Context) error {
+		close(entered)
+		<-ctx.Done()
+		close(canceled)
+		<-release // model cleanup that finishes after cancellation
+		return ctx.Err()
+	}
+	g.noteFailure("reconnecting", false)
+	g.recovery.mu.Lock()
+	g.recovery.next = time.Time{}
+	g.recovery.mu.Unlock()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		g.Run(ctx, func(Incoming) {}, func() {}, func(string, string, string, string) {})
+		close(done)
+	}()
+	<-entered
+	cancel()
+	<-canceled
+	select {
+	case <-done:
+		close(release)
+		t.Fatal("event loop left an old session recovery probe running")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("event loop did not finish after probe cleanup")
+	}
+}
+
 func TestCredentialFailuresUseCodesAndRemainBlocked(t *testing.T) {
 	t.Parallel()
 	for _, code := range []int64{7, 16} {

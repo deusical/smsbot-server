@@ -37,14 +37,16 @@ type Server struct {
 	Origin     string
 	Fixture    bool
 	// Notify is nil until the service wires it; its routes answer 503 until then.
-	Notify *notify.Service
-	mux    *http.ServeMux
+	Notify       *notify.Service
+	PhonePairing *PhonePairing
+	mux          *http.ServeMux
 }
 
 func New(e *bot.Engine, c *collection.Service, origin string, fixture bool) *Server {
 	s := &Server{Engine: e, Collection: c, Store: e.Store, Transport: e.Transport, Origin: origin, Fixture: fixture, mux: http.NewServeMux()}
 	s.featureRoutes()
 	s.notificationRoutes()
+	s.pairingRoutes()
 	s.mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { s.json(w, 200, map[string]string{"status": "running"}) })
 	s.mux.HandleFunc("POST /api/v1/login", s.login)
 	s.mux.HandleFunc("POST /api/v1/logout", s.protected(s.logout))
@@ -87,6 +89,24 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "GET" && r.Method != "HEAD" && r.Header.Get("Origin") != "" && r.Header.Get("Origin") != s.Origin {
 		s.json(w, 403, map[string]string{"error": "invalid_origin"})
 		return
+	}
+	if p := s.PhonePairing; p != nil && strings.HasPrefix(r.URL.Path, "/api/") && r.URL.Path != "/api/v1/phone-pairing" {
+		p.mu.Lock()
+		blocked := p.blocked
+		p.mu.Unlock()
+		if blocked {
+			s.pairingMaintenance(w, r)
+			return
+		}
+		p.gate.RLock()
+		defer p.gate.RUnlock()
+		p.mu.Lock()
+		blocked = p.blocked
+		p.mu.Unlock()
+		if blocked {
+			s.pairingMaintenance(w, r)
+			return
+		}
 	}
 	limit := int64(32 * 1024)
 	if (strings.HasPrefix(r.URL.Path, "/api/v1/inbox/conversations/") || strings.HasPrefix(r.URL.Path, "/api/v1/conversations/")) && strings.HasSuffix(r.URL.Path, "/compose") {
@@ -223,6 +243,9 @@ func (s *Server) state(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	value := map[string]any{"api_version": 1, "paused": p, "transport_ready": s.Transport.Ready(), "transport": map[bool]string{true: "fixture", false: "google_messages"}[s.Fixture], "fixture": s.Fixture, "capabilities": []string{"fixed_commands", "enrollment", "activity", "encrypted_inbox", "configuration", "models", "history", "history_import", "playground", "approvals", "manual_compose", "recipes", "ai_commands", "full_inbox", "attachments", "archive_history", "archive_refresh", "archive_files", "archive_backup", "archive_stats", "conversation_sync", "read_receipts", "typing", "message_actions", "rcs_replies", "rcs_reactions", "push_notifications"}}
+	if s.PhonePairing != nil {
+		value["capabilities"] = append(value["capabilities"].([]string), "phone_pairing")
+	}
 	if reporter, ok := s.Transport.(transport.ConnectionReporter); ok {
 		connection := reporter.ConnectionStatus()
 		value["connection_state"] = connection.State

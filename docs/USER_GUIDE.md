@@ -182,11 +182,26 @@ commands.
 | Limits & quiet hours | Bot reply limits, AI spending limit, quiet hours, reply length, commands from your phone |
 | Messages & privacy | Which conversations are archived, read receipts, attachment limits, retention, AI memory window |
 | Notifications | Per-device notifications |
-| Devices | Phone connection, the phone's SIMs (carrier and last four digits only), how to move to a different phone, **Sign out everywhere** |
+| Devices | Phone connection, the phone's SIMs (carrier and last four digits only), **Replace phone**, **Sign out everywhere** |
 | Import & export | Share commands, profiles and settings as a file (never keys) |
 
 Changes collect in a save bar; **Save changes** (or Ctrl/Cmd+S) applies them and
 **Discard** undoes them. Imported settings arrive with every command disabled.
+
+### Replace phone
+
+Choose **Settings > Devices > Replace phone** after moving your SIM to a phone
+using the same Google account. Follow the prompts to supply the copied Google
+request and approve the emoji on the new phone. Clear your clipboard afterwards.
+Automation pauses immediately and unsent work is cancelled. The app saves an
+encrypted backup of the previous pairing and reconnects automatically. You can
+cancel while waiting for approval; check the final status before retrying.
+
+After success, choose **Refresh devices**, check the SIM, and review Bot replies
+for conversations that appear as new before switching to Live. The app never
+redirects old recipients to new conversation identities. Remove the old browser
+under Device pairing on the old phone. If reconnecting fails, the pairing controls
+remain available in maintenance; retry there or restart the service.
 
 ### Notifications
 

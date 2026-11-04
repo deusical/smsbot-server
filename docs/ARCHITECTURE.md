@@ -204,3 +204,18 @@ the exported revision. Command revisions identify the configuration that saved t
 Configuration and recipe request bodies allow 4 MiB during dual representation
 storage so legacy configurations remain editable when settings duplicate flat
 command fields. The command/profile counts and per-field bounds remain enforced.
+
+## Phone replacement
+
+The owner API exposes a bounded, cancellable phone-pairing task. Its maintenance
+gate drains ordinary API requests before pausing automation and stopping every
+worker. Transport recovery probes also finish before the old client closes, so
+none can save an obsolete session over the replacement. Pairing writes a separate
+encrypted session before replacing the current one and keeping an encrypted backup.
+The service rebuilds its transport, engine, collection and worker objects to discard
+old identity caches, then reconnects, still paused. Failure to pair reconnects the
+previous session; failure to reconnect keeps maintenance enabled. Status and emoji
+are transient; credentials and upstream errors never appear in the task status.
+The dashboard can read minimal authenticated state during maintenance, including
+after a reload. New conversation identities always require explicit enrollment;
+existing exact-participant, roster, immutable-plan and uncertain-send checks apply.

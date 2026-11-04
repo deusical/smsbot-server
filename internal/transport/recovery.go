@@ -172,7 +172,9 @@ func (g *Google) startRecovery(ctx context.Context, now time.Time, results chan<
 	r.lastAttempt = now
 	r.next = time.Time{}
 	r.mu.Unlock()
+	g.recoveryWG.Add(1)
 	go func() {
+		defer g.recoveryWG.Done()
 		call, cancel := context.WithTimeout(ctx, 20*time.Second)
 		defer cancel()
 		var err error
