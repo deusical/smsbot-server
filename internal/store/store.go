@@ -8,8 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/deusical/cmdflow"
 	"github.com/deusical/smsbot-server/internal/media"
-	"github.com/deusical/smsbot-server/internal/pipeline"
 	"github.com/deusical/smsbot-server/internal/vault"
 	_ "modernc.org/sqlite"
 	"time"
@@ -41,7 +41,7 @@ type Job struct {
 }
 type Plan struct {
 	// Pipeline is the snapshotted command recipe and its step progress.
-	Pipeline *pipeline.Run `json:"pipeline,omitempty"`
+	Pipeline *cmdflow.Run `json:"pipeline,omitempty"`
 	// ExecutionDeadline bounds a long-running job from acceptance to send; a job
 	// without one must send within two minutes of its message.
 	ExecutionDeadline string `json:"execution_deadline,omitempty"`

@@ -6,6 +6,7 @@ toolchain go1.27.3
 
 require (
 	github.com/SherClockHolmes/webpush-go v1.4.0
+	github.com/deusical/cmdflow v0.1.0
 	github.com/gen2brain/heic v0.7.2
 	github.com/gofrs/flock v0.12.1
 	github.com/rs/zerolog v1.35.1

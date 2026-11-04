@@ -5,7 +5,7 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/deusical/smsbot-server/internal/pipeline"
+	"github.com/deusical/cmdflow"
 	"github.com/deusical/smsbot-server/internal/store"
 )
 
@@ -48,7 +48,7 @@ func questionModule() module {
 			}
 			return json.Marshal(q)
 		},
-		Accept: func(a *runCtx, s *pipeline.Step) (pipeline.Outcome, error) {
+		Accept: func(a *runCtx, s *cmdflow.Step) (cmdflow.Outcome, error) {
 			e := a.e
 			var q questionSettings
 			_ = s.Decode(&q)
@@ -61,7 +61,7 @@ func questionModule() module {
 					reply = "I can only read files in conversations you archive. Turn that on in Settings, or reply to the file with !" + a.cmd.Name + " once it's saved."
 				}
 				if reply != "" {
-					return pipeline.Halt(textValue(reply)), nil
+					return cmdflow.Halt(textValue(reply)), nil
 				}
 				input = ownFilePrompt(input, own)
 				file = own
@@ -72,26 +72,26 @@ func questionModule() module {
 					input = quoted
 					if qf != nil && own == nil {
 						if reply := fileUnreadable(*qf, a.cfg.Settings.AIPhotoMaxMB); reply != "" {
-							return pipeline.Halt(textValue(reply)), nil
+							return cmdflow.Halt(textValue(reply)), nil
 						}
 						file = qf
 					}
 				}
 			}
 			if q.RequireQuestion && input == "" {
-				return pipeline.Halt(textValue("Send !" + a.cmd.Name + " followed by a question. Reply to an AI answer to continue it.")), nil
+				return cmdflow.Halt(textValue("Send !" + a.cmd.Name + " followed by a question. Reply to an AI answer to continue it.")), nil
 			}
 			s.Out("prompt", textValue(input))
 			if file != nil {
 				s.Out("file", fileValue(file))
 			}
-			return pipeline.Done(), nil
+			return cmdflow.Done(), nil
 		},
 		AcceptOnly: true,
 		Run:        pendingImmediate,
-		Simulate: func(_ *runCtx, s *pipeline.Step) (pipeline.Outcome, error) {
+		Simulate: func(_ *runCtx, s *cmdflow.Step) (cmdflow.Outcome, error) {
 			s.Out("prompt", textValue(s.Text("text")))
-			return pipeline.Done(), nil
+			return cmdflow.Done(), nil
 		},
 	}
 }
@@ -100,9 +100,9 @@ func questionModule() module {
 // that reads the conversation loads it with its own model and context budget,
 // and the reply records the new turn once it is submitted.
 func contextModule(id, title, description, kind string) module {
-	set := func(_ *runCtx, s *pipeline.Step) (pipeline.Outcome, error) {
+	set := func(_ *runCtx, s *cmdflow.Step) (cmdflow.Outcome, error) {
 		s.Out("context", contextValue(kind))
-		return pipeline.Done(), nil
+		return cmdflow.Done(), nil
 	}
 	return module{
 		Definition: ModuleDefinition{
@@ -170,7 +170,7 @@ func resolveAI(cfg Configuration, s aiSettings) (string, string, Generation) {
 func aiChatModule() module {
 	// admitAI declines the command, as before pipelines, when no usable model is
 	// configured: the message is then not a command at all.
-	admit := func(a *runCtx, s *pipeline.Step) (Model, string, string, Generation, bool, error) {
+	admit := func(a *runCtx, s *cmdflow.Step) (Model, string, string, Generation, bool, error) {
 		e := a.e
 		var set aiSettings
 		_ = s.Decode(&set)
@@ -234,15 +234,15 @@ func aiChatModule() module {
 			}
 			return json.Marshal(set)
 		},
-		Admit: func(a *runCtx, s *pipeline.Step) (bool, error) {
+		Admit: func(a *runCtx, s *cmdflow.Step) (bool, error) {
 			_, _, _, _, ok, err := admit(a, s)
 			return ok, err
 		},
-		Accept: func(a *runCtx, s *pipeline.Step) (pipeline.Outcome, error) {
+		Accept: func(a *runCtx, s *cmdflow.Step) (cmdflow.Outcome, error) {
 			e := a.e
 			selected, model, instructions, g, ok, err := admit(a, s)
 			if !ok || err != nil {
-				return pipeline.Decline(), err
+				return cmdflow.Decline(), err
 			}
 			st := aiState{Model: model, Instructions: instructions, Conversation: "none"}
 			st.Generation, _ = json.Marshal(g)
@@ -256,12 +256,12 @@ func aiChatModule() module {
 				p.Memory = true
 				p.MemoryHours = a.cfg.Settings.MemoryHours
 				if p.MemoryEpoch, err = e.Store.MemoryEpoch(a.m.ConversationID, p.MemberOf()); err != nil {
-					return pipeline.Decline(), err
+					return cmdflow.Decline(), err
 				}
 			}
 			if st.Conversation == "rolling" {
 				if st.History, err = e.Store.Memory(memoryScope(a.m.ConversationID, "!"+a.cmd.Name, model, p.MemberOf()), e.now()); err != nil {
-					return pipeline.Decline(), err
+					return cmdflow.Decline(), err
 				}
 			}
 			prompt, known := s.In("prompt")
@@ -271,8 +271,10 @@ func aiChatModule() module {
 				if turnStep(s.Steps()) == s.ID {
 					mirrorAI(p, st)
 				}
-				s.Save(st)
-				return pipeline.Pending(), nil
+				if err := s.Save(st); err != nil {
+					return cmdflow.Outcome{}, err
+				}
+				return cmdflow.Pending(), nil
 			}
 			st.Input = prompt.Text
 			if f, ok := s.In("file"); ok {
@@ -282,10 +284,10 @@ func aiChatModule() module {
 			case "thread":
 				thread, history, note, halt, err := e.planAIThread(a.m, p, a.parent, "!"+a.cmd.Name, selected, g, a.cfg.Settings, st.Input, st.Instructions, st.File)
 				if err != nil {
-					return pipeline.Decline(), err
+					return cmdflow.Decline(), err
 				}
 				if halt != "" {
-					return pipeline.Halt(textValue(halt)), nil
+					return cmdflow.Halt(textValue(halt)), nil
 				}
 				p.Thread = thread
 				st.History = history
@@ -303,14 +305,16 @@ func aiChatModule() module {
 				mirrorAI(p, st)
 			}
 			st.Prepared = true
-			s.Save(st)
-			return pipeline.Pending(), nil
+			if err := s.Save(st); err != nil {
+				return cmdflow.Outcome{}, err
+			}
+			return cmdflow.Pending(), nil
 		},
-		Run: func(r *runCtx, s *pipeline.Step) (pipeline.Outcome, error) {
+		Run: func(r *runCtx, s *cmdflow.Step) (cmdflow.Outcome, error) {
 			e := r.e
 			var st aiState
 			if err := s.Load(&st); err != nil {
-				return pipeline.Fail("pipeline_state_invalid"), nil
+				return cmdflow.Fail("pipeline_state_invalid"), nil
 			}
 			if !st.Prepared {
 				st.Input = s.Text("prompt")
@@ -322,7 +326,9 @@ func aiChatModule() module {
 					st.Instructions += "\nThis conversation is shared by a group chat. Each question starts with who asked it; answer the one who asked."
 				}
 				st.Prepared = true
-				s.Save(st)
+				if err := s.Save(st); err != nil {
+					return cmdflow.Outcome{}, err
+				}
 				if turnStep(s.Steps()) == s.ID {
 					mirrorAI(r.p, st)
 				}
@@ -332,7 +338,7 @@ func aiChatModule() module {
 				// Memory cleared, or consent withdrawn, since acceptance.
 				epoch, err := e.Store.MemoryEpoch(r.j.ConversationID, r.p.MemberOf())
 				if err != nil {
-					return pipeline.Yield(), err
+					return cmdflow.Yield(), err
 				}
 				cmd, _, _, _, enabled := resolve(*r.cfg, strings.TrimPrefix(r.j.Command, "!"))
 				if epoch != r.p.MemoryEpoch || !enabled || !cmd.Memory {
@@ -350,7 +356,7 @@ func aiChatModule() module {
 				s.Done = true
 			}))
 		},
-		Simulate: func(c *runCtx, s *pipeline.Step) (pipeline.Outcome, error) {
+		Simulate: func(c *runCtx, s *cmdflow.Step) (cmdflow.Outcome, error) {
 			sim := c.sim
 			var set aiSettings
 			_ = s.Decode(&set)
@@ -367,7 +373,7 @@ func aiChatModule() module {
 			}
 			s.Out("text", textValue("Simulated AI response. No provider request was made."))
 			s.Out("context", contextValue(kind))
-			return pipeline.Done(), nil
+			return cmdflow.Done(), nil
 		},
 	}
 }

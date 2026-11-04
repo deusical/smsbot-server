@@ -3,8 +3,8 @@ package bot
 import (
 	"context"
 	"encoding/json"
+	"github.com/deusical/cmdflow"
 	"github.com/deusical/smsbot-server/internal/media"
-	"github.com/deusical/smsbot-server/internal/pipeline"
 	"github.com/deusical/smsbot-server/internal/store"
 	"net/http"
 	"net/http/httptest"
@@ -176,7 +176,7 @@ func TestVideoSettingsDeadlineUsesAuthoritativeSettings(t *testing.T) {
 	}
 }
 
-func videoStep(t *testing.T, p store.Plan) pipeline.StepRun {
+func videoStep(t *testing.T, p store.Plan) cmdflow.StepRun {
 	t.Helper()
 	if p.Pipeline == nil {
 		t.Fatal("no pipeline snapshot")
@@ -187,5 +187,5 @@ func videoStep(t *testing.T, p store.Plan) pipeline.StepRun {
 		}
 	}
 	t.Fatal("no video step")
-	return pipeline.StepRun{}
+	return cmdflow.StepRun{}
 }
