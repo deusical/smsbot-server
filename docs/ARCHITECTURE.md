@@ -123,7 +123,10 @@ sends twice.
   go to the provider as they are. The model's catalog modalities are not used to refuse a
   file; a provider that rejects it (HTTP 4xx) is reported in the chat.
 - **Archive sync:** each workflow (import, recent check, viewed section) keeps its own
-  checkpoint, and `internal/history/plan.go` decides what runs next.
+  checkpoint, and `internal/history/plan.go` decides what runs next. Discovery, which
+  finds the conversations to archive, runs every 15 minutes when idle; turning
+  collection on, widening it to every conversation or selecting a new one runs it at
+  once, so archiving starts when the owner asks.
 - **Database access:** queries live in `internal/store` as named operations.
 - **Dashboard URLs:** each page and open conversation has its own path
   (`/settings`, `/conversations/ID`), defined in `web/src/lib/routes.ts`, so Back,

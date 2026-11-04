@@ -11,6 +11,7 @@ import (
 	"github.com/deusical/smsbot-server/internal/transport"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -115,6 +116,8 @@ type Service struct {
 	Host         Host
 	tickMu       sync.Mutex
 	wake         chan struct{}
+	// discover asks the next tick for a discovery pass ahead of its schedule.
+	discover atomic.Bool
 	// ActiveInterval spaces work while imports are active; zero means activeInterval.
 	ActiveInterval time.Duration
 }
@@ -147,6 +150,17 @@ func newService(s *store.Store, h Host, now func() time.Time) *Service {
 		}
 	}
 	return worker
+}
+
+// Discover runs a discovery pass on the next tick instead of at its regular
+// cadence (up to idleInterval away), so conversations the owner just chose to
+// collect are found at once. It is for owner actions, not for polling.
+func (s *Service) Discover() {
+	if s == nil {
+		return
+	}
+	s.discover.Store(true)
+	s.Wake()
 }
 
 func (s *Service) Wake() {
@@ -287,6 +301,9 @@ func (s *Service) Tick(ctx context.Context) {
 				s.nextDiscovery = time.Time{}
 			}
 		}
+	}
+	if s.discover.Swap(false) {
+		s.nextDiscovery = time.Time{}
 	}
 	if !s.now().Before(s.nextDiscovery) {
 		s.nextDiscovery = s.now().Add(idleInterval)

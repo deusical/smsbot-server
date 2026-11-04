@@ -74,9 +74,41 @@ func (svc *Service) SetSettings(ctx context.Context, s Settings) error {
 	}
 	svc.publishConsent(s)
 	if s.Enabled && svc.History != nil {
-		svc.History.Wake()
+		if collectsMore(current, s) {
+			// Find the newly chosen conversations now rather than at the next
+			// scheduled discovery, so archiving starts when the owner asks.
+			svc.History.Discover()
+		} else {
+			svc.History.Wake()
+		}
 	}
 	return nil
+}
+
+// collectsMore reports whether next collects conversations previous did not:
+// collection turned on, widened to every conversation, or a new one selected.
+// Only then is an early discovery worth a phone read.
+func collectsMore(previous, next Settings) bool {
+	if !next.Enabled {
+		return false
+	}
+	if !previous.Enabled || (next.Scope == "all" && previous.Scope != "all") {
+		return true
+	}
+	// Every conversation was already collected, or next names none.
+	if previous.Scope == "all" || next.Scope != "selected" {
+		return false
+	}
+	had := map[string]bool{}
+	for _, b := range previous.Conversations {
+		had[b.Conversation] = true
+	}
+	for _, b := range next.Conversations {
+		if !had[b.Conversation] {
+			return true
+		}
+	}
+	return false
 }
 
 func (svc *Service) Observe(ctx context.Context, m transport.Incoming) error {
