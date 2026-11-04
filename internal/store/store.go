@@ -140,9 +140,16 @@ func (s *Store) migrate() error {
 	if err := s.ensureGroupEnrollment(); err != nil {
 		return err
 	}
-	_, err := s.DB.Exec(`CREATE TABLE IF NOT EXISTS job_work(job TEXT PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE,stage TEXT NOT NULL,next_poll INTEGER NOT NULL);` + jobFilesSchema)
+	_, err := s.DB.Exec(`CREATE TABLE IF NOT EXISTS job_work(job TEXT PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE,stage TEXT NOT NULL,next_poll INTEGER NOT NULL);` + jobFilesSchema + messageMetaChange)
 	return err
 }
+
+// messageMetaChange puts a message on the change feed when anything a dashboard
+// shows from its metadata changes: delivery status, who sent it (origin) and who
+// may see it. Version 5 created a trigger for status alone, so a dashboard that
+// had already shown a message never learned its sender or visibility changed.
+const messageMetaChange = `DROP TRIGGER IF EXISTS message_status_change;
+CREATE TRIGGER IF NOT EXISTS message_meta_change AFTER UPDATE ON message_meta WHEN old.status!=new.status OR old.origin!=new.origin OR old.owner_only!=new.owner_only BEGIN INSERT INTO message_changes(conversation,message) SELECT conversation,id FROM messages WHERE id=new.message; END;`
 
 func (s *Store) migrateSchema() error {
 	if _, e := s.DB.Exec(`PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON; PRAGMA synchronous=FULL;`); e != nil {

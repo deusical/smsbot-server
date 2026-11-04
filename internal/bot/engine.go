@@ -1096,12 +1096,11 @@ func (e *Engine) submit(ctx context.Context, j store.Job, p store.Plan, cfg Conf
 		err = e.Store.Complete(j.ID, "unknown_submission", "unrecognized_receipt")
 		return err
 	}
-	if len(p.Attachments) > 0 {
-		err = e.Store.SaveSentFiles(txn, j.ConversationID, p.Reply, p.Attachments)
-	} else {
-		err = e.Store.SaveMessage(txn, j.ConversationID, "outgoing", p.Reply)
+	origin := "bot"
+	if p.Manual {
+		origin = "web"
 	}
-	if err != nil {
+	if err = e.Store.SaveSubmitted(txn, j.ConversationID, p.Reply, p.Attachments, origin, p.InboxOwnerOnly); err != nil {
 		return err
 	}
 	if threadReply {
@@ -1113,13 +1112,6 @@ func (e *Engine) submit(ctx context.Context, j store.Job, p store.Plan, cfg Conf
 		if err = e.Store.SaveReplyRelationship(txn, j.ConversationID, p.ReplyWireTarget); err != nil {
 			return err
 		}
-	}
-	origin := "bot"
-	if p.Manual {
-		origin = "web"
-	}
-	if err = e.Store.RecordSubmitted(txn, origin, p.InboxOwnerOnly); err != nil {
-		return err
 	}
 	if p.Model != "" && p.Memory && p.Thread == nil {
 		cmd, _, _, _, ok := resolve(cfg, strings.TrimPrefix(j.Command, "!"))
