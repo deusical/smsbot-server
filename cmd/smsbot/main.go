@@ -456,7 +456,7 @@ func (o *options) serve(s *store.Store, v *vault.Vault, sessionPath string) erro
 		}
 		t = google
 		events = google
-		defer google.Close()
+		defer func() { _ = t.(*transport.Google).Close() }()
 	}
 	service := app.New(s, t, filepath.Join(filepath.Dir(s.Path), "archive"))
 	if o.downloadEndpoint != "" && !o.fixture {
@@ -483,9 +483,50 @@ func (o *options) serve(s *store.Store, v *vault.Vault, sessionPath string) erro
 	workers := service.Start(ctx, events, func() {
 		fmt.Fprintln(os.Stderr, "Worker: processing failed; automation paused; inspect activity locally")
 	})
-	defer workers.Stop()
+	defer func() { workers.Stop() }()
 	api := httpapi.New(service.Engine, service.Collection, origin, o.fixture)
 	api.Notify = service.Notify
+	if !o.fixture {
+		running := true
+		api.PhonePairing = &httpapi.PhonePairing{Context: ctx}
+		api.PhonePairing.Replace = func(pairCtx context.Context, input string, emoji func(string)) (bool, error) {
+			if err := service.Engine.Pause(true); err != nil {
+				return false, errors.New("cannot pause for pairing")
+			}
+			if running {
+				workers.Stop()
+				running = false
+				if err := t.(*transport.Google).Close(); err != nil {
+					return false, errors.New("cannot save current session")
+				}
+			}
+			pairer := transport.NewGoogle(v, sessionPath)
+			pairErr := pairer.PairNewPhone(pairCtx, input, emoji)
+			// Rebuild every consumer and cache, even when restoring the old session.
+			// No queued job or old conversation identity is carried into a new client.
+			previous := t.(*transport.Google)
+			google := transport.NewGoogle(v, sessionPath)
+			google.Diagnostic, google.RequestLog, google.SendLog = previous.Diagnostic, previous.RequestLog, previous.SendLog
+			t = google
+			next := app.New(s, t, filepath.Join(filepath.Dir(s.Path), "archive"))
+			next.Engine.Downloader = service.Engine.Downloader
+			next.Notify.Subject = origin
+			service = next
+			if err := google.Connect(ctx); err != nil {
+				_ = google.Close()
+				return false, errors.New("reconnect failed")
+			}
+			if err := service.Init(); err != nil {
+				_ = google.Close()
+				return false, errors.New("service initialization failed")
+			}
+			api.Engine, api.Collection, api.Transport, api.Notify = service.Engine, service.Collection, t, service.Notify
+			workers = service.Start(ctx, google, nil)
+			running = true
+			return true, pairErr
+		}
+		defer api.PhonePairing.Stop()
+	}
 	server := &http.Server{Addr: o.listen, Handler: api, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
 	if o.tlsCert != "" {
 		server.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{certificate}}

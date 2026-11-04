@@ -41,6 +41,8 @@ jobs:
         run: npm audit --omit=dev
         working-directory: web
       - run: node --test scripts/sync-web-assets.test.mjs
+      - name: Remote phone helper fixtures
+        run: python3 -B -m unittest discover -s scripts -p test_pair_remote.py
       # The synthetic FFmpeg case skips here (no FFmpeg on the runner); run it locally.
       - name: Download worker fixtures
         run: |

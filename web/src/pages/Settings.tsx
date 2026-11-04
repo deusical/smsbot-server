@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
+import { ReplacePhone } from "../components/ReplacePhone";
 import { NotificationSettings } from "../components/NotificationSettings";
 import {
   api,
@@ -52,6 +53,7 @@ export function SettingsPage({
   if (!config)
     return (
       <div className="panel loading-panel">
+        {!state?.fixture && <ReplacePhone />}
         {workspace.loadError ? (
           <p role="alert" className="inline-alert">
             {workspace.loadError}
@@ -771,11 +773,7 @@ function DevicesSection({
             messages in Google Messages on the phone.
           </p>
         )}
-        <p className="hint">
-          Moved your number to a different phone? Stop the service and run it
-          with <code>--pair-new-phone</code> (see Getting started, "Moving to a
-          different phone"). Your settings, commands and archive stay.
-        </p>
+        {!state?.fixture && <ReplacePhone />}
       </Group>
       <Group
         title="Browser sessions"

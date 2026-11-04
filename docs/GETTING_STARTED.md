@@ -81,6 +81,31 @@ session first. Don't use `-Pair` again on an existing pairing.
 
 ### Moving to a different phone
 
+The easiest way is **Settings > Devices > Replace phone** in the dashboard.
+Move your SIM, make Google Messages the default SMS app on the new phone, then
+follow the prompts to copy fresh Google sign-in information and approve the emoji.
+The dashboard pauses automation, stops background work, keeps an encrypted backup,
+and reconnects automatically. Clear your clipboard after submitting. Check the SIM,
+review Bot replies for conversations that appear as new, then switch to Live.
+The copied request is parsed as text, never executed. Use your private HTTPS dashboard
+(or local loopback); never send these credentials through chat or screenshots.
+
+For a remote Linux installation at the standard paths, a local helper also handles
+SSH and stopping/restarting the user service. In **PowerShell 7**, after copying the
+new phone's `/web/config` request as cURL (bash), run:
+
+```powershell
+.\scripts\pair-remote.ps1 -Target deusical@acer
+```
+
+Approve the emoji printed in the terminal. The helper passes the copied text through
+SSH stdin, clears the clipboard if it still holds that text, and attempts to restart
+SmsBot even if pairing fails. It needs existing SSH authentication and Python 3 on
+the host. The service restarts paused. If the SSH connection is interrupted, check
+`systemctl --user status smsbot` on the host before retrying.
+
+The manual commands remain available:
+
 To keep using the same Google account and number on another phone (for example after
 moving your SIM), pair the new phone in place of the old one:
 

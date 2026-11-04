@@ -56,6 +56,7 @@ type Google struct {
 	relayMetrics  relayMetrics
 	activity      activityState
 	identityEpoch atomic.Uint64
+	recoveryWG    sync.WaitGroup
 }
 
 func NewGoogle(v *vault.Vault, path string) *Google {

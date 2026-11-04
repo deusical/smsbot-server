@@ -46,6 +46,76 @@ paths:
       responses:
         '200':
           description: All browser sessions revoked
+  /phone-pairing:
+    description: >-
+      Owner-only replacement of a phone on the same Google account. Available when
+      state advertises phone_pairing. Normal API requests return 503 during the
+      transition; authenticated state reads return a minimal paused state with
+      phone_pairing_maintenance true so a reloaded browser can recover. The static
+      dashboard and these pairing routes remain available. Pairing drains requests,
+      pauses and cancels unsent jobs, stops workers, saves the current session,
+      pairs into a separate encrypted file, then rebuilds clients and reconnects.
+      Failed pairing preserves the previous session. Failed reconnect leaves
+      maintenance enabled until another attempt or service restart. Never resumes
+      automation, redirects recipients, or retries uncertain sends.
+    get:
+      responses:
+        '200':
+          description: In-memory status; no credentials or upstream errors. Emoji cleared when the attempt ends.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [state]
+                properties:
+                  state:
+                    type: string
+                    enum: [unsupported, idle, pairing, complete, failed]
+                  emoji:
+                    type: string
+                  maintenance:
+                    type: boolean
+        '401':
+          description: Owner session required
+    post:
+      description: >-
+        Start one attempt (three-minute pairing deadline). Requires exact Origin.
+        The request text is parsed, never executed or logged. Do not automatically
+        retry an ambiguous HTTP response; read status first. Reconnection follows
+        even after cancellation and has its own transport deadlines.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [cookies]
+              properties:
+                cookies:
+                  type: string
+                  writeOnly: true
+                  description: Locally copied /web/config cURL (bash) text or cookie JSON. Total request body limited to 32 KiB.
+      responses:
+        '202':
+          description: Accepted; poll GET for emoji and completion
+        '400':
+          description: Invalid request or required cookies missing
+        '401':
+          description: Owner session required
+        '403':
+          description: Exact Origin required
+        '409':
+          description: Pairing already running or unsupported transport
+    delete:
+      description: Request cancellation. Poll status until reconnect finishes; prior approval may already have completed.
+      responses:
+        '200':
+          description: Cancellation requested (idempotent)
+        '401':
+          description: Owner session required
+        '403':
+          description: Exact Origin required
   /state:
     get:
       responses:
@@ -1406,6 +1476,9 @@ components:
       - fixture
       - capabilities
       properties:
+        phone_pairing_maintenance:
+          type: boolean
+          description: True during phone replacement or after reconnect failure. This minimal state is paused and omits transport diagnostics. Pairing status remains available.
         phone_requests:
           type: object
           description: Owner-only in-memory adapter RPC attempt counts by kind, since the service started and in the last hour. Excludes internal libgm control requests; see phone_relay_requests. No identifiers or content. Absent for transports that do not report it.
