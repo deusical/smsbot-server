@@ -231,6 +231,11 @@ func (s *Server) state(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if reporter, ok := s.Transport.(transport.SIMReporter); ok {
+		if sims, known := reporter.SIMs(); known {
+			value["phone_sims"] = sims
+		}
+	}
 	if reporter, ok := s.Transport.(transport.PhoneRequestReporter); ok {
 		value["phone_requests"] = reporter.PhoneRequests()
 	}

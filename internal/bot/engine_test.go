@@ -258,6 +258,9 @@ func TestKnownRejectionIsFailedAndNeverRetried(t *testing.T) {
 	if jobs[0].State != "failed" || len(f.Sent) != 0 {
 		t.Fatal("known rejection retried or mislabeled")
 	}
+	if jobs[0].Code != "not_submitted" || jobs[0].Reason != "upstream_rejected" {
+		t.Fatal("refusal reason not kept", jobs[0].Code, jobs[0].Reason)
+	}
 }
 
 // useTransport swaps the transport the engine and its collection service use,

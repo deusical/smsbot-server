@@ -56,6 +56,7 @@ type options struct {
 	fixture                             bool
 	fixtureSpeed                        int
 	pair                                bool
+	pairNewPhone                        bool
 	updateCookies                       bool
 	cookiesStdin                        bool
 	downloadEndpoint, downloadTokenFile string
@@ -83,6 +84,7 @@ func parseOptions(args []string) (*options, error) {
 	flags.BoolVar(&o.fixture, "fixture", false, "explicit offline fixture mode")
 	flags.IntVar(&o.fixtureSpeed, "fixture-speed", 1, "fixture only: run background polling this many times faster (1-100), for tests")
 	flags.BoolVar(&o.pair, "pair", false, "pair Google Messages locally with owner emoji approval")
+	flags.BoolVar(&o.pairNewPhone, "pair-new-phone", false, "replace the pairing with a different phone on the same Google account, keeping an encrypted backup")
 	flags.BoolVar(&o.updateCookies, "update-cookies", false, "replace cookies in the existing encrypted pairing offline")
 	flags.BoolVar(&o.cookiesStdin, "cookies-stdin", false, "read Google cookies from stdin, never command arguments")
 	flags.StringVar(&o.downloadEndpoint, "download-endpoint", "", "server-local download worker endpoint")
@@ -95,7 +97,7 @@ func parseOptions(args []string) (*options, error) {
 
 func (o *options) validate() error {
 	modes := 0
-	for _, selected := range []bool{o.init, o.fixture, o.pair, o.updateCookies, o.backup != "", o.restore != "", o.archiveBackup != "", o.archiveRestore != ""} {
+	for _, selected := range []bool{o.init, o.fixture, o.pair, o.pairNewPhone, o.updateCookies, o.backup != "", o.restore != "", o.archiveBackup != "", o.archiveRestore != ""} {
 		if selected {
 			modes++
 		}
@@ -106,10 +108,10 @@ func (o *options) validate() error {
 	if (o.archiveSince != "" || o.archiveConversation != "" || o.archivePlain) && o.archiveBackup == "" {
 		return errors.New("archive scope requires --archive-backup")
 	}
-	if o.cookiesStdin && !o.pair && !o.updateCookies {
-		return errors.New("--cookies-stdin requires --pair or --update-cookies")
+	if o.cookiesStdin && !o.pair && !o.pairNewPhone && !o.updateCookies {
+		return errors.New("--cookies-stdin requires --pair, --pair-new-phone or --update-cookies")
 	}
-	if (o.pair || o.updateCookies) && !o.cookiesStdin {
+	if (o.pair || o.pairNewPhone || o.updateCookies) && !o.cookiesStdin {
 		return errors.New("pairing and cookie updates require --cookies-stdin")
 	}
 	if o.fixtureSpeed != 1 && (!o.fixture || o.fixtureSpeed < 1 || o.fixtureSpeed > 100) {
@@ -183,6 +185,9 @@ func runWithInput(args []string, input io.Reader) error {
 	if o.updateCookies {
 		return updateCookies(v, sessionPath, input)
 	}
+	if o.pairNewPhone {
+		return pairNewPhone(v, sessionPath, input)
+	}
 	var owner *ownerCredentialFile
 	if o.init {
 		if owner, e = newOwnerCredentialFile(o.ownerFile); e != nil {
@@ -245,6 +250,20 @@ func updateCookies(v *vault.Vault, sessionPath string, input io.Reader) error {
 		return err
 	}
 	fmt.Println("Cookies updated offline. Existing pairing preserved; encrypted backup saved beside the session. No Google requests made. Clear your sensitive clipboard locally. Start the service in paused mode to test authentication.")
+	return nil
+}
+
+func pairNewPhone(v *vault.Vault, sessionPath string, input io.Reader) error {
+	cookies, err := readBoundedCookies(input)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	if err = transport.NewGoogle(v, sessionPath).PairNewPhone(ctx, cookies, func(emoji string) { fmt.Println("Approve this emoji on your NEW phone:", emoji) }); err != nil {
+		return err
+	}
+	fmt.Println("New phone paired. The old pairing is kept as an encrypted backup beside the session. Clear your sensitive clipboard locally, then remove the old browser from Device pairing in Google Messages on the old phone. Start the service in paused mode and turn bot replies back on for any conversation that shows as new.")
 	return nil
 }
 

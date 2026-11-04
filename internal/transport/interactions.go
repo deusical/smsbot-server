@@ -116,32 +116,53 @@ func (g *Google) SendReply(ctx context.Context, conv, txn, text, target string, 
 
 func (g *Google) React(ctx context.Context, conv, expectedPeer, target, emoji, operation string) error {
 	ctx = WithPhonePurpose(ctx, "reaction")
-	if !g.Ready() || target == "" {
-		return ErrNotSubmitted
+	if !g.Ready() {
+		return refuse("not_ready")
+	}
+	if target == "" {
+		return refuse("reaction_target_missing")
 	}
 	g.countPhone(ctx, phoneLookup)
 	c, err := g.client.GetConversation(ctx, conv)
-	if err != nil || c.GetConversationID() != conv || !readable(c) || peer(c) != expectedPeer || !rcsProtocol(c.GetType().String()) {
-		return ErrNotSubmitted
+	if err != nil || c.GetConversationID() != conv {
+		return refuse("conversation_lookup_failed")
+	}
+	if !readable(c) {
+		return refuse("conversation_ineligible")
+	}
+	if peer(c) != expectedPeer {
+		return refuse("participant_changed")
+	}
+	if !rcsProtocol(c.GetType().String()) {
+		return refuse("reaction_protocol_not_rcs")
 	}
 	// A reaction in a group is seen by everyone in it: only as the people were
 	// when the owner was shown them, and as last verified.
 	if want, given := expectedRoster(ctx); c.GetIsGroupChat() && (!given || want == "" || roster(c) != want) {
-		return ErrNotSubmitted
+		return refuse("roster_mismatch")
 	}
 	sim := c.GetSimCard().GetSIMData().GetSIMPayload()
 	g.mu.Lock()
 	settings := g.settings
 	known := g.conversations[conv]
 	g.mu.Unlock()
-	if known == nil || known.GetDefaultOutgoingID() != c.GetDefaultOutgoingID() || roster(c) != roster(known) {
-		return ErrNotSubmitted
+	if known == nil {
+		return refuse("baseline_missing")
+	}
+	if known.GetDefaultOutgoingID() != c.GetDefaultOutgoingID() {
+		return refuse("outgoing_identity_changed")
+	}
+	if roster(c) != roster(known) {
+		return refuse("roster_changed")
 	}
 	if sim == nil && len(settings.GetSIMCards()) == 1 {
 		sim = settings.GetSIMCards()[0].GetSIMData().GetSIMPayload()
 	}
-	if sim == nil || !g.Ready() {
-		return ErrNotSubmitted
+	if sim == nil {
+		return refuse("sim_missing")
+	}
+	if !g.Ready() {
+		return refuse("readiness_changed")
 	}
 	action := gmproto.SendReactionRequest_ADD
 	switch operation {
@@ -159,7 +180,7 @@ func (g *Google) React(ctx context.Context, conv, expectedPeer, target, emoji, o
 		return ErrUnknown
 	}
 	if !res.GetSuccess() {
-		return ErrNotSubmitted
+		return refuse("upstream_rejected")
 	}
 	return nil
 }

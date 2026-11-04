@@ -110,7 +110,7 @@ func ParseCookies(input string) (map[string]string, error) {
 }
 func (g *Google) Pair(ctx context.Context, input string, showEmoji func(string)) error {
 	if _, e := os.Stat(g.path); e == nil {
-		return errors.New("saved pairing exists; use a fresh state directory for a different account")
+		return errors.New("saved pairing exists; use --pair-new-phone to move to a different phone, or a fresh state directory for a different account")
 	}
 	cookies, e := ParseCookies(input)
 	if e != nil {

@@ -1089,7 +1089,7 @@ func (e *Engine) submit(ctx context.Context, j store.Job, p store.Plan, cfg Conf
 		if errors.Is(senderr, transport.ErrNotSubmitted) {
 			state, code = "failed", "not_submitted"
 		}
-		err = e.Store.Complete(j.ID, state, code)
+		err = e.Store.CompleteWithReason(j.ID, state, code, transport.RefusalReason(senderr))
 		return err
 	}
 	if receipt.State != "submitted" {

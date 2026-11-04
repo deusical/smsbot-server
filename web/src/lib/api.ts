@@ -22,9 +22,17 @@ export type State = {
   transport_ready: boolean;
   connection_state?: string;
   connection_retry_at?: string;
+  /** The SIMs the phone last reported; absent until it has reported them. */
+  phone_sims?: PhoneSim[];
   transport: string;
   fixture: boolean;
   capabilities: string[];
+};
+export type PhoneSim = {
+  slot: number;
+  carrier?: string;
+  /** The last four digits of the SIM's number. */
+  number_ending?: string;
 };
 export type Conversation = {
   archived?: boolean;
@@ -64,6 +72,8 @@ export type Job = {
   reasoning_tokens?: number;
   cost?: number;
   requested_reasoning?: string;
+  /** Why a failed request was not sent: a fixed code such as "sim_missing". */
+  reason?: string;
   /** The command's steps and their progress, with each AI step's usage. */
   steps?: JobStep[];
 };

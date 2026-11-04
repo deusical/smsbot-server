@@ -1,6 +1,7 @@
 import { useEffect, useSyncExternalStore } from "react";
 import {clearReactionAttempts} from "./pendingActions";
 import { api, type Job } from "./api";
+import { jobResult } from "./sendReasons";
 
 // Messages the owner has sent from this dashboard that the server has not yet
 // confirmed as saved history. They live in memory only (never browser storage),
@@ -139,7 +140,7 @@ export function usePendingFollower(active: boolean) {
               patchPending(conversation, p.key, {
                 phase: "failed",
                 failure: "not_sent",
-                error: job.state === "cancelled" ? "Not sent. It was cancelled before reaching your phone." : `Not sent${job.code ? `: ${job.code.replaceAll("_", " ")}` : ""}.`,
+                error: job.state === "cancelled" ? "Not sent. It was cancelled before reaching your phone." : job.reason ? jobResult(job) : `Not sent${job.code ? `: ${job.code.replaceAll("_", " ")}` : ""}.`,
               });
             }
           }

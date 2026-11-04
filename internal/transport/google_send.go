@@ -26,27 +26,27 @@ func (g *Google) sendParts(ctx context.Context, id, txn, text string, files []me
 			g.SendLog(d)
 		}
 	}()
+	refused := func(reason string) (Receipt, error) {
+		d.Result = reason
+		return Receipt{}, refuse(reason)
+	}
 	if !g.Ready() {
-		d.Result = "not_ready"
-		return Receipt{}, ErrNotSubmitted
+		return refused("not_ready")
 	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	parts, ok := outboundParts(text, files)
 	if !ok {
-		d.Result = "invalid_parts"
-		return Receipt{}, ErrNotSubmitted
+		return refused("invalid_parts")
 	}
 	if ctx.Err() != nil {
-		d.Result = "context_done"
-		return Receipt{}, ErrNotSubmitted
+		return refused("context_done")
 	}
 
 	g.countPhone(ctx, phoneLookup)
 	c, e := g.client.GetConversation(ctx, id)
 	if e != nil {
-		d.Result = "conversation_lookup_failed"
-		return Receipt{}, ErrNotSubmitted
+		return refused("conversation_lookup_failed")
 	}
 	g.mu.Lock()
 	known := g.conversations[id]
@@ -56,48 +56,39 @@ func (g *Google) sendParts(ctx context.Context, id, txn, text string, files []me
 	// A group is sent to only as the people in it were when last verified: the
 	// baseline is kept, not updated, by a roster change seen in an event.
 	if !readable(c) {
-		d.Result = "conversation_ineligible"
-		return Receipt{}, ErrNotSubmitted
+		return refused("conversation_ineligible")
 	}
 	if known == nil {
-		d.Result = "baseline_missing"
-		return Receipt{}, ErrNotSubmitted
+		return refused("baseline_missing")
 	}
 	if peer(c) != peer(known) {
-		d.Result = "participant_changed"
-		return Receipt{}, ErrNotSubmitted
+		return refused("participant_changed")
 	}
 	if roster(c) != roster(known) {
-		d.Result = "roster_changed"
-		return Receipt{}, ErrNotSubmitted
+		return refused("roster_changed")
 	}
 	if c.GetDefaultOutgoingID() != known.GetDefaultOutgoingID() {
-		d.Result = "outgoing_identity_changed"
-		return Receipt{}, ErrNotSubmitted
+		return refused("outgoing_identity_changed")
 	}
 	// Whoever is in a group now must be who the sender was shown.
 	if want, given := expectedRoster(ctx); c.GetIsGroupChat() && (!given || want == "" || roster(c) != want) {
-		d.Result = "roster_mismatch"
-		return Receipt{}, ErrNotSubmitted
+		return refused("roster_mismatch")
 	}
 	sim := c.GetSimCard().GetSIMData().GetSIMPayload()
 	if sim == nil && len(settings.GetSIMCards()) == 1 {
 		sim = settings.GetSIMCards()[0].GetSIMData().GetSIMPayload()
 	}
 	if sim == nil {
-		d.Result = "sim_missing"
-		return Receipt{}, ErrNotSubmitted
+		return refused("sim_missing")
 	}
 	if !g.Ready() {
-		d.Result = "readiness_changed"
-		return Receipt{}, ErrNotSubmitted
+		return refused("readiness_changed")
 	}
 	payload := &gmproto.MessagePayload{ConversationID: id, ParticipantID: c.GetDefaultOutgoingID(), TmpID: txn, TmpID2: txn, MessageInfo: parts}
 	req := &gmproto.SendMessageRequest{ConversationID: id, SIMPayload: sim, TmpID: txn, MessagePayload: payload}
 	if len(replyTo) > 0 {
 		if !rcsProtocol(c.GetType().String()) {
-			d.Result = "reply_protocol_not_rcs"
-			return Receipt{}, ErrNotSubmitted
+			return refused("reply_protocol_not_rcs")
 		}
 		req.Reply = &gmproto.ReplyPayload{MessageID: replyTo[0]}
 		req.ForceRCS = true
@@ -110,8 +101,7 @@ func (g *Google) sendParts(ctx context.Context, id, txn, text string, files []me
 	}
 	d.Status = int32(res.GetStatus())
 	if res.GetStatus() != gmproto.SendMessageResponse_SUCCESS {
-		d.Result = "upstream_rejected"
-		return Receipt{}, ErrNotSubmitted
+		return refused("upstream_rejected")
 	}
 	d.Result = "submitted"
 	return Receipt{State: "submitted", MessageID: txn}, nil

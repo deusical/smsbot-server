@@ -4,7 +4,7 @@ type Msg = {id:string;direction:string;text:string;at:string;origin?:string;stat
 async function prepare(page: Page) {
   const world = {
     messages: [] as Msg[],
-    job: null as null | {id:string;conversation_id:string;command:string;state:string;created_at:string;transaction_id?:string;code?:string},
+    job: null as null | {id:string;conversation_id:string;command:string;state:string;created_at:string;transaction_id?:string;code?:string;reason?:string},
     composeGate: null as null | Promise<void>,
     composeCalls: [] as {text:string;request_id:string}[],
   };
@@ -72,6 +72,18 @@ test("a definitively failed send can be edited and resent", async ({page}) => {
   await bubble.getByRole("button", {name: "Edit and resend"}).click();
   await expect(box).toHaveValue("Synthetic failing text");
   await expect(page.locator(".bubble.pending")).toHaveCount(0);
+});
+
+test("a refused send says why in words, in the bubble and in Activity", async ({page}) => {
+  const world = await prepare(page);
+  await page.getByLabel("Message", {exact: true}).fill("Synthetic SIM text");
+  await page.getByRole("button", {name: "Send message", exact: true}).click();
+  world.job = job("failed", {code: "not_submitted", reason: "sim_missing"});
+  const bubble = page.locator(".bubble.pending");
+  await expect(bubble.getByRole("alert")).toContainText("Not sent: your phone has no SIM chosen for this conversation", {timeout: 10000});
+  await page.getByRole("button", {name: "Activity", exact: true}).click();
+  await page.locator(".feed-main").first().click();
+  await expect(page.locator(".feed-detail")).toContainText("Not sent: your phone has no SIM chosen for this conversation");
 });
 
 test("an uncertain send never offers retry or edit", async ({page}) => {

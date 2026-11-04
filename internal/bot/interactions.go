@@ -240,7 +240,7 @@ func (e *Engine) dispatchReaction(ctx context.Context, j store.Job, p store.Plan
 		if errors.Is(err, transport.ErrNotSubmitted) {
 			state, code = "failed", "not_submitted"
 		}
-		return e.Store.Complete(j.ID, state, code)
+		return e.Store.CompleteWithReason(j.ID, state, code, transport.RefusalReason(err))
 	}
 	return e.Store.Complete(j.ID, "submitted", "awaiting_reaction_observation")
 }

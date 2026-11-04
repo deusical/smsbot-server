@@ -152,6 +152,11 @@ step it's on (for example "Writing reply · Compress video / compressing"). Expa
 row to see each step, done or not, with each AI step's model, tokens and cost, the
 request's totals, and approve or cancel from here.
 
+When a send fails because SmsBot refused it before anything reached your phone, the
+expanded row says why in words, for example that the phone has no SIM chosen for the
+conversation or that the people in a group changed. The same words appear under the
+message in the conversation. Nothing is retried for you.
+
 ## Archive
 
 ![Archive](images/archive.png)
@@ -177,7 +182,7 @@ commands.
 | Limits & quiet hours | Bot reply limits, AI spending limit, quiet hours, reply length, commands from your phone |
 | Messages & privacy | Which conversations are archived, read receipts, attachment limits, retention, AI memory window |
 | Notifications | Per-device notifications |
-| Devices | Phone connection, **Sign out everywhere** |
+| Devices | Phone connection, the phone's SIMs (carrier and last four digits only), how to move to a different phone, **Sign out everywhere** |
 | Import & export | Share commands, profiles and settings as a file (never keys) |
 
 Changes collect in a save bar; **Save changes** (or Ctrl/Cmd+S) applies them and
