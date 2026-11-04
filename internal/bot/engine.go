@@ -1210,9 +1210,9 @@ func (e *Engine) Playground(name, input string) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if simulated != "Local" || commandPipeline(cmd).has("ai.chat") {
+	if simulated != "Local" || commandPipeline(cmd).Has("ai.chat") {
 		model = simulated
-	} else if commandPipeline(cmd).longRunning() {
+	} else if longRunning(commandPipeline(cmd)) {
 		model = "Local"
 	}
 	return map[string]any{"text": text, "model": model, "simulated": true, "steps": steps}, nil
