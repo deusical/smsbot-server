@@ -79,6 +79,33 @@ On Linux: `xclip -o | smsbot --data=STATE_DIR --key=KEY_PATH --update-cookies --
 This replaces only the cookies and keeps the pairing, saving a backup of the old
 session first. Don't use `-Pair` again on an existing pairing.
 
+### Moving to a different phone
+
+To keep using the same Google account and number on another phone (for example after
+moving your SIM), pair the new phone in place of the old one:
+
+1. Put your SIM in the new phone and make Google Messages its default SMS app.
+2. Stop the service.
+3. In a **private browser window**, pair "Messages for web" with the **new** phone and
+   copy the `/web/config` request as **cURL (bash)**, as for a first pairing.
+4. Run:
+
+   ```powershell
+   .\scripts\start.ps1 -Transport Google -PairNewPhone
+   ```
+
+   On Linux: `xclip -o | smsbot --data=STATE_DIR --key=KEY_PATH --pair-new-phone --cookies-stdin`.
+5. Approve the emoji on the new phone, then clear your clipboard and start the service.
+6. In Google Messages on the old phone, remove the old browser under **Device pairing**.
+
+The new phone is paired first, so a failed or timed-out attempt leaves the old pairing
+as it was. Once it succeeds, the old session is kept as an encrypted
+`google-session.enc.before-new-phone-*.enc` file beside the new one; delete it once
+everything works. Your settings, commands and archive stay. The new phone may give
+conversations new identities: if a conversation shows up as new, turn **Bot replies**
+on for it again. Sends to the old identities are refused, never redirected. Check
+**Settings > Devices** shows the SIM you expect.
+
 ## Use it from your phone
 
 The dashboard installs as a phone app, which needs HTTPS. The simplest private setup is
@@ -162,5 +189,6 @@ can't be moved to another account or to Linux.
 | `invalid host` | `--origin` must match the exact name and port in the address bar. |
 | Phone not connected | The phone must be online, with Google Messages allowed to run in the background. Sending waits until it answers. |
 | Repeated 401 errors | Update the cookies as described above. |
+| "Not sent: your phone has no SIM chosen" | Common after a SIM swap or on a dual-SIM phone. In Google Messages on the phone, set a default SIM for messages, or send one message in that conversation from the phone. **Settings > Devices** lists the SIMs the phone reports. |
 | `state directory is already in use` | Another copy of the service or an offline command is running. Stop it first. |
 | Paused after a restart | Expected: every start is paused. Switch to Live when ready. |

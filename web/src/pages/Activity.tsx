@@ -3,6 +3,7 @@ import { api, type Conversation, type Job } from "../lib/api";
 import { moduleTitle, useModules } from "../lib/modules";
 import { Icon } from "../components/Icon";
 import { Segmented, timeAgo } from "../components/ui";
+import { jobResult } from "../lib/sendReasons";
 
 const pendingStates = ["queued", "generating", "awaiting_approval"],
   completedStates = ["submitted", "delivered", "read", "reaction_confirmed"];
@@ -136,7 +137,7 @@ export function ActivityFeed({
                   {j.code && (
                     <>
                       <dt>Result</dt>
-                      <dd>{j.code.replaceAll("_", " ")}</dd>
+                      <dd>{jobResult(j)}</dd>
                     </>
                   )}
                   {j.model && (

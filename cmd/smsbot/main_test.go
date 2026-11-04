@@ -67,7 +67,10 @@ func TestCookieUpdateModeValidation(t *testing.T) {
 		want string
 	}{
 		{[]string{"--update-cookies"}, "require --cookies-stdin"},
-		{[]string{"--cookies-stdin"}, "requires --pair or --update-cookies"},
+		{[]string{"--cookies-stdin"}, "requires --pair, --pair-new-phone or --update-cookies"},
+		{[]string{"--pair-new-phone"}, "require --cookies-stdin"},
+		{[]string{"--pair-new-phone", "--cookies-stdin", "--pair"}, "mutually exclusive"},
+		{[]string{"--pair-new-phone", "--cookies-stdin", "--update-cookies"}, "mutually exclusive"},
 		{[]string{"--update-cookies", "--cookies-stdin", "--pair"}, "mutually exclusive"},
 		{[]string{"--update-cookies", "--cookies-stdin", "--fixture"}, "mutually exclusive"},
 		{[]string{"--update-cookies", "--cookies-stdin", "--init"}, "mutually exclusive"},
@@ -102,5 +105,29 @@ func TestFixtureSpeedIsFixtureOnlyAndBounded(t *testing.T) {
 		if (o.validate() == nil) != ok {
 			t.Errorf("%s: valid=%t, want %t", args, !ok, ok)
 		}
+	}
+}
+
+func TestPairNewPhoneCLIRefusesWithoutPairingOrWhileRunning(t *testing.T) {
+	root := t.TempDir()
+	data, key := filepath.Join(root, "state"), filepath.Join(root, "master.key")
+	if err := vault.Initialize(key); err != nil {
+		t.Fatal(err)
+	}
+	os.MkdirAll(data, 0700)
+	args := []string{"--data", data, "--key", key, "--pair-new-phone", "--cookies-stdin"}
+	if err := runWithInput(args, strings.NewReader("{}")); err == nil || !strings.Contains(err.Error(), "use --pair for a first pairing") {
+		t.Fatal("pairing a new phone without a saved pairing was not refused", err)
+	}
+	lock := flock.New(filepath.Join(data, "service.lock"))
+	if ok, err := lock.TryLock(); err != nil || !ok {
+		t.Fatal("cannot acquire test lock")
+	}
+	defer lock.Unlock()
+	if err := runWithInput(args, strings.NewReader("{}")); err == nil || err.Error() != "state directory is already in use" {
+		t.Fatal("running service did not block pairing a new phone", err)
+	}
+	if _, err := os.Stat(filepath.Join(data, "smsbot.db")); !os.IsNotExist(err) {
+		t.Fatal("pairing a new phone touched the application database")
 	}
 }

@@ -1421,6 +1421,16 @@ components:
               last_hour:
                 type: integer
                 minimum: 0
+        phone_sims:
+          type: array
+          description: The SIMs the phone last reported for sending. Absent until the phone has sent its settings since the service connected. An empty list means the phone reported no SIM. Only the slot, carrier name and the last four digits of the number are given.
+          items:
+            type: object
+            required: [slot]
+            properties:
+              slot: {type: integer, description: The phone's SIM slot number.}
+              carrier: {type: string}
+              number_ending: {type: string, pattern: '^[0-9]{4}$'}
         phone_request_purposes:
           type: object
           description: Adapter RPC attempts grouped by a bounded purpose label. Values have the same total/last_hour fields as phone_requests. No identifiers or content.
@@ -1564,6 +1574,10 @@ components:
         cost: &id004
           type: number
         requested_reasoning: *id002
+        reason:
+          type: string
+          pattern: '^[a-z_]{1,40}$'
+          description: Why a failed request was not sent, as a fixed code from the transport's checks, for example sim_missing, outgoing_identity_changed, roster_changed or upstream_rejected. Present only for definite non-submissions (code not_submitted) finished since reasons were kept. Never message content, identifiers or upstream error text.
         steps:
           type: array
           description: The command's steps in order (for requests accepted since steps were recorded), whether each finished, and each AI step's own usage. The model, token and cost fields above are the request's totals; a request in progress is on its first unfinished step. Step names and modules are owner configuration; no message content.

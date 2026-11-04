@@ -12,6 +12,7 @@ import (
 	"github.com/deusical/smsbot-server/internal/media"
 	"github.com/deusical/smsbot-server/internal/vault"
 	_ "modernc.org/sqlite"
+	"regexp"
 	"time"
 )
 
@@ -35,6 +36,9 @@ type Job struct {
 	ReasoningTokens    int      `json:"reasoning_tokens,omitempty"`
 	Cost               *float64 `json:"cost,omitempty"`
 	RequestedReasoning string   `json:"requested_reasoning,omitempty"`
+	// Reason is the transport's fixed code for a definite non-submission,
+	// such as "sim_missing", for requests finished since reasons were kept.
+	Reason string `json:"reason,omitempty"`
 	// Steps are the job's pipeline steps and their progress, for commands
 	// accepted since steps were recorded.
 	Steps []JobStep `json:"steps,omitempty"`
@@ -460,12 +464,35 @@ func (s *Store) Complete(id, state, code string) error {
 	_, e := s.DB.Exec("UPDATE jobs SET state=?,code=?,plan='' WHERE id=?", state, code, id)
 	return e
 }
+
+var reasonCode = regexp.MustCompile(`^[a-z_]{1,40}$`)
+
+// CompleteWithReason is Complete that also keeps why a send was refused. The
+// reason must be a fixed code; anything else is dropped rather than stored.
+func (s *Store) CompleteWithReason(id, state, code, reason string) error {
+	if !reasonCode.MatchString(reason) {
+		return s.Complete(id, state, code)
+	}
+	b, _ := json.Marshal(reason)
+	tx, e := s.DB.Begin()
+	if e != nil {
+		return e
+	}
+	defer tx.Rollback()
+	if _, e = tx.Exec("UPDATE jobs SET state=?,code=?,plan='' WHERE id=?", state, code, id); e != nil {
+		return e
+	}
+	if _, e = tx.Exec("INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", "send_reason:"+id, string(b)); e != nil {
+		return e
+	}
+	return tx.Commit()
+}
 func (s *Store) Recover() error {
 	_, e := s.DB.Exec("UPDATE jobs SET state=CASE WHEN state='submitting' THEN 'unknown_submission' ELSE 'cancelled' END,code='restart_interrupted',plan='' WHERE state IN ('submitting','generating','awaiting_approval')")
 	return e
 }
 func (s *Store) Jobs() ([]Job, error) {
-	rows, e := s.DB.Query("SELECT j.id,j.conversation,j.command,j.state,j.created,j.txn,j.code,coalesce(u.model,''),coalesce(u.prompt_tokens,0),coalesce(u.completion_tokens,0),coalesce(u.reasoning_tokens,0),u.cost,coalesce((SELECT json_extract(value,'$') FROM settings WHERE key='requested_reasoning:'||j.id),'') ,coalesce(w.stage,'') FROM jobs j LEFT JOIN usage u ON u.job=j.id LEFT JOIN job_work w ON w.job=j.id ORDER BY j.created DESC LIMIT 200")
+	rows, e := s.DB.Query("SELECT j.id,j.conversation,j.command,j.state,j.created,j.txn,j.code,coalesce(u.model,''),coalesce(u.prompt_tokens,0),coalesce(u.completion_tokens,0),coalesce(u.reasoning_tokens,0),u.cost,coalesce((SELECT json_extract(value,'$') FROM settings WHERE key='requested_reasoning:'||j.id),'') ,coalesce(w.stage,''),coalesce((SELECT json_extract(value,'$') FROM settings WHERE key='send_reason:'||j.id),'') FROM jobs j LEFT JOIN usage u ON u.job=j.id LEFT JOIN job_work w ON w.job=j.id ORDER BY j.created DESC LIMIT 200")
 	if e != nil {
 		return nil, e
 	}
@@ -473,7 +500,7 @@ func (s *Store) Jobs() ([]Job, error) {
 	list := []Job{}
 	for rows.Next() {
 		var j Job
-		if e = rows.Scan(&j.ID, &j.ConversationID, &j.Command, &j.State, &j.CreatedAt, &j.TransactionID, &j.Code, &j.Model, &j.PromptTokens, &j.CompletionTokens, &j.ReasoningTokens, &j.Cost, &j.RequestedReasoning, &j.PreparationStage); e != nil {
+		if e = rows.Scan(&j.ID, &j.ConversationID, &j.Command, &j.State, &j.CreatedAt, &j.TransactionID, &j.Code, &j.Model, &j.PromptTokens, &j.CompletionTokens, &j.ReasoningTokens, &j.Cost, &j.RequestedReasoning, &j.PreparationStage, &j.Reason); e != nil {
 			return nil, e
 		}
 		list = append(list, j)

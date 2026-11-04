@@ -9,6 +9,7 @@ import {
   type Configuration,
   type Conversation,
   type Model,
+  type PhoneSim,
   type Settings as BotSettings,
   type State,
 } from "../lib/api";
@@ -230,6 +231,27 @@ function ModelsSection({ workspace, busy, act, notify }: SectionProps) {
 
 function StatusPill({ on, children }: { on: boolean; children: ReactNode }) {
   return <span className={"pill " + (on ? "ok" : "off")}>{children}</span>;
+}
+
+// The SIMs the phone reports: slot, carrier and the last digits of the number.
+function PhoneSims({ sims, ready }: { sims?: PhoneSim[]; ready: boolean }) {
+  if (!sims) return <>{ready ? "Not reported yet" : "Unknown while not connected"}</>;
+  if (sims.length === 0) return <>None. The phone reports no SIM it can send from.</>;
+  return (
+    <ul className="sim-list">
+      {sims.map((sim) => (
+        <li key={sim.slot}>
+          {[
+            `SIM ${sim.slot}`,
+            sim.carrier,
+            sim.number_ending && `number ending ${sim.number_ending}`,
+          ]
+            .filter(Boolean)
+            .join(" · ")}
+        </li>
+      ))}
+    </ul>
+  );
 }
 
 function ProvidersSection({ workspace, busy, act, notify }: SectionProps) {
@@ -735,9 +757,25 @@ function DevicesSection({
         <dl className="facts">
           <dt>Transport</dt>
           <dd>{state?.fixture ? "Offline demo" : "Google Messages"}</dd>
+          <dt>SIMs</dt>
+          <dd>
+            <PhoneSims sims={state?.phone_sims} ready={!!state?.transport_ready} />
+          </dd>
           <dt>API version</dt>
           <dd>v{state?.api_version}</dd>
         </dl>
+        {(state?.phone_sims?.length ?? 0) > 1 && (
+          <p className="hint">
+            Your phone has more than one SIM. A conversation can only be sent
+            to once the phone has a SIM chosen for it, so set a default SIM for
+            messages in Google Messages on the phone.
+          </p>
+        )}
+        <p className="hint">
+          Moved your number to a different phone? Stop the service and run it
+          with <code>--pair-new-phone</code> (see Getting started, "Moving to a
+          different phone"). Your settings, commands and archive stay.
+        </p>
       </Group>
       <Group
         title="Browser sessions"

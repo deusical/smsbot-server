@@ -101,6 +101,26 @@ var ErrUnavailable = errors.New("phone connection unavailable")
 var ErrUnknown = errors.New("submission outcome unknown")
 var ErrNotSubmitted = errors.New("transport did not submit")
 
+// Refused is a definite non-submission with a fixed reason code, such as
+// "sim_missing". It matches ErrNotSubmitted. The code never carries message
+// text, identifiers or upstream error detail, so it may be stored and shown.
+type Refused struct{ Reason string }
+
+func (r *Refused) Error() string        { return ErrNotSubmitted.Error() }
+func (r *Refused) Is(target error) bool { return target == ErrNotSubmitted }
+
+func refuse(reason string) error { return &Refused{Reason: reason} }
+
+// RefusalReason is the fixed reason code of a definite non-submission, or ""
+// when there is none.
+func RefusalReason(err error) string {
+	var r *Refused
+	if errors.As(err, &r) {
+		return r.Reason
+	}
+	return ""
+}
+
 // Fixture has no network implementation; it cannot contact Google or a recipient.
 type Fixture struct {
 	mu     sync.Mutex
@@ -152,13 +172,13 @@ func (f *Fixture) Send(ctx context.Context, conv, txn, text string) (Receipt, er
 		return Receipt{}, ErrNotSubmitted
 	}
 	if !f.Online {
-		return Receipt{}, ErrNotSubmitted
+		return Receipt{}, refuse("not_ready")
 	}
 	if f.Fail == "unknown" {
 		return Receipt{}, ErrUnknown
 	}
 	if f.Fail != "" {
-		return Receipt{}, ErrNotSubmitted
+		return Receipt{}, refuse("upstream_rejected")
 	}
 	if conv == "demo-group" {
 		// As on the phone, a group is sent to only as the people the owner saw.
@@ -167,7 +187,7 @@ func (f *Fixture) Send(ctx context.Context, conv, txn, text string) (Receipt, er
 			ids = defaultGroupMembers
 		}
 		if want, given := expectedRoster(ctx); !given || want == "" || want != GroupRoster(ids) {
-			return Receipt{}, ErrNotSubmitted
+			return Receipt{}, refuse("roster_mismatch")
 		}
 	}
 	f.Sent[txn] = text

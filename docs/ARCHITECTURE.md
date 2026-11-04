@@ -85,7 +85,10 @@ sends twice.
   upstream send status. Results distinguish lookup failure, missing baseline or
   SIM, identity/roster changes, non-RCS reply refusal, upstream rejection and
   uncertain submission. A refused reply followed by a plain send can be traced
-  by their timestamps; no recipient or transaction identifiers are logged.
+  by their timestamps; no recipient or transaction identifiers are logged. The same
+  fixed result code is kept with a failed request (`reason`) so Activity can
+  explain it; free text is never stored there. The phone's SIMs are reported to
+  the owner as slot, carrier and the last four digits only.
 
 ## Where things live
 
