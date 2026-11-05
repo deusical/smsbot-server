@@ -44,6 +44,9 @@ a.button:hover { background: var(--hover); border-color: var(--line-strong); }
 .archive-repair-row { border-top: 1px solid var(--line); padding-top: 14px; margin-top: 14px; }
 .archive-page .archive-repair-row .capture-checks { padding: 0; }
 .capture-checks details { font-size: 12px; color: var(--muted); }
+.capture-checks,
+.capture-checks > div { display: grid; gap: 12px; }
+.capture-checks details > p { margin-top: 12px; }
 .capture-checks dl { display: grid; gap: 10px; margin: 12px 0; }
 .capture-checks dd { margin: 4px 0 0; overflow-wrap: anywhere; }
 @media (max-width: 820px) {

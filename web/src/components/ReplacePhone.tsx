@@ -28,9 +28,9 @@ export function ReplacePhone() {
     return () => { alive = false; window.clearInterval(timer); };
   }, []);
   const pairing = status.state === "pairing";
-  return <div>
-    <button type="button" disabled={status.state === "unsupported"} onClick={() => setOpen(!open)}>Replace phone</button>
-    {open && <div>
+  return <div className="replace-phone">
+    <button type="button" aria-expanded={open} disabled={status.state === "unsupported"} onClick={() => setOpen(!open)}>Replace phone</button>
+    {open && <div className="replace-phone-body">
       <p>Move your SIM to the new phone and make Google Messages its default SMS app. In a private browser window, pair Messages for web with that phone. In Network tools, copy the /web/config request as cURL (bash) and paste it below.</p>
       <p className="hint">Starting pauses automation and cancels unsent work. Your settings and archive stay. Google sign-in information is used only for pairing; it is never shown in Activity.</p>
       {!pairing && <Field label="Copied Google request">

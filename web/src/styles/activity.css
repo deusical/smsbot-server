@@ -107,7 +107,7 @@
 .facts {
   display: grid;
   grid-template-columns: max-content 1fr;
-  gap: 6px 20px;
+  gap: 10px 20px;
   margin: 0;
   font-size: 13px;
 }
@@ -124,6 +124,8 @@
   list-style: none;
   margin: 0;
   padding: 0;
+  display: grid;
+  gap: 8px;
 }
 .note {
   font-size: 13px;
