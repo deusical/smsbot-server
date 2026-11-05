@@ -223,3 +223,10 @@
   overscroll-behavior: contain;
   padding: 2px;
 }
+
+.pairing-steps {
+  margin: 0;
+  padding-left: 1.25rem;
+  display: grid;
+  gap: 0.35rem;
+}
