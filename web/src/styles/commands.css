@@ -65,11 +65,16 @@
   margin: 0;
   padding: 0 8px;
 }
+.studio-list .command-list {
+  display: grid;
+  gap: 8px;
+  padding: 4px 12px 16px;
+}
 .command-list li {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding-right: 8px;
+  gap: 12px;
+  padding-right: 12px;
   border-radius: 10px;
 }
 .command-list li:hover {
@@ -91,8 +96,8 @@
   justify-content: stretch;
   justify-items: start;
   align-content: center;
-  gap: 3px;
-  padding: 8px;
+  gap: 6px;
+  padding: 12px;
   border: 0;
   background: transparent;
   font-weight: 400;
@@ -115,20 +120,23 @@
   color: var(--violet);
 }
 .builtins {
-  padding: 14px 16px 16px;
+  padding: 20px;
   border-top: 1px solid var(--line);
 }
 .builtins ul {
   list-style: none;
-  margin: 8px 0 0;
+  margin: 12px 0 0;
   padding: 0;
   display: grid;
-  gap: 6px;
+  gap: 10px;
 }
 .builtins li {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
+}
+.builtins .bang {
+  flex: none;
 }
 .builtins small {
   color: var(--faint);
@@ -462,8 +470,8 @@
 .step-body {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 8px;
-  padding-top: 6px;
+  gap: 14px;
+  padding-top: 14px;
   border-top: 1px solid var(--line);
   min-width: 0;
 }

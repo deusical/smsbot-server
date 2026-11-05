@@ -9,7 +9,7 @@
   position: sticky;
   top: 84px;
   display: grid;
-  gap: 2px;
+  gap: 6px;
 }
 .settings-nav button {
   justify-content: flex-start;
@@ -61,6 +61,29 @@
 }
 .group form.inline-form {
   display: flex;
+}
+.replace-phone,
+.replace-phone-body {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+.replace-phone > button,
+.replace-phone-body > button {
+  justify-self: start;
+  max-width: 100%;
+  height: auto;
+  min-height: 38px;
+  padding: 9px 14px;
+  white-space: normal;
+  text-align: left;
+}
+.replace-phone-body {
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+.replace-phone-body textarea {
+  min-height: 112px;
 }
 .inline-form {
   display: flex;
