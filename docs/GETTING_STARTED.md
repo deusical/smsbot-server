@@ -45,8 +45,12 @@ Pairing imports Google session cookies, which give broad access to your account.
 on your own machine and keep the cookies out of chat tools, issues and screenshots.
 This follows the [mautrix pairing guide](https://docs.mau.fi/bridges/go/gmessages/authentication.html).
 
-1. In a **private browser window**, pair "Messages for web" with your phone. In the
-   browser's network tools, copy the `/web/config` request as **cURL (bash)**.
+1. In a private browser window (**New Private Window** in Firefox, **New Incognito
+   window** in Chrome), open `messages.google.com/web`, press F12 and open the
+   **Network** tab. On your phone, open Google Messages, tap your profile picture, then
+   **Device pairing**, then **QR code scanner**, and scan the code. Then right-click the
+   `/web/config` request: in Firefox choose **Copy Value**, then **Copy as cURL (POSIX)**;
+   in Chrome or Edge choose **Copy**, then **Copy as cURL (bash)**.
 2. Run the pairing command. It reads the copied request from your clipboard:
 
    ```powershell
@@ -111,8 +115,12 @@ moving your SIM), pair the new phone in place of the old one:
 
 1. Put your SIM in the new phone and make Google Messages its default SMS app.
 2. Stop the service.
-3. In a **private browser window**, pair "Messages for web" with the **new** phone and
-   copy the `/web/config` request as **cURL (bash)**, as for a first pairing.
+3. In a private browser window (**New Private Window** in Firefox, **New Incognito
+   window** in Chrome), open `messages.google.com/web`, press F12 and open the
+   **Network** tab. On the **new** phone, open Google Messages, tap your profile picture,
+   then **Device pairing**, then **QR code scanner**, and scan the code. Then right-click
+   the `/web/config` request: in Firefox choose **Copy Value**, then **Copy as cURL
+   (POSIX)**; in Chrome or Edge choose **Copy**, then **Copy as cURL (bash)**.
 4. Run:
 
    ```powershell

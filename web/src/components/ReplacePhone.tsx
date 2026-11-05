@@ -31,7 +31,14 @@ export function ReplacePhone() {
   return <div className="replace-phone">
     <button type="button" aria-expanded={open} disabled={status.state === "unsupported"} onClick={() => setOpen(!open)}>Replace phone</button>
     {open && <div className="replace-phone-body">
-      <p>Move your SIM to the new phone and make Google Messages its default SMS app. In a private browser window, pair Messages for web with that phone. In Network tools, copy the /web/config request as cURL (bash) and paste it below.</p>
+      <ol className="pairing-steps">
+        <li>On the <strong>new</strong> phone, put in your SIM and make Google Messages the default SMS app.</li>
+        <li>On this computer, open a private window: <strong>New Private Window</strong> in Firefox (Ctrl+Shift+P), or <strong>New Incognito window</strong> in Chrome (Ctrl+Shift+N). Go to <code>messages.google.com/web</code>.</li>
+        <li>Press F12 for developer tools and open the <strong>Network</strong> tab, so the page's requests are recorded. Leave it open.</li>
+        <li>Pair with the new phone, as when you first set up Messages for web: in Google Messages, tap your profile picture, then <strong>Device pairing</strong>, then <strong>QR code scanner</strong>, and scan the code on the page. Don&rsquo;t pair with the old phone.</li>
+        <li>In the Network tab, filter for <code>config</code>, then right-click the <code>/web/config</code> request. In Firefox choose <strong>Copy Value</strong>, then <strong>Copy as cURL (POSIX)</strong>. In Chrome or Edge choose <strong>Copy</strong>, then <strong>Copy as cURL (bash)</strong>.</li>
+        <li>Paste it below and start pairing. The new phone will show an emoji to approve.</li>
+      </ol>
       <p className="hint">Starting pauses automation and cancels unsent work. Your settings and archive stay. Google sign-in information is used only for pairing; it is never shown in Activity.</p>
       {!pairing && <Field label="Copied Google request">
         <textarea aria-label="Copied Google request" autoComplete="off" spellCheck={false} value={input} onChange={e => setInput(e.target.value)} />
