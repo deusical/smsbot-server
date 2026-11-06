@@ -50,7 +50,7 @@ class WorkerBoundaryTests(unittest.TestCase):
                 call({**valid, "url": "https://xhslink.com/different"}, "Bearer " + token, 502)
                 call(valid, "Bearer " + token, 502, "/download/jobs/../../private")
                 self.assertEqual(worker.Jobs.execute.call_count, 1)
-                self.assertNotIn(b"douyin", next(root.rglob("state.enc")).read_bytes())
+                self.assertEqual(json.loads(next(root.rglob("state.json")).read_text())["url"], valid["url"])
             finally:
                 server.shutdown()
                 server.server_close()
@@ -59,18 +59,15 @@ class WorkerBoundaryTests(unittest.TestCase):
     def test_checkpoint_restart_reuses_original_and_result(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            jobs = worker.Jobs(root, "synthetic-token")
+            jobs = worker.Jobs(root)
             job = "b"*64
             path = jobs.path(job)
             request = {"url": "https://xhslink.com/synthetic", "max_bytes": 100000, "deadline": int(time.time())+900}
             jobs.save(path, {**request, "stage": "compressing"})
-            original = root / "original.mp4"
-            original.write_bytes(b"synthetic-original")
-            worker.seal_file(original, path / "original.enc", jobs.key)
-            original.unlink()
+            (path / "original.mp4").write_bytes(b"synthetic-original")
             # A fresh process has no in-memory state. The saved original must
             # suffice; source download is forbidden in this test.
-            restarted = worker.Jobs(root, "synthetic-token")
+            restarted = worker.Jobs(root)
             restarted.active[job] = time.monotonic()+30
             def compress(source, destination, limit, deadline):
                 self.assertEqual(source.read_bytes(), b"synthetic-original")
@@ -79,16 +76,13 @@ class WorkerBoundaryTests(unittest.TestCase):
             with mock.patch.object(worker, "compress", side_effect=compress), mock.patch.object(worker, "run", side_effect=AssertionError("redownloaded")):
                 restarted.execute(job)
             self.assertEqual(restarted.poll(job, request), {"stage": "complete"})
-            third = worker.Jobs(root, "synthetic-token")
-            third.result(job, root / "result.mp4")
-            self.assertEqual((root / "result.mp4").read_bytes(), b"synthetic-send-copy")
-            self.assertNotIn(b"synthetic-send-copy", (path / "result.enc").read_bytes())
-            self.assertNotIn(b"synthetic-original", (path / "original.enc").read_bytes())
-            data = bytearray((path / "result.enc").read_bytes())
-            data[14] ^= 1
-            (path / "result.enc").write_bytes(data)
-            with self.assertRaises(Exception):
-                third.result(job, root / "tampered.mp4")
+            third = worker.Jobs(root)
+            self.assertEqual(third.result(job).read_bytes(), b"synthetic-send-copy")
+            self.assertEqual((path / "original.mp4").read_bytes(), b"synthetic-original")
+            # A result over the job's byte limit is never served.
+            (path / "result.mp4").write_bytes(b"x" * (request["max_bytes"] + 1))
+            with self.assertRaises(ValueError):
+                third.result(job)
 
     def test_progress_stall_lease_and_absolute_deadline_kill_children(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -146,6 +140,17 @@ class WorkerBoundaryTests(unittest.TestCase):
                 stream = next(s for s in worker.probe(output, time.monotonic()+30)["streams"] if s["codec_type"] == "video")
                 self.assertEqual((stream["width"], stream["height"]), want)
 
+    def test_bind_only_loopback_or_tailscale(self):
+        for good in ("127.0.0.1", "100.92.5.20", "100.64.0.1", "100.127.255.254"):
+            self.assertEqual(worker.bind_address(good), good)
+        # Every interface, a LAN address, IPv6 and names are refused: plain HTTP
+        # there would expose the bearer token to the network.
+        for bad in ("0.0.0.0", "192.168.1.20", "10.0.0.5", "100.128.0.1", "100.63.255.255", "::1", "lenovo", ""):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                worker.bind_address(bad)
+        with self.assertRaises(ValueError):
+            worker.create_server(Path(tempfile.gettempdir()), "x"*40, 0, bind="0.0.0.0")
+
     def test_url_allowlist(self):
         for url in ("https://douyin.com.attacker.test/video/1", "http://douyin.com/", "https://user:pass@douyin.com/", "https://douyin.com:443/", "file:///C:/private"):
             self.assertFalse(worker.valid_url(url))
@@ -194,7 +199,7 @@ class ProtocolV2Tests(unittest.TestCase):
 
     def test_checkpoint_resume_uses_persisted_settings(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp); jobs = worker.Jobs(root, "synthetic-token"); job = "c"*64
+            root = Path(tmp); jobs = worker.Jobs(root); job = "c"*64
             settings = {**worker.DEFAULT_SETTINGS, "preset": "fast", "passes": 1, "max_attempts": 2,
                         "copy_if_fits": False, "max_mb": 1, "execution_minutes": 5}
             request = {"url": "https://xhslink.com/synthetic", "max_bytes": 500000,
@@ -204,9 +209,8 @@ class ProtocolV2Tests(unittest.TestCase):
             path = jobs.path(job)
             effective = {**settings, "max_mb": .5}
             self.assertEqual(jobs.load(path)["settings"], effective)
-            source = root / "original.mp4"; source.write_bytes(b"synthetic-original")
-            worker.seal_file(source, path / "original.enc", jobs.key); source.unlink()
-            restarted = worker.Jobs(root, "synthetic-token")
+            (path / "original.mp4").write_bytes(b"synthetic-original")
+            restarted = worker.Jobs(root)
             restarted.active[job] = time.monotonic()+30
             def compress(source, destination, limit, deadline, settings):
                 self.assertEqual(settings, effective)
@@ -236,7 +240,7 @@ class ProtocolV2Tests(unittest.TestCase):
 
     def test_each_preset_and_passes_map_to_ffmpeg(self):
         for preset, nvenc in (("veryfast", "p3"), ("faster", "p4"), ("fast", "p5"), ("medium", "p6"), ("slow", "p7")):
-            for encoder in ("libx264", "av1_nvenc"):
+            for encoder in ("libx264", "h264_nvenc"):
                 for passes in (1, 2):
                     calls = self.encode({"preset": preset, "passes": passes}, encoder)
                     encodes = [args for args in calls if "-c:v" in args]
@@ -254,7 +258,7 @@ class ProtocolV2Tests(unittest.TestCase):
     def test_copy_attempts_and_max_mb(self):
         self.assertFalse(any("-c:v" in args for args in self.encode({}, source_size=10)))
         self.assertTrue(any("-c:v" in args for args in self.encode({"copy_if_fits": False}, source_size=10)))
-        for encoder in ("libx264", "av1_nvenc"):
+        for encoder in ("libx264", "h264_nvenc"):
             with self.assertRaisesRegex(ValueError, "size_limit"):
                 self.encode({"max_attempts": 1}, encoder, sizes=[200000])
             calls = self.encode({"max_attempts": 2}, encoder, sizes=[200000, 10])
@@ -279,7 +283,7 @@ class ProtocolV3Tests(unittest.TestCase):
     def jobs(self):
         folder = tempfile.TemporaryDirectory(); self.addCleanup(folder.cleanup)
         root = Path(folder.name)
-        return root, worker.Jobs(root, "synthetic-token")
+        return root, worker.Jobs(root)
 
     def download_request(self, **extra):
         return {"protocol": 3, "op": "download", "scope": self.scope,
@@ -319,11 +323,10 @@ class ProtocolV3Tests(unittest.TestCase):
         path = self.finish_download(root, jobs)
         state = jobs.load(path)
         self.assertEqual(state["stage"], "complete")
-        self.assertTrue((path / "original.enc").exists())
-        self.assertFalse((path / "result.enc").exists())
-        self.assertNotIn(b"synthetic-original", (path / "original.enc").read_bytes())
+        self.assertEqual((path / "original.mp4").read_bytes(), b"synthetic-original")
+        self.assertFalse((path / "result.mp4").exists())
         with self.assertRaises(ValueError):
-            jobs.result(self.download, root / "nothing.mp4")
+            jobs.result(self.download)
 
     def test_compress_reads_the_scoped_source_and_resumes_with_its_settings(self):
         root, jobs = self.jobs()
@@ -336,7 +339,7 @@ class ProtocolV3Tests(unittest.TestCase):
             jobs.poll(self.compress_job, self.compress_request(scope="e"*64))
         with mock.patch.object(worker.threading, "Thread"):
             self.assertEqual(jobs.poll(self.compress_job, self.compress_request())["stage"], "queued")
-        restarted = worker.Jobs(root, "synthetic-token")
+        restarted = worker.Jobs(root)
         restarted.active[self.compress_job] = time.monotonic()+30
         seen = {}
         def compress(source, destination, limit, deadline, settings):
@@ -348,8 +351,7 @@ class ProtocolV3Tests(unittest.TestCase):
             restarted.execute(self.compress_job)
         self.assertEqual(seen["source"], b"synthetic-original")
         self.assertEqual((seen["settings"]["preset"], seen["settings"]["passes"]), ("fast", 1))
-        restarted.result(self.compress_job, root / "send.mp4")
-        self.assertEqual((root / "send.mp4").read_bytes(), b"synthetic-send-copy")
+        self.assertEqual(restarted.result(self.compress_job).read_bytes(), b"synthetic-send-copy")
         with self.assertRaises(ValueError):
             restarted.poll(self.compress_job, self.compress_request(settings={"preset": "slow", "execution_minutes": 15}))
 
