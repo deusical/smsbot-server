@@ -75,7 +75,8 @@ a 4K clip to 1080p scored slightly higher and encoded about four times faster.
 Copied originals are not scaled.
 
 Linux uses H.264 (`libx264`), AAC and one thread per CPU core; the worker service
-runs at `Nice=10`, so encoding yields to the rest of the host. One pass omits
+runs at `Nice=10` with a CPU quota of all cores but one, so encoding yields to
+the rest of the host and never takes every core. One pass omits
 the pass log and first analysis pass; two passes preserve the existing analysis
 and encoding flow. Windows uses the existing AV1 NVENC/HQ path. Presets map to
 NVENC p3/p4/p5/p6/p7 respectively; one pass maps to `-multipass disabled`, two

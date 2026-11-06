@@ -167,8 +167,8 @@ def compress(source, destination, limit, deadline, encoder=None, settings=None):
 
     Target just below the ceiling and re-encode with measured size correction
     if muxing overshoots. Keep the aspect ratio (portrait stays portrait) and
-    cap only the long side at MAX_LONG_SIDE. x264 uses every core: the service
-    runs at a lower priority, so the rest of the host stays responsive.
+    cap only the long side at MAX_LONG_SIDE. x264 gets a thread per core; the
+    service's lower priority and CPU quota keep the rest of the host responsive.
     """
     configured = settings is not None
     settings = validate_settings(settings or {})

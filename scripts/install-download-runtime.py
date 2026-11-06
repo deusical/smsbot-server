@@ -97,6 +97,9 @@ def main():
     unit_dir.mkdir(parents=True, exist_ok=True)
     def quote(path):
         return '"' + str(path).replace('\\', '\\\\').replace('"', '\\"').replace('%', '%%') + '"'
+    # Leave one core to SmsBot and the rest of the host; Nice=10 already gives
+    # them priority. A fixed 150% throttled x264 to 1.5 of the Acer's 4 cores.
+    quota = max(100, ((os.cpu_count() or 2) - 1) * 100)
     unit = f'''[Unit]
 Description=SmsBot server-local video downloader
 After=network-online.target
@@ -106,7 +109,7 @@ ExecStart={quote(python)} {quote(worker / 'download-worker.py')} --root {quote(r
 Environment="PATH={binary_dir}:/usr/bin:/bin"
 UMask=0077
 Nice=10
-CPUQuota=150%
+CPUQuota={quota}%
 MemoryMax=1536M
 KillMode=control-group
 TimeoutStopSec=10
