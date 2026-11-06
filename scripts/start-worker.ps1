@@ -23,7 +23,9 @@ param(
     [string]$TokenFile = (Join-Path $env:LOCALAPPDATA "SmsBot\download-worker-token"),
     # This PC's Tailscale 100.x address; found with `tailscale ip -4` when omitted.
     [string]$Bind = "",
-    [int]$Port = 8767
+    [int]$Port = 8767,
+    # Jobs run at once.
+    [ValidateRange(1, 8)][int]$Slots = 1
 )
 $ErrorActionPreference = "Stop"
 
@@ -50,4 +52,4 @@ New-Item -ItemType Directory -Force (Split-Path $TokenFile) | Out-Null
 New-Item -ItemType Directory -Force $OutputRoot | Out-Null
 $worker = Join-Path $PSScriptRoot "download-worker.py"
 Write-Host "Worker for SmsBot: http://${Bind}:$Port/download (token file: $TokenFile)"
-& $python $worker --root $Root --output-root $OutputRoot --token-file $TokenFile --bind $Bind --port $Port
+& $python $worker --root $Root --output-root $OutputRoot --token-file $TokenFile --bind $Bind --port $Port --slots $Slots
