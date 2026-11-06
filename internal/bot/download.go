@@ -25,14 +25,20 @@ type DownloadProvider interface {
 	PollDownload(context.Context, string, string, int64, time.Time) ([]byte, string, error)
 }
 
-// HTTPDownloader talks only to the owner-configured local worker. The worker
-// URL is not taken from chat input. Its token remains outside configuration/API.
+// HTTPDownloader talks to one owner-configured worker: the host's own, or one
+// on another machine over Tailscale. The worker URL is not taken from chat
+// input. Its token remains outside configuration/API.
 type HTTPDownloader struct {
 	Endpoint, Token string
 	Client          *http.Client
 	Warning         func(string)
-	outdated        sync.Once
-	noV3            sync.Once
+	// Remote workers deliver files in the background: 20 MB over Tailscale
+	// takes tens of seconds, longer than one dispatch poll may block.
+	Remote   bool
+	outdated sync.Once
+	noV3     sync.Once
+	fetchMu  sync.Mutex
+	fetches  map[string]*fileFetch
 }
 
 // PollDownload repeats preparation requests by durable job ID, never sends.
@@ -155,7 +161,7 @@ func downloadURL(input string) string {
 // step's output and calls finishWorkerStep. Otherwise dispatch ends here:
 // the job was deferred until its next poll, or completed as failed.
 func (e *Engine) pollWorker(ctx context.Context, j store.Job, p *store.Plan, poll func(ctx context.Context, deadline time.Time) (string, error)) (complete bool, err error) {
-	if e.Downloader == nil {
+	if e.Downloader == nil && e.Tasks == nil {
 		return false, e.Store.Complete(j.ID, "failed", "download_worker_unavailable")
 	}
 	ok, err := e.Store.Transition(j.ID, "queued", "generating")
@@ -191,7 +197,12 @@ func (e *Engine) pollWorker(ctx context.Context, j store.Job, p *store.Plan, pol
 		return false, err
 	}
 	if workerr != nil {
-		return false, e.Store.Complete(j.ID, "failed", "download_failed")
+		code := "download_failed"
+		var failed taskFailed
+		if errors.As(workerr, &failed) {
+			code = failed.code
+		}
+		return false, e.Store.Complete(j.ID, "failed", code)
 	}
 	return true, nil
 }

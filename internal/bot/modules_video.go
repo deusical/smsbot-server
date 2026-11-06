@@ -46,7 +46,8 @@ func workerJob(j store.Job, step string) string { return store.Hash(j.ID + "\x00
 
 // sourceState is what a video.download step fixed at acceptance.
 type sourceState struct {
-	URL string `json:"url"`
+	URL  string    `json:"url"`
+	Task TaskState `json:"task,omitempty"`
 }
 
 // video.download asks the server-local worker to download the linked video.
@@ -82,6 +83,9 @@ func videoDownloadModule() module {
 			}
 			if st.URL == "" {
 				return cmdflow.Fail("download_failed"), nil
+			}
+			if e.Tasks != nil {
+				return taskDownload(r, s, st)
 			}
 			worker, separate := e.Downloader.(videoWorkerV3)
 			combined := !separate
@@ -119,6 +123,7 @@ func videoDownloadModule() module {
 type compressState struct {
 	MaxBytes int64         `json:"max_bytes"`
 	Settings VideoSettings `json:"settings"`
+	Task     TaskState     `json:"task,omitempty"`
 }
 
 // video.compress makes a copy of an original video small enough to send.
@@ -166,6 +171,9 @@ func videoCompressModule() module {
 			source, ok := s.In("source")
 			if !ok || source.Handle == "" && source.Text == "" {
 				return cmdflow.Fail("download_failed"), nil
+			}
+			if e.Tasks != nil && source.Handle != "" {
+				return taskCompress(r, s, st, source)
 			}
 			var data []byte
 			complete, err := e.pollWorker(r.ctx, r.j, r.p, func(ctx context.Context, deadline time.Time) (string, error) {
@@ -259,4 +267,70 @@ func combinedVideoStep(later []PipelineStep, s PipelineStep) bool {
 		}
 	}
 	return false
+}
+
+// taskDownload runs video.download as the "video.download@1" task on a
+// worker. The step outputs the original's handle; the file stays there.
+func taskDownload(r *runCtx, s *cmdflow.Step, st sourceState) (cmdflow.Outcome, error) {
+	e := r.e
+	var status TaskStatus
+	complete, err := e.pollWorker(r.ctx, r.j, r.p, func(ctx context.Context, deadline time.Time) (string, error) {
+		var err error
+		status, err = e.Tasks.Poll(ctx, &st.Task, workerJob(r.j, s.ID), r.j.ID, deadline, TaskRequest{
+			Task: "video.download", Version: 1, Inputs: map[string]TaskValue{"url": {Type: "url", Text: st.URL}}, Settings: map[string]any{},
+		})
+		return status.Stage, err
+	})
+	if serr := s.Save(st); err == nil {
+		err = serr
+	}
+	if !complete || err != nil {
+		return cmdflow.Yield(), err
+	}
+	original := status.Outputs["original"]
+	if original.Handle == "" {
+		return cmdflow.Fail("download_failed"), nil
+	}
+	s.Out("source", cmdflow.Value{Type: typeStoredVideo, Handle: original.Handle})
+	s.Status = cmdflow.StatusDone
+	return yielded(e.finishWorkerStep(r.j, r.p))
+}
+
+// taskCompress runs video.compress as the "video.compress@1" task on the
+// worker holding the original, then fetches the verified copy.
+func taskCompress(r *runCtx, s *cmdflow.Step, st compressState, source cmdflow.Value) (cmdflow.Outcome, error) {
+	e := r.e
+	settings := map[string]any{}
+	raw, _ := json.Marshal(st.Settings)
+	_ = json.Unmarshal(raw, &settings)
+	settings["max_bytes"] = st.MaxBytes
+	var data []byte
+	complete, err := e.pollWorker(r.ctx, r.j, r.p, func(ctx context.Context, deadline time.Time) (string, error) {
+		status, err := e.Tasks.Poll(ctx, &st.Task, workerJob(r.j, s.ID), r.j.ID, deadline, TaskRequest{
+			Task: "video.compress", Version: 1, Inputs: map[string]TaskValue{"source": {Handle: source.Handle}}, Settings: settings,
+		})
+		if err != nil || status.Stage != "complete" {
+			return status.Stage, err
+		}
+		video := status.Outputs["video"]
+		if video.Handle == "" {
+			return "", taskFailed{"download_failed"}
+		}
+		var stage string
+		data, stage, err = e.Tasks.File(ctx, video.Handle, st.MaxBytes)
+		return stage, err
+	})
+	if serr := s.Save(st); err == nil {
+		err = serr
+	}
+	if !complete || err != nil {
+		return cmdflow.Yield(), err
+	}
+	file, done, err := e.sendableVideo(r.ctx, r.j, r.p, data, st.MaxBytes)
+	if done || err != nil {
+		return cmdflow.Yield(), err
+	}
+	s.Out("video", mediaValue(file))
+	s.Status = cmdflow.StatusDone
+	return yielded(e.finishWorkerStep(r.j, r.p))
 }

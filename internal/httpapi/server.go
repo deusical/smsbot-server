@@ -39,7 +39,9 @@ type Server struct {
 	// Notify is nil until the service wires it; its routes answer 503 until then.
 	Notify       *notify.Service
 	PhonePairing *PhonePairing
-	mux          *http.ServeMux
+	// Workers is the task workers' configuration; nil answers 503.
+	Workers *bot.Tasks
+	mux     *http.ServeMux
 }
 
 func New(e *bot.Engine, c *collection.Service, origin string, fixture bool) *Server {
@@ -47,6 +49,7 @@ func New(e *bot.Engine, c *collection.Service, origin string, fixture bool) *Ser
 	s.featureRoutes()
 	s.notificationRoutes()
 	s.pairingRoutes()
+	s.workerRoutes()
 	s.mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { s.json(w, 200, map[string]string{"status": "running"}) })
 	s.mux.HandleFunc("POST /api/v1/login", s.login)
 	s.mux.HandleFunc("POST /api/v1/logout", s.protected(s.logout))

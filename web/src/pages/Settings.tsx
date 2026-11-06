@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { ReplacePhone } from "../components/ReplacePhone";
 import { NotificationSettings } from "../components/NotificationSettings";
+import { WorkerSettings } from "../components/WorkerSettings";
 import {
   api,
   collectable,
@@ -27,6 +28,7 @@ const sections = [
   { id: "inbox", label: "Messages & privacy", icon: "inbox" },
   { id: "notifications", label: "Notifications", icon: "bell" },
   { id: "devices", label: "Devices", icon: "phone" },
+  { id: "workers", label: "Workers", icon: "cpu" },
   { id: "backup", label: "Import & export", icon: "download" },
 ] as const;
 type Section = (typeof sections)[number]["id"];
@@ -99,6 +101,7 @@ export function SettingsPage({
           <NotificationSettings conversations={conversations} notify={notify} />
         )}
         {section === "devices" && <DevicesSection {...shared} state={state} />}
+        {section === "workers" && <WorkerSettings />}
         {section === "backup" && <BackupSection {...shared} />}
       </div>
     </div>

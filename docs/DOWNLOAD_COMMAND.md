@@ -40,8 +40,34 @@ hand, listening only on its Tailscale address:
 `ffprobe` with `h264_nvenc` must be on PATH. The script finds the PC's Tailscale
 address, creates a token file under `%LOCALAPPDATA%\SmsBot` (never printed) and
 keeps files under `Downloads\smsbot`. The worker refuses any address that isn't
-loopback or Tailscale. SmsBot itself still accepts only its local worker; using a
-worker on another PC needs server support that is not built yet.
+loopback or Tailscale.
+
+To use it, open **Settings > Workers** on the dashboard, add the worker with its
+Tailscale address (`http://<100.x address>:8767/download`) and paste the contents of
+its token file. The token is stored encrypted and never shown again. The page shows
+each worker's status and the tasks it runs, and lets you choose, per task, which
+workers may run it and in what order. The same configuration is `workers.json` in
+SmsBot's data directory; a hand edit applies without a restart, and a hand-written
+worker may give `token_file` (a path on the SmsBot host) instead:
+
+```json
+{"workers":[{"name":"laptop","endpoint":"http://100.92.5.20:8767/download"}],
+ "routes":{"video.compress":["laptop","local"]}}
+```
+
+For each step's task, SmsBot picks the first worker in order that runs the task and
+answers within 2 seconds; a task without a route may run on every worker in list
+order, then `local`, the SmsBot host's own worker. The job stays on that worker. A
+task that reads a file runs where the file is: compression runs on the worker that
+downloaded the original. If a worker stops answering for 2 minutes, a job that reads
+no file starts again on the next worker; a job whose input file is on the missing
+worker fails with `worker_unavailable` (retry the command). Workers only prepare
+files and only the bot sends, so a missing worker can't cause a second reply. A
+remote worker's result is fetched in the background (Activity shows `receiving`).
+
+Upgrade the SmsBot host's worker first (re-run the installer): SmsBot sends video
+steps as protocol-4 tasks, and logs `download_worker_outdated` at startup if the
+local worker doesn't run tasks yet.
 
 The Linux worker needs no Windows worker or SSH tunnel. Rednote's source is pinned to
 `106966f552e45eb3af75055810ab51f940f767be`. The installer records resolved Python

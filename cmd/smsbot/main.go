@@ -470,6 +470,19 @@ func (o *options) serve(s *store.Store, v *vault.Vault, sessionPath string) erro
 		}
 		service.Engine.Downloader = &bot.HTTPDownloader{Endpoint: o.downloadEndpoint, Token: strings.TrimSpace(string(token))}
 	}
+	// Workers and their routing: workers.json beside the database, edited on
+	// the dashboard. In fixture mode the page works but steps use the fixture.
+	tasks := &bot.Tasks{Path: filepath.Join(filepath.Dir(s.Path), "workers.json"), Store: s}
+	if d, ok := service.Engine.Downloader.(*bot.HTTPDownloader); ok {
+		tasks.Local = d
+	}
+	if _, err := tasks.Config(); err != nil {
+		return err
+	}
+	if !o.fixture {
+		service.Engine.Tasks = tasks
+		go warnOutdatedWorker(ctx, tasks)
+	}
 	if o.fixture {
 		// Offline: video steps complete with a synthetic file, no worker.
 		service.Engine.Downloader = &bot.FixtureDownloader{}
@@ -486,6 +499,7 @@ func (o *options) serve(s *store.Store, v *vault.Vault, sessionPath string) erro
 	defer func() { workers.Stop() }()
 	api := httpapi.New(service.Engine, service.Collection, origin, o.fixture)
 	api.Notify = service.Notify
+	api.Workers = tasks
 	if !o.fixture {
 		running := true
 		api.PhonePairing = &httpapi.PhonePairing{Context: ctx}
@@ -510,6 +524,7 @@ func (o *options) serve(s *store.Store, v *vault.Vault, sessionPath string) erro
 			t = google
 			next := app.New(s, t, filepath.Join(filepath.Dir(s.Path), "archive"))
 			next.Engine.Downloader = service.Engine.Downloader
+			next.Engine.Tasks = service.Engine.Tasks
 			next.Notify.Subject = origin
 			service = next
 			if err := google.Connect(ctx); err != nil {
@@ -551,4 +566,26 @@ func (o *options) serve(s *store.Store, v *vault.Vault, sessionPath string) erro
 	shutdown, done := context.WithTimeout(context.Background(), 10*time.Second)
 	defer done()
 	return server.Shutdown(shutdown)
+}
+
+// warnOutdatedWorker logs once when the local worker answers but runs no
+// tasks: it predates protocol 4, so video steps would wait for a worker.
+func warnOutdatedWorker(ctx context.Context, tasks *bot.Tasks) {
+	if tasks.Local == nil {
+		return
+	}
+	for i := 0; i < 30; i++ {
+		list, err := tasks.Status(ctx)
+		if err == nil && len(list) > 0 && list[0].Online {
+			if len(list[0].Tasks) == 0 {
+				fmt.Fprintln(os.Stderr, "download_worker_outdated: re-run scripts/install-download-runtime.py so the local worker runs tasks")
+			}
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(10 * time.Second):
+		}
+	}
 }
