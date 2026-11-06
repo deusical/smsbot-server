@@ -145,14 +145,65 @@ func (d *HTTPDownloader) PollCompress(ctx context.Context, id, scope, source str
 	return d.result(ctx, id, limit)
 }
 
-// result reads a completed job's verified MP4.
+// resultTimeout bounds one background result fetch from a remote worker.
+const resultTimeout = 3 * time.Minute
+
+// resultFetch is a remote result being read in the background.
+type resultFetch struct {
+	done    chan struct{}
+	started time.Time
+	data    []byte
+	stage   string
+	err     error
+}
+
+// result reads a completed job's verified MP4. From a remote worker it is
+// read in the background: this poll and later ones report "receiving" until
+// the bytes are here, so dispatch is never held for the transfer.
 func (d *HTTPDownloader) result(ctx context.Context, id string, limit int64) ([]byte, string, error) {
+	if !d.Remote {
+		return d.fetchResult(ctx, id, limit, d.client())
+	}
+	d.fetchMu.Lock()
+	defer d.fetchMu.Unlock()
+	for other, f := range d.fetches {
+		// Drop results nobody came back for, such as a cancelled job's.
+		if time.Since(f.started) > 2*resultTimeout {
+			delete(d.fetches, other)
+		}
+	}
+	if f := d.fetches[id]; f != nil {
+		select {
+		case <-f.done:
+			delete(d.fetches, id)
+			return f.data, f.stage, f.err
+		default:
+			return nil, "receiving", nil
+		}
+	}
+	if d.fetches == nil {
+		d.fetches = map[string]*resultFetch{}
+	}
+	f := &resultFetch{done: make(chan struct{}), started: time.Now()}
+	d.fetches[id] = f
+	go func() {
+		defer close(f.done)
+		fctx, cancel := context.WithTimeout(context.Background(), resultTimeout)
+		defer cancel()
+		client := *d.client()
+		client.Timeout = resultTimeout
+		f.data, f.stage, f.err = d.fetchResult(fctx, id, limit, &client)
+	}()
+	return nil, "receiving", nil
+}
+
+func (d *HTTPDownloader) fetchResult(ctx context.Context, id string, limit int64, client *http.Client) ([]byte, string, error) {
 	request, err := http.NewRequestWithContext(ctx, "GET", strings.TrimRight(d.Endpoint, "/")+"/jobs/"+id+"/result", nil)
 	if err != nil {
 		return nil, "", errors.New("download_failed")
 	}
 	request.Header.Set("Authorization", "Bearer "+d.Token)
-	res, err := d.client().Do(request)
+	res, err := client.Do(request)
 	if err != nil {
 		return nil, "waiting_worker", nil
 	}

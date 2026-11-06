@@ -44,14 +44,18 @@ const videoPreview = "Video link recognized. A live command saves the original o
 // the scope that ties a compress job to its own job's original.
 func workerJob(j store.Job, step string) string { return store.Hash(j.ID + "\x00" + step) }
 
-// sourceState is what a video.download step fixed at acceptance.
+// sourceState is what a video.download step fixed at acceptance, and, with a
+// worker pool, the worker it chose and since when (Unix ms) that worker has
+// been unreachable.
 type sourceState struct {
-	URL string `json:"url"`
+	URL     string `json:"url"`
+	Worker  string `json:"worker,omitempty"`
+	Waiting int64  `json:"waiting,omitempty"`
 }
 
-// video.download asks the server-local worker to download the linked video.
-// The original stays on the worker, encrypted; the step outputs a reference
-// to it that only this job's later steps can use.
+// video.download asks a video worker to download the linked video. The
+// original stays on the worker; the step outputs a reference to it that only
+// this job's later steps can use.
 func videoDownloadModule() module {
 	return module{
 		Definition: ModuleDefinition{
@@ -82,6 +86,9 @@ func videoDownloadModule() module {
 			}
 			if st.URL == "" {
 				return cmdflow.Fail("download_failed"), nil
+			}
+			if pool, ok := e.Downloader.(*WorkerPool); ok {
+				return pool.download(r, s, st)
 			}
 			worker, separate := e.Downloader.(videoWorkerV3)
 			combined := !separate
@@ -115,10 +122,16 @@ func videoDownloadModule() module {
 	}
 }
 
-// compressState is what a video.compress step fixed at acceptance.
+// compressState is what a video.compress step fixed at acceptance, and, with
+// a worker pool, the worker it is using, since when (Unix ms) that worker has
+// been unreachable, and whether the holder of the original was given up so
+// the video is downloaded again and compressed in one job.
 type compressState struct {
 	MaxBytes int64         `json:"max_bytes"`
 	Settings VideoSettings `json:"settings"`
+	Worker   string        `json:"worker,omitempty"`
+	Waiting  int64         `json:"waiting,omitempty"`
+	Fallback bool          `json:"fallback,omitempty"`
 }
 
 // video.compress makes a copy of an original video small enough to send.
@@ -168,7 +181,7 @@ func videoCompressModule() module {
 				return cmdflow.Fail("download_failed"), nil
 			}
 			var data []byte
-			complete, err := e.pollWorker(r.ctx, r.j, r.p, func(ctx context.Context, deadline time.Time) (string, error) {
+			poll := func(ctx context.Context, deadline time.Time) (string, error) {
 				var stage string
 				var err error
 				if source.Handle != "" {
@@ -185,7 +198,17 @@ func videoCompressModule() module {
 					data, stage, err = e.Downloader.PollDownload(ctx, r.j.ID, source.Text, st.MaxBytes, deadline)
 				}
 				return stage, err
-			})
+			}
+			pool, routed := e.Downloader.(*WorkerPool)
+			if routed && source.Handle != "" {
+				poll = pool.compressPoll(r, s, &st, source, &data)
+			}
+			complete, err := e.pollWorker(r.ctx, r.j, r.p, poll)
+			if routed {
+				if serr := s.Save(st); err == nil {
+					err = serr
+				}
+			}
 			if !complete || err != nil {
 				return cmdflow.Yield(), err
 			}

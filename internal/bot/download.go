@@ -25,14 +25,20 @@ type DownloadProvider interface {
 	PollDownload(context.Context, string, string, int64, time.Time) ([]byte, string, error)
 }
 
-// HTTPDownloader talks only to the owner-configured local worker. The worker
-// URL is not taken from chat input. Its token remains outside configuration/API.
+// HTTPDownloader talks to one owner-configured worker: the local one, or one
+// on another machine over Tailscale. The worker URL is not taken from chat
+// input. Its token remains outside configuration/API.
 type HTTPDownloader struct {
 	Endpoint, Token string
 	Client          *http.Client
 	Warning         func(string)
-	outdated        sync.Once
-	noV3            sync.Once
+	// Remote workers deliver results in the background: a 20 MB result takes
+	// tens of seconds over Tailscale, longer than one dispatch poll may block.
+	Remote   bool
+	outdated sync.Once
+	noV3     sync.Once
+	fetchMu  sync.Mutex
+	fetches  map[string]*resultFetch
 }
 
 // PollDownload repeats preparation requests by durable job ID, never sends.

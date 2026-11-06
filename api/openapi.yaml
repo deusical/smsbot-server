@@ -1612,7 +1612,7 @@ components:
         preparation_stage:
           type: string
           description: Last observed worker stage; historical after completion. Does not authorize sending.
-          enum: [waiting_worker, queued, downloading, compressing, verifying, complete, waiting_upload, uploading, ready]
+          enum: [waiting_worker, queued, downloading, compressing, verifying, receiving, complete, waiting_upload, uploading, ready]
         id:
           type: string
         conversation_id:

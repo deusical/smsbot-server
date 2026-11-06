@@ -40,8 +40,33 @@ hand, listening only on its Tailscale address:
 `ffprobe` with `h264_nvenc` must be on PATH. The script finds the PC's Tailscale
 address, creates a token file under `%LOCALAPPDATA%\SmsBot` (never printed) and
 keeps files under `Downloads\smsbot`. The worker refuses any address that isn't
-loopback or Tailscale. SmsBot itself still accepts only its local worker; using a
-worker on another PC needs server support that is not built yet.
+loopback or Tailscale.
+
+Copy that token file to the SmsBot host once, then add one flag per remote worker
+to SmsBot's service invocation, in order of preference. The local worker
+(`--download-endpoint`) is always used last:
+
+```
+--download-worker lenovo=http://100.92.5.20:8767/download,/home/deusical/.local/share/smsbot/vault/lenovo-worker-token
+```
+
+SmsBot accepts a remote endpoint only on plain HTTP to a Tailscale address
+(`100.64.0.0/10`) or `*.ts.net` name, never a LAN address, and needs a token of
+at least 32 characters. For each video:
+
+- **Choosing.** The download goes to the first worker that answers its
+  capabilities request within 2 seconds; a PC that is off or asleep is skipped.
+  The choice is saved in the job.
+- **Same worker for compression.** Compression runs on the worker that holds the
+  original.
+- **Fallback.** If that worker stops answering for 2 minutes, the video starts
+  again on the next worker: a download still in progress is repeated there, and
+  if the original was already downloaded, the next worker downloads and
+  compresses in one job from the saved link. Workers only prepare files and only
+  the bot sends, so a worker that disappears can't cause a second reply.
+- **Receiving.** A remote worker's verified video is fetched in the background
+  (Activity shows `receiving`), because 20 MB over Tailscale can take tens of
+  seconds and dispatch must not wait for it.
 
 The Linux worker needs no Windows worker or SSH tunnel. Rednote's source is pinned to
 `106966f552e45eb3af75055810ab51f940f767be`. The installer records resolved Python

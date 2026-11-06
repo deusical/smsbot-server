@@ -60,7 +60,15 @@ type options struct {
 	updateCookies                       bool
 	cookiesStdin                        bool
 	downloadEndpoint, downloadTokenFile string
+	downloadWorkers                     workerFlags
 }
+
+// workerFlags collects repeated -download-worker NAME=URL,TOKEN_FILE values,
+// in order of preference.
+type workerFlags []string
+
+func (w *workerFlags) String() string     { return strings.Join(*w, " ") }
+func (w *workerFlags) Set(v string) error { *w = append(*w, v); return nil }
 
 func parseOptions(args []string) (*options, error) {
 	flags := flag.NewFlagSet("smsbot", flag.ContinueOnError)
@@ -89,6 +97,7 @@ func parseOptions(args []string) (*options, error) {
 	flags.BoolVar(&o.cookiesStdin, "cookies-stdin", false, "read Google cookies from stdin, never command arguments")
 	flags.StringVar(&o.downloadEndpoint, "download-endpoint", "", "server-local download worker endpoint")
 	flags.StringVar(&o.downloadTokenFile, "download-token-file", "", "worker token file outside source")
+	flags.Var(&o.downloadWorkers, "download-worker", "a video worker on another machine over Tailscale, NAME=URL,TOKEN_FILE; repeat in order of preference, the local worker is used last")
 	if e := flags.Parse(args); e != nil {
 		return nil, e
 	}
@@ -470,6 +479,13 @@ func (o *options) serve(s *store.Store, v *vault.Vault, sessionPath string) erro
 		}
 		service.Engine.Downloader = &bot.HTTPDownloader{Endpoint: o.downloadEndpoint, Token: strings.TrimSpace(string(token))}
 	}
+	if len(o.downloadWorkers) > 0 && !o.fixture {
+		pool, err := workerPool(o.downloadWorkers, service.Engine.Downloader)
+		if err != nil {
+			return err
+		}
+		service.Engine.Downloader = pool
+	}
 	if o.fixture {
 		// Offline: video steps complete with a synthetic file, no worker.
 		service.Engine.Downloader = &bot.FixtureDownloader{}
@@ -551,4 +567,35 @@ func (o *options) serve(s *store.Store, v *vault.Vault, sessionPath string) erro
 	shutdown, done := context.WithTimeout(context.Background(), 10*time.Second)
 	defer done()
 	return server.Shutdown(shutdown)
+}
+
+// workerPool builds the video workers from -download-worker values, in order,
+// followed by the local worker when one is configured.
+func workerPool(specs []string, local bot.DownloadProvider) (*bot.WorkerPool, error) {
+	pool := &bot.WorkerPool{}
+	seen := map[string]bool{}
+	for _, spec := range specs {
+		name, rest, ok := strings.Cut(spec, "=")
+		i := strings.LastIndex(rest, ",")
+		if !ok || i < 0 {
+			return nil, errors.New("download worker must be NAME=URL,TOKEN_FILE")
+		}
+		token, err := os.ReadFile(rest[i+1:])
+		if err != nil {
+			token = nil
+		}
+		w, err := bot.NewRemoteWorker(name, rest[:i], string(token))
+		if err != nil {
+			return nil, err
+		}
+		if seen[name] {
+			return nil, errors.New("download worker " + name + " is configured twice")
+		}
+		seen[name] = true
+		pool.Workers = append(pool.Workers, w)
+	}
+	if d, ok := local.(*bot.HTTPDownloader); ok {
+		pool.Workers = append(pool.Workers, bot.NamedWorker{Name: "local", HTTPDownloader: d})
+	}
+	return pool, nil
 }
