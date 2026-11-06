@@ -23,6 +23,9 @@ type Engine struct {
 	Transport  transport.Transport
 	Provider   Provider
 	Downloader DownloadProvider
+	// Tasks runs steps' tasks on the configured workers; when set, video
+	// steps use it instead of Downloader.
+	Tasks *Tasks
 	// WorkerPollDelay spaces polls of the download worker between stages;
 	// zero means one second.
 	WorkerPollDelay time.Duration

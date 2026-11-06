@@ -1362,6 +1362,60 @@ paths:
         '206': {description: Requested byte range}
         '409': {description: Job incomplete or no longer available}
 
+  /workers:
+    get:
+      summary: Task workers, their status and where each task runs
+      description: >-
+        Workers run tasks for commands, such as video.download and video.compress. "local" is this
+        server's own worker; the others run on other machines and are reached over Tailscale. The
+        configuration is workers.json in the data directory, which can also be edited by hand.
+        Status probes every worker (about two seconds at most). Tokens are never returned.
+      responses:
+        '200':
+          description: Workers
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Workers'}
+        '500': {description: workers.json is invalid; detail explains why}
+        '503': {description: Workers not wired in this process}
+    put:
+      summary: Replace the workers and routes
+      description: >-
+        A remote endpoint must be plain HTTP to a Tailscale 100.64.0.0/10 address or a *.ts.net name.
+        token is write-only: omitted or empty keeps the stored token. A removed worker's token is deleted.
+        Routes list, per task, the workers that may run it in order; a task without a route may run on
+        every worker in list order, then local.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [workers]
+              additionalProperties: false
+              properties:
+                workers:
+                  type: array
+                  items:
+                    type: object
+                    required: [name, endpoint]
+                    additionalProperties: false
+                    properties:
+                      name: {type: string, pattern: '^[a-z0-9][a-z0-9-]{0,23}$', description: 'Not "local"'}
+                      endpoint: {type: string, example: 'http://100.92.5.20:8767/download'}
+                      token_file: {type: string, description: Token read from this file on the server instead}
+                      token: {type: string, minLength: 32, writeOnly: true}
+                routes:
+                  type: object
+                  additionalProperties: {type: array, items: {type: string}}
+      responses:
+        '200':
+          description: Saved; the new workers view
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Workers'}
+        '400': {description: 'invalid_workers; detail explains why'}
+        '503': {description: Workers not wired in this process}
   /notifications:
     get:
       summary: Web Push application server key and registered devices (capability push_notifications)
@@ -1447,6 +1501,39 @@ components:
       in: cookie
       name: smsbot_session
   schemas:
+    Workers:
+      type: object
+      required: [config, status, local]
+      properties:
+        config:
+          type: object
+          required: [workers]
+          properties:
+            workers:
+              type: array
+              items:
+                type: object
+                required: [name, endpoint]
+                properties:
+                  name: {type: string}
+                  endpoint: {type: string}
+                  token_file: {type: string}
+            routes:
+              type: object
+              additionalProperties: {type: array, items: {type: string}}
+        status:
+          type: array
+          description: Local first, then the configured workers.
+          items:
+            type: object
+            required: [name, token, online, tasks]
+            properties:
+              name: {type: string}
+              endpoint: {type: string}
+              token: {type: boolean, description: A usable token is stored or configured}
+              online: {type: boolean}
+              tasks: {type: object, additionalProperties: {type: integer}, description: Task name to version}
+        local: {type: boolean, description: This server has its own worker}
     NotificationPrefs:
       type: object
       required: [messages]
@@ -1611,8 +1698,12 @@ components:
       properties:
         preparation_stage:
           type: string
-          description: Last observed worker stage; historical after completion. Does not authorize sending.
-          enum: [waiting_worker, queued, downloading, compressing, verifying, complete, waiting_upload, uploading, ready]
+          description: >-
+            Last observed worker stage; historical after completion. Does not authorize sending. Besides
+            waiting_worker, queued, receiving (a remote worker's file is being fetched), complete,
+            waiting_upload, uploading and ready, a task may report its own stage, such as downloading or
+            compressing.
+          pattern: '^[a-z][a-z0-9_]{0,47}$'
         id:
           type: string
         conversation_id:

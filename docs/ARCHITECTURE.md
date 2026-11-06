@@ -99,7 +99,8 @@ sends twice.
 - **Download commands:** an encrypted plan snapshots the URL and independent
   execution deadline (15 minutes by default, up to 60). Admission still requires
   fresh input. Dispatch makes short idempotent requests to a token-authenticated
-  loopback worker and defers its next poll in `job_work`, letting other sends run.
+  task worker (the host's own, or one on another machine over Tailscale, chosen per
+  task from `workers.json`, which Settings > Workers edits) and defers its next poll in `job_work`, letting other sends run.
   One background upload lane also yields dispatch; its results are committed only
   by dispatch after repeating safety checks. Activity exposes sanitized stages. The single-slot worker keeps
   originals, verified MP4 results and job state as plain files in the owner-only
