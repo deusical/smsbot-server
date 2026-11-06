@@ -7,6 +7,7 @@ async function prepare(page: Page) {
     job: null as null | {id:string;conversation_id:string;command:string;state:string;created_at:string;transaction_id?:string;code?:string;reason?:string},
     composeGate: null as null | Promise<void>,
     composeCalls: [] as {text:string;request_id:string}[],
+    composeRefusal: "",
   };
   await page.route("**/api/v1/state", async route => {
     const response = await route.fetch();
@@ -23,6 +24,7 @@ async function prepare(page: Page) {
   await page.route("**/api/v1/inbox/conversations/a/compose", async (route: Route) => {
     world.composeCalls.push(route.request().postDataJSON());
     if (world.composeGate) await world.composeGate;
+    if (world.composeRefusal) return route.fulfill({status: 409, json: {error: world.composeRefusal}});
     await route.fulfill({status: 202, json: {id: "job-1", queued: true}});
   });
   await signIn(page);
@@ -84,6 +86,16 @@ test("a refused send says why in words, in the bubble and in Activity", async ({
   await page.getByRole("button", {name: "Activity", exact: true}).click();
   await page.locator(".feed-main").first().click();
   await expect(page.locator(".feed-detail")).toContainText("Not sent: your phone has no SIM chosen for this conversation");
+});
+
+test("when the phone does not answer the check, the bubble says so in plain words", async ({page}) => {
+  const world = await prepare(page);
+  world.composeRefusal = "compose_unavailable";
+  await page.getByLabel("Message", {exact: true}).fill("Synthetic lookup text");
+  await page.getByRole("button", {name: "Send message", exact: true}).click();
+  const bubble = page.locator(".bubble.pending");
+  await expect(bubble.getByRole("alert")).toContainText("Not sent: your phone didn't answer when asked about this conversation", {timeout: 10000});
+  await expect(bubble.getByRole("alert")).not.toContainText("compose");
 });
 
 test("an uncertain send never offers retry or edit", async ({page}) => {

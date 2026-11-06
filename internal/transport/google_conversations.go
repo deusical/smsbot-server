@@ -143,14 +143,12 @@ func (g *Google) LookupConversation(ctx context.Context, id string) (Conversatio
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	g.countPhone(ctx, phoneLookup)
-	c, err := g.client.GetConversation(ctx, id)
+	c, err := fetchConversation(ctx, id, lookupRetryPause, g.client.GetConversation)
 	if err != nil {
 		if !errors.Is(err, context.Canceled) {
-			reason, hard := "reconnecting", false
-			if credentialError(err) {
-				reason, hard = "login_required", true
+			if reason, hard, offline := lookupFailure(err, g.client.IsConnected()); offline {
+				g.noteFailure(reason, hard)
 			}
-			g.noteFailure(reason, hard)
 			g.diagnose("conversation_lookup", err)
 		}
 		return Conversation{}, ErrUnavailable

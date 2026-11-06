@@ -165,6 +165,7 @@ export function pastedName(file: File): File {
 function refusal(code: string): string {
   const why: Record<string, string> = {
     bot_unavailable: "sending is paused, it is quiet hours, or your phone is not connected",
+    compose_unavailable: "your phone didn't answer when asked about this conversation. Try again in a few seconds",
     inbox_access_disabled: "sending is not allowed in this conversation",
     attachment_size_limit: "the attachments are too large",
     too_many_attachments: "there are too many attachments",
