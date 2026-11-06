@@ -260,7 +260,7 @@ func kindSchema(id string) SettingsSchema {
 		fields["execution_minutes"] = SettingsSchema{Type: "number", Title: "Execution deadline (minutes)", Default: 15, Minimum: bound(1), Maximum: bound(60), Unit: "minutes"}
 	}
 	if id == "media.video" {
-		fields["preset"] = SettingsSchema{Type: "string", Title: "Encoding preset", Default: "slow", Enum: []string{"veryfast", "faster", "fast", "medium", "slow"}}
+		fields["preset"] = SettingsSchema{Type: "string", Title: "Encoding preset", Default: "medium", Enum: []string{"veryfast", "faster", "fast", "medium", "slow"}}
 		fields["passes"] = SettingsSchema{Type: "number", Title: "Passes", Default: 2, Minimum: bound(1), Maximum: bound(2)}
 		fields["max_attempts"] = SettingsSchema{Type: "number", Title: "Maximum attempts", Default: 3, Minimum: bound(1), Maximum: bound(3)}
 		fields["copy_if_fits"] = SettingsSchema{Type: "boolean", Title: "Copy original when it fits", Default: true}

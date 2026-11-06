@@ -130,7 +130,7 @@ func videoCompressModule() module {
 			Outputs: []Port{{Name: "video", Title: "Video", Types: []string{typeVideo}}},
 			Effect:  effectLocal, RetryClass: "idempotent-poll", ResourceClass: "media", LongRunning: true,
 			Schema: SettingsSchema{Type: "object", UI: "video-cost", Properties: map[string]SettingsSchema{
-				"preset":       {Type: "string", Title: "Encoding preset", Default: "slow", Enum: []string{"veryfast", "faster", "fast", "medium", "slow"}},
+				"preset":       {Type: "string", Title: "Encoding preset", Default: "medium", Enum: []string{"veryfast", "faster", "fast", "medium", "slow"}},
 				"passes":       {Type: "number", Title: "Passes", Default: 2, Minimum: bound(1), Maximum: bound(2)},
 				"max_attempts": {Type: "number", Title: "Maximum attempts", Default: 3, Minimum: bound(1), Maximum: bound(3)},
 				"copy_if_fits": {Type: "boolean", Title: "Copy original when it fits", Default: true},

@@ -28,8 +28,15 @@ LIMIT = 20_000_000 - 1
 work = threading.local()
 
 
-DEFAULT_SETTINGS = {"preset": "slow", "passes": 2, "max_attempts": 3,
+DEFAULT_SETTINGS = {"preset": "medium", "passes": 2, "max_attempts": 3,
                     "copy_if_fits": True, "max_mb": 19.99, "execution_minutes": 15}
+
+# Encoded copies are at most 1920 pixels on their long side, keeping the aspect
+# ratio and never upscaling. At a send-sized byte budget a 4K encode only spends
+# bits on detail a phone screen can't show, and it takes about four times as long.
+MAX_LONG_SIDE = 1920
+SCALE = (f"scale=w=min({MAX_LONG_SIDE}\\,iw):h=min({MAX_LONG_SIDE}\\,ih)"
+         ":force_original_aspect_ratio=decrease:force_divisible_by=2")
 
 
 def validate_settings(value):
@@ -159,8 +166,9 @@ def compress(source, destination, limit, deadline, encoder=None, settings=None):
     """Use CPU H.264 two-pass on Linux, or the existing AV1 NVENC on Windows.
 
     Target just below the ceiling and re-encode with measured size correction
-    if muxing overshoots. Preserve resolution/aspect ratio rather than imposing
-    the old batch script's fixed landscape scaling on portrait videos.
+    if muxing overshoots. Keep the aspect ratio (portrait stays portrait) and
+    cap only the long side at MAX_LONG_SIDE. x264 gets a thread per core; the
+    service's lower priority and CPU quota keep the rest of the host responsive.
     """
     configured = settings is not None
     settings = validate_settings(settings or {})
@@ -185,10 +193,10 @@ def compress(source, destination, limit, deadline, encoder=None, settings=None):
         for _ in range(settings["max_attempts"]):
             base = ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
                  "-i", str(source), "-map", "0:v:0", "-map", "0:a:0?",
-                 "-map_metadata", "-1", "-map_chapters", "-1"]
+                 "-map_metadata", "-1", "-map_chapters", "-1", "-vf", SCALE]
             if encoder == "libx264":
                 stats = str(destination.with_suffix(".pass"))
-                video = ["-c:v", "libx264", "-preset", settings["preset"], "-threads", "2", "-pix_fmt", "yuv420p", "-b:v", str(rate), "-passlogfile", stats]
+                video = ["-c:v", "libx264", "-preset", settings["preset"], "-threads", str(os.cpu_count() or 2), "-pix_fmt", "yuv420p", "-b:v", str(rate), "-passlogfile", stats]
                 try:
                     if settings["passes"] == 2:
                         run(base + video + ["-pass", "1", "-an", "-f", "null", "-"], deadline)

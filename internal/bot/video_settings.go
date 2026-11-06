@@ -17,7 +17,7 @@ type VideoSettings struct {
 	ExecutionMinutes int     `json:"execution_minutes"`
 }
 
-func DefaultVideoSettings() VideoSettings { return VideoSettings{"slow", 2, 3, true, 19.99, 15} }
+func DefaultVideoSettings() VideoSettings { return VideoSettings{"medium", 2, 3, true, 19.99, 15} }
 func (v VideoSettings) Validate() error {
 	if !contains([]string{"veryfast", "faster", "fast", "medium", "slow"}, v.Preset) || v.Passes < 1 || v.Passes > 2 || v.MaxAttempts < 1 || v.MaxAttempts > 3 || math.IsNaN(v.MaxMB) || math.IsInf(v.MaxMB, 0) || v.MaxMB < 0.1 || v.MaxMB > 19.99 || v.ExecutionMinutes < 1 || v.ExecutionMinutes > 60 {
 		return errors.New("invalid video settings")
