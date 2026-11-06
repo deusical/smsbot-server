@@ -1,10 +1,14 @@
-"""Video worker for SmsBot: authenticated HTTP on loopback or a Tailscale address.
+"""Task worker for SmsBot: authenticated HTTP on loopback or a Tailscale address.
 
-Uses the existing downloader's anonymous Rednote runner, never a browser vault.
-Subprocess output and HTTP bodies are never logged. Originals, send copies and
-job state are plain files in the owner's download directory.
+Runs named, versioned tasks for the bot: the built-in video download and
+compression, plus any task_*.py file next to this script (see TASKS below).
+Jobs are durable: their state, inputs, settings and output files are plain files
+in the owner's download directory, and a restart resumes them on the next poll.
+Subprocess output and HTTP bodies are never logged. The worker never sends
+anything; only the bot does.
 """
 import argparse
+import importlib.util
 import ipaddress
 import re
 import tempfile
@@ -232,6 +236,21 @@ def compress(source, destination, limit, deadline, encoder=None, settings=None):
     return destination
 
 
+def fetch_original(root, url, folder, deadline):
+    """Download the linked video into folder with the Rednote runner."""
+    originals = folder / "originals"
+    originals.mkdir()
+    receipt = folder / "receipt.json"
+    python = root / "research/.oss-venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    run([str(python), str(Path(__file__).with_name("download-source.py")),
+         "--root", str(root), url, "--output", str(originals),
+         "--receipt", str(receipt), "--timeout", str(max(1, int(deadline-time.monotonic())))], deadline)
+    files = [Path(f).resolve() for f in json.loads(receipt.read_text())["files"]]
+    if len(files) != 1 or not files[0].is_relative_to(originals.resolve()) or files[0].suffix.lower() != ".mp4":
+        raise ValueError("single_video_required")
+    return files[0]
+
+
 def publish(source, destination):
     """Move a finished file into its job folder in one step, so a crash never
     leaves a partial original or result behind under its final name."""
@@ -240,14 +259,149 @@ def publish(source, destination):
     source.replace(destination)
 
 
+CODE = re.compile(r"[a-z][a-z0-9_]{0,47}")
+STAGE = re.compile(r"[a-z][a-z_]{0,31}")
+TASK_NAME = re.compile(r"[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+")
+FILE_NAME = re.compile(r"[a-z][a-z0-9_]{0,31}")
+# A task may run for up to a day; the bot's polls keep its lease alive.
+MAX_TASK_SECONDS = 24 * 3600
+
+
+class TaskFailed(Exception):
+    """A task's own failure, reported to the bot as a short code."""
+    def __init__(self, code):
+        super().__init__(code)
+        self.code = code if isinstance(code, str) and CODE.fullmatch(code) else "task_failed"
+
+
+class TaskJob:
+    """What a task's run(job) works with.
+
+    inputs and settings are what the bot sent, after the task's validate.
+    folder is private scratch space, removed afterwards; path is the job's own
+    folder, which survives restarts. deadline is a time.monotonic() value.
+    """
+    def __init__(self, jobs, job, path, state, folder, deadline, stage):
+        self.id, self.path, self.folder, self.deadline = job, path, folder, deadline
+        self.inputs, self.settings, self.scope = state["inputs"], state["settings"], state["scope"]
+        self.outputs = {}
+        self._jobs, self._stage = jobs, stage
+
+    def stage(self, name):
+        """Report progress, such as "downloading"; the bot shows it in Activity."""
+        if not isinstance(name, str) or not STAGE.fullmatch(name):
+            raise ValueError("invalid_stage")
+        self._stage(name)
+
+    def fail(self, code):
+        """End the task as failed with a short code, such as "too_long"."""
+        raise TaskFailed(code)
+
+    def run(self, args, capture=False):
+        """Run a subprocess, stopped at the deadline, on a lost lease or a stall."""
+        return run(args, self.deadline, capture)
+
+    def file(self, value):
+        """The local path of an input file: a file output of an earlier job of
+        the same bot job on this worker, given as {"handle": "<job>/<name>"}."""
+        return self._jobs.handle_path(value.get("handle") if isinstance(value, dict) else None, self.scope)
+
+    def saved(self, name):
+        """A file output this job already published before a restart, if any."""
+        f = self.path / "files" / name
+        return f if FILE_NAME.fullmatch(name) and f.is_file() else None
+
+    def output(self, name, value):
+        """Set a JSON output value, such as {"type": "text", "text": "..."}."""
+        if not FILE_NAME.fullmatch(name):
+            raise ValueError("invalid_output")
+        json.dumps(value)
+        self.outputs[name] = value
+
+    def output_file(self, name, source, type):
+        """Publish a file as an output; later jobs and the bot refer to it by handle."""
+        if not FILE_NAME.fullmatch(name) or not isinstance(type, str):
+            raise ValueError("invalid_output")
+        destination = self.path / "files" / name
+        if Path(source).resolve() != destination.resolve():
+            destination.parent.mkdir(exist_ok=True, mode=0o700)
+            publish(Path(source), destination)
+        self.outputs[name] = {"type": type, "handle": f"{self.id}/{name}", "size": destination.stat().st_size}
+
+
+def validate_download(inputs, settings):
+    url = inputs.get("url") if isinstance(inputs, dict) else None
+    if set(inputs) != {"url"} or not isinstance(url, dict) or not valid_url(url.get("text")) or settings:
+        raise ValueError("invalid_request")
+    return {"url": {"type": str(url.get("type", "url")), "text": url["text"]}}, {}
+
+
+def run_download(job):
+    original = job.saved("original")
+    if original is None:
+        job.stage("downloading")
+        original = fetch_original(job._jobs.root, job.inputs["url"]["text"], job.folder, job.deadline)
+    job.output_file("original", original, "video")
+
+
+def validate_compress(inputs, settings):
+    source = inputs.get("source") if isinstance(inputs, dict) else None
+    if set(inputs) != {"source"} or not isinstance(source, dict) or not isinstance(source.get("handle"), str):
+        raise ValueError("invalid_request")
+    if not isinstance(settings, dict):
+        raise ValueError("invalid_settings")
+    settings = dict(settings)
+    max_bytes = settings.pop("max_bytes", None)
+    if type(max_bytes) is not int or not 100000 <= max_bytes <= LIMIT:
+        raise ValueError("invalid_settings")
+    settings = validate_settings(settings)
+    settings["max_mb"] = min(settings["max_mb"], max_bytes / 1_000_000)
+    return {"source": {"handle": source["handle"]}}, {**settings, "max_bytes": max_bytes}
+
+
+def run_compress(job):
+    source = job.file(job.inputs["source"])
+    job.stage("compressing")
+    settings = {k: v for k, v in job.settings.items() if k != "max_bytes"}
+    output = compress(source, job.folder / "send.mp4", job.settings["max_bytes"], job.deadline, settings=settings)
+    job.output_file("video", output, "video")
+
+
+# A task is {"version": int, "validate": f(inputs, settings) -> (inputs, settings),
+# "run": f(job)}. validate rejects a bad request with ValueError before any job
+# exists; run does the work through a TaskJob. A task_*.py file next to this
+# script adds tasks with a module-level TASKS dict of the same shape.
+TASKS = {
+    "video.download": {"version": 1, "validate": validate_download, "run": run_download},
+    "video.compress": {"version": 1, "validate": validate_compress, "run": run_compress},
+}
+
+
+def load_tasks(directory):
+    """The built-in tasks plus those of every task_*.py file in directory."""
+    tasks = dict(TASKS)
+    for f in sorted(Path(directory).glob("task_*.py")):
+        spec = importlib.util.spec_from_file_location(f.stem, f)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        for name, task in getattr(module, "TASKS", {}).items():
+            if (not isinstance(name, str) or not TASK_NAME.fullmatch(name) or name in tasks or not isinstance(task, dict) or
+                    type(task.get("version")) is not int or task["version"] < 1 or not callable(task.get("run")) or
+                    not callable(task.get("validate", lambda i, s: None))):
+                raise SystemExit(f"Invalid task {name!r} in {f.name}.")
+            tasks[name] = {"version": task["version"], "validate": task.get("validate") or (lambda i, s: (i, s)), "run": task["run"]}
+    return tasks
+
+
 class Jobs:
-    """Plain-file checkpoints; one encoder, short authenticated HTTP polls.
+    """Plain-file checkpoints; a few job slots, short authenticated HTTP polls.
 
     Polls renew a 30-second lease. Loss of bot consent stops work when the
     lease expires; checkpoints survive. Only the bot can authorize sending.
     """
-    def __init__(self, root, output_root=None):
+    def __init__(self, root, output_root=None, tasks=None, slots=1):
         self.root = root
+        self.tasks = dict(TASKS) if tasks is None else tasks
         self.directory = output_root or root / "downloads" / "smsbot"
         self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.scratch = self.directory / ".scratch"
@@ -259,7 +413,8 @@ class Jobs:
         self.scratch.mkdir(mode=0o700)
         self.lock = threading.RLock()
         self.active = {}
-        self.busy = threading.Lock()
+        # Jobs run in up to `slots` at once; the rest wait their turn.
+        self.busy = threading.Semaphore(slots)
 
     def path(self, job):
         if not re.fullmatch(r"[a-f0-9]{64}", job):
@@ -279,8 +434,46 @@ class Jobs:
     def load(self, path):
         return json.loads((path / "state.json").read_text(encoding="utf-8"))
 
+    def task_request(self, request):
+        """Validate a protocol-4 request into the job's fixed request."""
+        if not isinstance(request, dict) or set(request) - {"protocol", "task", "version", "scope", "inputs", "settings", "deadline"}:
+            raise ValueError("invalid_request")
+        task = self.tasks.get(request.get("task"))
+        if task is None or request.get("version") != task["version"]:
+            raise ValueError("unknown_task")
+        scope, deadline = request.get("scope"), request.get("deadline")
+        if not isinstance(scope, str) or not JOB.fullmatch(scope):
+            raise ValueError("invalid_request")
+        if type(deadline) is not int or not time.time()-5 < deadline <= time.time()+MAX_TASK_SECONDS:
+            raise ValueError("invalid_deadline")
+        inputs, settings = request.get("inputs", {}), request.get("settings", {})
+        if not isinstance(inputs, dict) or not isinstance(settings, dict):
+            raise ValueError("invalid_request")
+        inputs, settings = task["validate"](inputs, settings)
+        for value in inputs.values():
+            if isinstance(value, dict) and "handle" in value:
+                self.handle_path(value["handle"], scope)
+        return {"protocol": 4, "task": request["task"], "version": task["version"], "scope": scope,
+                "inputs": inputs, "settings": settings, "deadline": deadline}
+
+    def handle_path(self, handle, scope):
+        """The file behind "<job>/<name>": a file output of a completed job of
+        the same bot job (scope) on this worker."""
+        job, _, name = handle.partition("/") if isinstance(handle, str) else ("", "", "")
+        if not JOB.fullmatch(job) or not FILE_NAME.fullmatch(name) or not (self.directory / job / "state.json").exists():
+            raise ValueError("source_unavailable")
+        state = self.load(self.directory / job)
+        f = self.directory / job / "files" / name
+        if (state.get("protocol") != 4 or state.get("scope") != scope or state["stage"] != "complete" or
+                name not in state.get("outputs", {}) or not f.is_file()):
+            raise ValueError("source_unavailable")
+        return f
+
     def poll(self, job, request):
-        settings = protocol_settings(request)
+        if request.get("protocol") == 4:
+            with self.lock:
+                request = self.task_request(request)
+        settings = protocol_settings(request) if request.get("protocol") != 4 else None
         if settings is not None:
             settings["max_mb"] = min(settings["max_mb"], request["max_bytes"] / 1_000_000)
             request = {**request, "settings": settings}
@@ -290,7 +483,7 @@ class Jobs:
             path = self.path(job)
             if (path / "state.json").exists():
                 state = self.load(path)
-                if any(state.get(k) != request.get(k) for k in set(state) | set(request) if k not in ("stage",)):
+                if any(state.get(k) != request.get(k) for k in set(state) | set(request) if k not in ("stage", "outputs", "code")):
                     raise ValueError("immutable_job")
             else:
                 state = {**request, "stage": "queued"}
@@ -306,6 +499,13 @@ class Jobs:
                     threading.Thread(target=self.execute, args=(job,), daemon=True).start()
                 else:
                     raise RuntimeError("busy")
+            if state.get("protocol") == 4:
+                answer = {"stage": state["stage"], "protocol": 4}
+                if state["stage"] == "complete":
+                    answer["outputs"] = state.get("outputs", {})
+                if state["stage"] == "failed":
+                    answer["code"] = state.get("code", "task_failed")
+                return answer
             return {"stage": state["stage"], **({"protocol": state["protocol"]} if state.get("protocol") in (2, 3) else {})}
 
     def source(self, source, scope, job):
@@ -336,27 +536,29 @@ class Jobs:
                         self.save(path, state)
                 # Working files are transient, owner-only; only finished files
                 # are published to the job folder as durable checkpoints.
-                with tempfile.TemporaryDirectory(prefix="video-", dir=self.scratch) as tmp:
+                with tempfile.TemporaryDirectory(prefix="job-", dir=self.scratch) as tmp:
                     folder = Path(tmp)
                     work.folder, work.alive, work.stage = folder, alive, stage
                     deadline = time.monotonic() + max(0, state["deadline"] - time.time())
+                    if state.get("protocol") == 4:
+                        task = self.tasks.get(state["task"])
+                        if task is None or task["version"] != state["version"]:
+                            raise TaskFailed("unknown_task")
+                        tj = TaskJob(self, job, path, state, folder, deadline, stage)
+                        task["run"](tj)
+                        if not alive():
+                            raise LeaseExpired()
+                        with self.lock:
+                            state["outputs"] = tj.outputs
+                        stage("complete")
+                        return
                     original = path / "original.mp4"
                     if state.get("op") == "compress":
                         with self.lock:
                             original = self.source(state["source"], state["scope"], job) / "original.mp4"
                     elif not original.exists():
                         stage("downloading")
-                        originals = folder / "originals"
-                        originals.mkdir()
-                        receipt = folder / "receipt.json"
-                        python = self.root / "research/.oss-venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
-                        run([str(python), str(Path(__file__).with_name("download-source.py")),
-                             "--root", str(self.root), state["url"], "--output", str(originals),
-                             "--receipt", str(receipt), "--timeout", str(max(1, int(deadline-time.monotonic())))], deadline)
-                        files = [Path(f).resolve() for f in json.loads(receipt.read_text())["files"]]
-                        if len(files) != 1 or not files[0].is_relative_to(originals.resolve()) or files[0].suffix.lower() != ".mp4":
-                            raise ValueError("single_video_required")
-                        publish(files[0], original)
+                        publish(fetch_original(self.root, state["url"], folder, deadline), original)
                     if state.get("op") == "download":
                         # The original stays here for a compress job to read.
                         stage("complete")
@@ -372,16 +574,29 @@ class Jobs:
             with self.lock:
                 state["stage"] = "expired" if time.time() >= state["deadline"] else "queued"
                 self.save(path, state)
-        except Exception:
+        except Exception as e:
             if state is None:
                 return
             with self.lock:
                 state["stage"] = "failed"
+                if state.get("protocol") == 4:
+                    state["code"] = e.code if isinstance(e, TaskFailed) else "task_failed"
                 self.save(path, state)
         finally:
             work.__dict__.clear()
             with self.lock:
                 self.active.pop(job, None)
+
+    def output_file(self, job, name):
+        """A file output of a completed protocol-4 job, for the bot to fetch."""
+        with self.lock:
+            path = self.path(job)
+            state = self.load(path)
+            f = path / "files" / name
+            if (state.get("protocol") != 4 or state["stage"] != "complete" or not FILE_NAME.fullmatch(name) or
+                    "handle" not in state.get("outputs", {}).get(name, {}) or not f.is_file()):
+                raise ValueError("result_unavailable")
+            return f
 
     def result(self, job):
         """The verified send copy of a completed compress job."""
@@ -414,8 +629,8 @@ def bind_address(value):
     return str(address)
 
 
-def create_server(root, token, port, output_root=None, bind="127.0.0.1"):
-    jobs = Jobs(root, output_root)
+def create_server(root, token, port, output_root=None, bind="127.0.0.1", tasks=None, slots=1):
+    jobs = Jobs(root, output_root, tasks, slots)
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):
@@ -429,7 +644,8 @@ def create_server(root, token, port, output_root=None, bind="127.0.0.1"):
             try:
                 if self.command == "GET" and self.path == "/download/capabilities":
                     # protocol stays 2 for bots that compare it exactly.
-                    data = b'{"protocol":2,"protocols":[1,2,3]}'
+                    data = json.dumps({"protocol": 2, "protocols": [1, 2, 3, 4],
+                                       "tasks": {n: t["version"] for n, t in sorted(jobs.tasks.items())}}).encode()
                     self.send_response(200)
                     self.send_header("Content-Type", "application/json")
                     self.send_header("Content-Length", str(len(data)))
@@ -438,15 +654,28 @@ def create_server(root, token, port, output_root=None, bind="127.0.0.1"):
                     self.wfile.write(data)
                     return
                 parts = self.path.split("/")
-                if len(parts) not in (4, 5) or parts[:3] != ["", "download", "jobs"]:
+                if len(parts) not in (4, 5, 6) or parts[:3] != ["", "download", "jobs"]:
                     raise ValueError()
                 job = parts[3]
+                if not JOB.fullmatch(job):
+                    raise ValueError()
                 if self.command == "POST" and len(parts) == 4:
                     length = int(self.headers.get("Content-Length", "0"))
-                    if not 0 < length <= 16384:
+                    if not 0 < length <= 1 << 20:
                         raise ValueError()
                     request = json.loads(self.rfile.read(length))
                     if not isinstance(request, dict):
+                        raise ValueError()
+                    if request.get("protocol") == 4:
+                        data = json.dumps(jobs.poll(job, request)).encode()
+                        self.send_response(200)
+                        self.send_header("Content-Type", "application/json")
+                        self.send_header("Content-Length", str(len(data)))
+                        self.send_header("Cache-Control", "no-store")
+                        self.end_headers()
+                        self.wfile.write(data)
+                        return
+                    if length > 16384:
                         raise ValueError()
                     op = request.get("op") if request.get("protocol") == 3 else None
                     if ((op != "compress" and not valid_url(request.get("url"))) or
@@ -465,6 +694,15 @@ def create_server(root, token, port, output_root=None, bind="127.0.0.1"):
                     self.send_header("Cache-Control", "no-store")
                     self.end_headers()
                     self.wfile.write(data)
+                elif self.command == "GET" and len(parts) == 6 and parts[4] == "files":
+                    output = jobs.output_file(job, parts[5])
+                    with output.open("rb") as src:
+                        self.send_response(200)
+                        self.send_header("Content-Type", "application/octet-stream")
+                        self.send_header("Content-Length", str(os.fstat(src.fileno()).st_size))
+                        self.send_header("Cache-Control", "no-store")
+                        self.end_headers()
+                        shutil.copyfileobj(src, self.wfile)
                 elif self.command == "GET" and len(parts) == 5 and parts[4] == "result":
                     result = jobs.result(job)
                     with result.open("rb") as src:
@@ -499,6 +737,8 @@ if __name__ == "__main__":
     parser.add_argument("--output-root", type=Path)
     parser.add_argument("--token-file", type=Path, required=True)
     parser.add_argument("--port", type=int, default=8767)
+    parser.add_argument("--slots", type=int, default=1, choices=range(1, 9),
+                        help="jobs run at once (default 1)")
     parser.add_argument("--bind", default="127.0.0.1",
                         help="127.0.0.1 (default), or this machine's Tailscale 100.x address "
                              "to serve a SmsBot running on another machine")
@@ -519,5 +759,7 @@ if __name__ == "__main__":
     if len(worker_token) < 32:
         raise SystemExit("Invalid worker token file.")
     print(f"Download worker ready on {args.bind}:{args.port}; originals remain in the configured downloads folder.", flush=True)
+    tasks = load_tasks(Path(__file__).parent)
+    print("Tasks: " + ", ".join(f"{n}@{t['version']}" for n, t in sorted(tasks.items())), flush=True)
     create_server(args.root.resolve(), worker_token, args.port, output_root=args.output_root,
-                  bind=args.bind).serve_forever()
+                  bind=args.bind, tasks=tasks, slots=args.slots).serve_forever()

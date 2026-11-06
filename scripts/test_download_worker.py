@@ -181,7 +181,7 @@ class ProtocolV2Tests(unittest.TestCase):
             try:
                 req = urllib.request.Request(base + "/capabilities", headers={"Authorization": "Bearer " + token})
                 with opener.open(req) as response:
-                    self.assertEqual(json.loads(response.read()), {"protocol": 2, "protocols": [1, 2, 3]})
+                    self.assertEqual(json.loads(response.read()), {"protocol": 2, "protocols": [1, 2, 3, 4], "tasks": {"video.compress": 1, "video.download": 1}})
                 value = {"url": "https://douyin.com/synthetic", "max_bytes": 100000,
                          "deadline": int(time.time())+600, "protocol": 2, "settings": {"execution_minutes": 1}}
                 def call(value):
@@ -379,3 +379,155 @@ class ProtocolV3Tests(unittest.TestCase):
                 self.assertEqual(call(self.compress_job, self.compress_request(max_bytes=20000000))[0], 502)
             finally:
                 server.shutdown(); server.server_close(); thread.join(timeout=3)
+
+
+PLUGIN = '''
+def validate(inputs, settings):
+    if set(inputs) - {"text", "file"} or set(settings) - {"repeat"}:
+        raise ValueError("invalid_request")
+    return inputs, {"repeat": int(settings.get("repeat", 1))}
+
+def run(job):
+    if job.inputs.get("text", {}).get("text") == "fail":
+        job.fail("too_long")
+    if job.inputs.get("text", {}).get("text") == "crash":
+        raise RuntimeError("boom")
+    job.stage("echoing")
+    if "file" in job.inputs:
+        data = job.file(job.inputs["file"]).read_bytes()
+    else:
+        data = job.inputs["text"]["text"].encode()
+    out = job.folder / "echo.bin"
+    out.write_bytes(data * job.settings["repeat"])
+    job.output("length", {"type": "number", "text": str(len(data))})
+    job.output_file("echo", out, "file")
+
+TASKS = {"test.echo": {"version": 2, "validate": validate, "run": run}}
+'''
+
+
+class ProtocolV4Tests(unittest.TestCase):
+    scope = "f"*64
+
+    def jobs(self):
+        folder = tempfile.TemporaryDirectory(); self.addCleanup(folder.cleanup)
+        root = Path(folder.name)
+        (root / "task_echo.py").write_text(PLUGIN)
+        return root, worker.Jobs(root, tasks=worker.load_tasks(root))
+
+    def request(self, **extra):
+        return {"protocol": 4, "task": "test.echo", "version": 2, "scope": self.scope,
+                "inputs": {"text": {"type": "text", "text": "hi"}}, "settings": {"repeat": 3},
+                "deadline": int(time.time())+600, **extra}
+
+    def run_job(self, jobs, job, request):
+        with mock.patch.object(worker.threading, "Thread"):
+            first = jobs.poll(job, request)
+        self.assertEqual(first, {"stage": "queued", "protocol": 4})
+        jobs.active[job] = time.monotonic()+30
+        jobs.execute(job)
+        return jobs.poll(job, request)
+
+    def test_plugins_load_and_are_checked(self):
+        root, jobs = self.jobs()
+        self.assertEqual({n: t["version"] for n, t in jobs.tasks.items()},
+                         {"video.download": 1, "video.compress": 1, "test.echo": 2})
+        (root / "task_bad.py").write_text('TASKS = {"Bad Name": {"version": 1, "run": print}}')
+        with self.assertRaises(SystemExit):
+            worker.load_tasks(root)
+        (root / "task_bad.py").write_text('TASKS = {"video.download": {"version": 9, "run": print}}')
+        with self.assertRaises(SystemExit):
+            worker.load_tasks(root)
+
+    def test_task_outputs_values_and_files_and_chains_within_a_scope(self):
+        root, jobs = self.jobs()
+        first, second = "1"*64, "2"*64
+        done = self.run_job(jobs, first, self.request())
+        self.assertEqual(done["stage"], "complete")
+        self.assertEqual(done["outputs"]["length"], {"type": "number", "text": "2"})
+        self.assertEqual(done["outputs"]["echo"], {"type": "file", "handle": first + "/echo", "size": 6})
+        self.assertEqual(jobs.output_file(first, "echo").read_bytes(), b"hihihi")
+        with self.assertRaises(ValueError):
+            jobs.output_file(first, "length")  # a value, not a file
+        # A later job of the same bot job reads the file by handle...
+        chained = self.request(inputs={"file": {"handle": first + "/echo"}}, settings={})
+        done = self.run_job(jobs, second, chained)
+        self.assertEqual(jobs.output_file(second, "echo").read_bytes(), b"hihihi")
+        # ...but another bot job, a missing file or a path can't.
+        for bad in ({"handle": first + "/echo"}, {"handle": first + "/nope"}, {"handle": "../" + first}):
+            req = {**chained, "inputs": {"file": bad}}
+            if bad["handle"] == first + "/echo":
+                req["scope"] = "e"*64
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                jobs.poll("3"*64, req)
+        # A fixed job can't change.
+        with self.assertRaises(ValueError):
+            jobs.poll(first, self.request(settings={"repeat": 4}))
+
+    def test_failures_report_a_code(self):
+        root, jobs = self.jobs()
+        failed = self.run_job(jobs, "4"*64, self.request(inputs={"text": {"type": "text", "text": "fail"}}))
+        self.assertEqual(failed, {"stage": "failed", "protocol": 4, "code": "too_long"})
+        crashed = self.run_job(jobs, "5"*64, self.request(inputs={"text": {"type": "text", "text": "crash"}}))
+        self.assertEqual(crashed, {"stage": "failed", "protocol": 4, "code": "task_failed"})
+        for bad in (self.request(task="test.nope"), self.request(version=1), self.request(scope="x"),
+                    self.request(deadline=int(time.time())+2*worker.MAX_TASK_SECONDS), self.request(settings={"x": 1}),
+                    self.request(extra=1)):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                jobs.poll("6"*64, bad)
+
+    def test_builtin_video_tasks(self):
+        root, jobs = self.jobs()
+        download, compress = "7"*64, "8"*64
+        def run(args, deadline, **kwargs):
+            out = Path(args[args.index("--output")+1]); receipt = Path(args[args.index("--receipt")+1])
+            (out / "video.mp4").write_bytes(b"synthetic-original")
+            receipt.write_text(json.dumps({"files": [str(out / "video.mp4")]}))
+        request = {"protocol": 4, "task": "video.download", "version": 1, "scope": self.scope,
+                   "inputs": {"url": {"type": "url", "text": "https://v.douyin.com/synthetic/"}}, "deadline": int(time.time())+600}
+        with mock.patch.object(worker, "run", side_effect=run):
+            done = self.run_job(jobs, download, request)
+        self.assertEqual(done["outputs"]["original"]["handle"], download + "/original")
+        seen = {}
+        def compress_video(source, destination, limit, deadline, settings):
+            seen.update(source=source.read_bytes(), limit=limit, settings=settings)
+            destination.write_bytes(b"synthetic-send-copy"); return destination
+        request = {"protocol": 4, "task": "video.compress", "version": 1, "scope": self.scope,
+                   "inputs": {"source": {"handle": download + "/original"}},
+                   "settings": {"preset": "fast", "passes": 1, "max_bytes": 500000}, "deadline": int(time.time())+600}
+        with mock.patch.object(worker, "compress", side_effect=compress_video):
+            done = self.run_job(jobs, compress, request)
+        self.assertEqual(seen["source"], b"synthetic-original")
+        self.assertEqual((seen["limit"], seen["settings"]["preset"], seen["settings"]["max_mb"]), (500000, "fast", .5))
+        self.assertEqual(jobs.output_file(compress, "video").read_bytes(), b"synthetic-send-copy")
+        for bad in ({"preset": "fast"}, {"max_bytes": 20000000}, {"max_bytes": 500000, "encoder": "x"}):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                jobs.poll("9"*64, {**request, "settings": bad})
+
+    def test_http_v4(self):
+        root, _ = self.jobs()
+        token = "SYNTHETIC_TOKEN_FOR_OFFLINE_TEST_ONLY"
+        server = worker.create_server(root, token, 0, tasks=worker.load_tasks(root))
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        base = "http://127.0.0.1:%s/download" % server.server_port
+        def call(method, path, value=None):
+            req = urllib.request.Request(base + path, method=method, data=None if value is None else json.dumps(value).encode(),
+                                         headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"})
+            try:
+                with opener.open(req, timeout=5) as response:
+                    return response.status, response.read()
+            except urllib.error.HTTPError as error:
+                return error.code, b""
+        try:
+            status, body = call("GET", "/capabilities")
+            self.assertEqual(json.loads(body)["tasks"], {"test.echo": 2, "video.compress": 1, "video.download": 1})
+            job = "a"*64
+            with mock.patch.object(worker.Jobs, "execute"):
+                status, body = call("POST", "/jobs/" + job, self.request())
+            self.assertEqual((status, json.loads(body)), (200, {"stage": "queued", "protocol": 4}))
+            self.assertEqual(call("GET", "/jobs/" + job + "/files/echo")[0], 502)  # not done yet
+            self.assertEqual(call("POST", "/jobs/" + job, self.request(task="test.nope"))[0], 502)
+        finally:
+            server.shutdown(); server.server_close(); thread.join(timeout=3)

@@ -86,7 +86,9 @@ def main():
         (root / "ffmpeg-build.json").write_text(json.dumps({"url": asset["browser_download_url"], "sha256": digest}))
     worker = root / "worker"
     worker.mkdir(exist_ok=True)
-    for name in ("download-worker.py", "download-source.py"):
+    # The worker, its downloader, and any task plugins (task_*.py) beside it.
+    names = ["download-worker.py", "download-source.py"] + sorted(p.name for p in Path(__file__).parent.glob("task_*.py"))
+    for name in names:
         if Path(__file__).with_name(name).resolve() != (worker / name).resolve():
             shutil.copy2(Path(__file__).with_name(name), worker / name)
     downloads = home / ".local/share/smsbot/downloads"

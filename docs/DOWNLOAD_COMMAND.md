@@ -138,6 +138,67 @@ service log; Activity continues to show the sanitized preparation stage. The
 original deadline, byte ceiling and every dispatcher safety check still apply.
 Network failures yield another poll and do not bypass authorization.
 
+## Worker protocol v4: tasks
+
+The worker is a general task runner. A task has a dotted name and a version;
+video download and compression are the built-in `video.download@1` and
+`video.compress@1`. Capabilities list every task the worker can run:
+
+```json
+{"protocol":2,"protocols":[1,2,3,4],"tasks":{"video.compress":1,"video.download":1}}
+```
+
+A job runs one task. Inputs are typed values; a file input names a file output
+of an earlier job of the same bot job (`scope`) on the same worker:
+
+```json
+{"protocol":4,"task":"video.compress","version":1,"scope":"<bot job>","inputs":{"source":{"handle":"<download job>/original"}},"settings":{"preset":"medium","passes":2,"max_bytes":19990000},"deadline":1800000000}
+```
+
+Polls answer the stage (`queued`, a task's own progress stage such as
+`compressing`, then `complete`, `failed` or `expired`). A complete job also
+returns its outputs, and a failed one a short `code`:
+
+```json
+{"stage":"complete","protocol":4,"outputs":{"video":{"type":"video","handle":"<job>/video","size":18734211}}}
+```
+
+The bot fetches a file output with `GET /download/jobs/<job>/files/<name>`. A job's
+request is fixed once created; its state, inputs, settings and output files stay
+in the job's folder, so a restart resumes it on the next poll. Deadlines may be up
+to a day ahead, and polls keep renewing the 30-second lease. `--slots` (default 1)
+sets how many jobs run at once.
+
+### Writing a task
+
+Put a `task_<anything>.py` file next to `download-worker.py` (the installer and
+`start-worker.ps1` pick it up) with a `TASKS` dict:
+
+```python
+def validate(inputs, settings):
+    # Reject a bad request with ValueError before any job exists; return the
+    # normalized inputs and settings, which become the job's fixed request.
+    if set(inputs) != {"text"}:
+        raise ValueError("invalid_request")
+    return inputs, {}
+
+def run(job):
+    job.stage("counting")                       # progress shown in Activity
+    words = len(job.inputs["text"]["text"].split())
+    job.output("words", {"type": "number", "text": str(words)})
+
+TASKS = {"text.count_words": {"version": 1, "validate": validate, "run": run}}
+```
+
+`run(job)` gets `job.inputs`, `job.settings`, `job.folder` (scratch, removed
+afterwards), `job.path` (the job's own folder, kept across restarts),
+`job.deadline` (a `time.monotonic()` value), `job.stage(name)`, `job.fail(code)`,
+`job.run(args)` (a subprocess stopped at the deadline, on a lost lease or a stall),
+`job.file(value)` (the path of a file input), `job.saved(name)` (a file output
+published before a restart), `job.output(name, value)` and
+`job.output_file(name, path, type)`. Any other exception fails the job with
+`task_failed`. Task names, file names, stages and codes are lowercase identifiers.
+
 ## Worker protocol v3: separate download and compression
 
 The download command is a pipeline: `text.extract_url` → `video.download` →
