@@ -40,9 +40,8 @@ hand, listening only on its Tailscale address:
 `ffprobe` with `h264_nvenc` must be on PATH. The script finds the PC's Tailscale
 address, creates a token file under `%LOCALAPPDATA%\SmsBot` (never printed) and
 keeps files under `Downloads\smsbot`. The worker refuses any address that isn't
-loopback or Tailscale. Using it from SmsBot needs the server-side worker list in
-[the remote worker plan](dev/REMOTE_WORKER_PLAN.md); until then SmsBot accepts
-only its local worker.
+loopback or Tailscale. SmsBot itself still accepts only its local worker; using a
+worker on another PC needs server support that is not built yet.
 
 The Linux worker needs no Windows worker or SSH tunnel. Rednote's source is pinned to
 `106966f552e45eb3af75055810ab51f940f767be`. The installer records resolved Python
