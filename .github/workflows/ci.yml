@@ -45,9 +45,7 @@ jobs:
         run: python3 -B -m unittest discover -s scripts -p test_pair_remote.py
       # The synthetic FFmpeg case skips here (no FFmpeg on the runner); run it locally.
       - name: Download worker fixtures
-        run: |
-          python3 -m pip install --quiet 'cryptography>=45,<47'
-          python3 -B -m unittest discover -s scripts -p test_download_worker.py
+        run: python3 -B -m unittest discover -s scripts -p test_download_worker.py
       - uses: ./.github/actions/setup-go-cached
         with:
           go-version: ${{ env.GO_VERSION }}

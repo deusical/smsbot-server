@@ -1,15 +1,13 @@
-"""Server-local video worker for SmsBot. Only authenticated loopback HTTP.
+"""Video worker for SmsBot: authenticated HTTP on loopback or a Tailscale address.
 
 Uses the existing downloader's anonymous Rednote runner, never a browser vault.
-Subprocess output and HTTP bodies are never logged. Originals and send copies
-are intentionally kept in the owner's download directory.
+Subprocess output and HTTP bodies are never logged. Originals, send copies and
+job state are plain files in the owner's download directory.
 """
 import argparse
-import hashlib
+import ipaddress
 import re
 import tempfile
-from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 import hmac
 import json
 import math
@@ -174,7 +172,7 @@ def compress(source, destination, limit, deadline, encoder=None, settings=None):
     settings = validate_settings(settings or {})
     if configured:
         limit = min(limit, int(round(settings["max_mb"] * 1_000_000)))
-    encoder = encoder or ("libx264" if os.name != "nt" else "av1_nvenc")
+    encoder = encoder or ("libx264" if os.name != "nt" else "h264_nvenc")
     info = probe(source, deadline)
     duration = float(info["format"]["duration"])
     if not math.isfinite(duration) or duration <= 0:
@@ -208,11 +206,11 @@ def compress(source, destination, limit, deadline, encoder=None, settings=None):
                     for log in destination.parent.glob(destination.with_suffix(".pass").name + "*"):
                         log.unlink(missing_ok=True)
             else:
-                run(base + ["-c:v", "av1_nvenc", "-preset", {"veryfast": "p3", "faster": "p4", "fast": "p5", "medium": "p6", "slow": "p7"}[settings["preset"]], "-tune", "hq",
+                run(base + ["-c:v", "h264_nvenc", "-preset", {"veryfast": "p3", "faster": "p4", "fast": "p5", "medium": "p6", "slow": "p7"}[settings["preset"]], "-tune", "hq",
                  "-multipass", "fullres" if settings["passes"] == 2 else "disabled", "-rc", "vbr", "-b:v", str(rate),
                  "-maxrate", str(rate * 2), "-bufsize", str(rate * 4),
                  "-rc-lookahead", "32", "-spatial-aq", "1", "-temporal-aq", "1",
-                 "-pix_fmt", "p010le", "-c:a", "aac", "-b:a", str(audio_rate or 128000),
+                 "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", str(audio_rate or 128000),
                  "-movflags", "+faststart", str(destination)], deadline)
             size = destination.stat().st_size
             if 0 < size <= limit:
@@ -234,53 +232,24 @@ def compress(source, destination, limit, deadline, encoder=None, settings=None):
     return destination
 
 
-def seal_file(source, destination, key):
-    nonce = secrets.token_bytes(12)
-    encrypt = Cipher(algorithms.AES(key), modes.GCM(nonce)).encryptor()
-    encrypt.authenticate_additional_data((destination.parent.name + ":" + destination.name).encode())
-    temporary = destination.with_suffix(".tmp")
-    with source.open("rb") as src, temporary.open("wb") as out:
-        out.write(nonce)
-        while chunk := src.read(1024*1024):
-            out.write(encrypt.update(chunk))
-        out.write(encrypt.finalize())
-        out.write(encrypt.tag)
-        out.flush()
-        os.fsync(out.fileno())
-    temporary.replace(destination)
-
-
-def open_file(source, destination, key):
-    if source.stat().st_size < 28:
-        raise ValueError("invalid_checkpoint")
-    with source.open("rb") as src, destination.open("wb") as out:
-        nonce = src.read(12)
-        src.seek(-16, 2)
-        tag = src.read(16)
-        length = src.tell() - 28
-        src.seek(12)
-        decrypt = Cipher(algorithms.AES(key), modes.GCM(nonce, tag)).decryptor()
-        decrypt.authenticate_additional_data((source.parent.name + ":" + source.name).encode())
-        while length:
-            chunk = src.read(min(length, 1024*1024))
-            if not chunk:
-                raise ValueError("invalid_checkpoint")
-            out.write(decrypt.update(chunk))
-            length -= len(chunk)
-        out.write(decrypt.finalize())
+def publish(source, destination):
+    """Move a finished file into its job folder in one step, so a crash never
+    leaves a partial original or result behind under its final name."""
+    with source.open("r+b") as f:  # Windows can only flush a writable handle.
+        os.fsync(f.fileno())
+    source.replace(destination)
 
 
 class Jobs:
-    """Encrypted checkpoints; one encoder, short authenticated HTTP polls.
+    """Plain-file checkpoints; one encoder, short authenticated HTTP polls.
 
     Polls renew a 30-second lease. Loss of bot consent stops work when the
     lease expires; checkpoints survive. Only the bot can authorize sending.
     """
-    def __init__(self, root, token, output_root=None):
+    def __init__(self, root, output_root=None):
         self.root = root
         self.directory = output_root or root / "downloads" / "smsbot"
         self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
-        self.key = hashlib.sha256(("smsbot-download-jobs:" + token).encode()).digest()
         self.scratch = self.directory / ".scratch"
         # Clean only this worker's resolved scratch directory after a crash.
         if self.scratch.resolve().parent != self.directory.resolve():
@@ -300,18 +269,15 @@ class Jobs:
         return path
 
     def save(self, path, value):
-        nonce = secrets.token_bytes(12)
-        data = nonce + AESGCM(self.key).encrypt(nonce, json.dumps(value).encode(), path.name.encode())
         temporary = path / "state.tmp"
-        with temporary.open("wb") as out:
-            out.write(data)
+        with temporary.open("w", encoding="utf-8") as out:
+            json.dump(value, out)
             out.flush()
             os.fsync(out.fileno())
-        temporary.replace(path / "state.enc")
+        temporary.replace(path / "state.json")
 
     def load(self, path):
-        data = (path / "state.enc").read_bytes()
-        return json.loads(AESGCM(self.key).decrypt(data[:12], data[12:], path.name.encode()))
+        return json.loads((path / "state.json").read_text(encoding="utf-8"))
 
     def poll(self, job, request):
         settings = protocol_settings(request)
@@ -322,7 +288,7 @@ class Jobs:
             if request.get("op") == "compress":
                 self.source(request["source"], request["scope"], job)
             path = self.path(job)
-            if (path / "state.enc").exists():
+            if (path / "state.json").exists():
                 state = self.load(path)
                 if any(state.get(k) != request.get(k) for k in set(state) | set(request) if k not in ("stage",)):
                     raise ValueError("immutable_job")
@@ -344,11 +310,11 @@ class Jobs:
 
     def source(self, source, scope, job):
         """The completed download job of the same bot job that a compress job reads."""
-        if source == job or not (self.directory / source / "state.enc").exists():
+        if source == job or not (self.directory / source / "state.json").exists():
             raise ValueError("source_unavailable")
         state = self.load(self.directory / source)
         if (state.get("op") != "download" or state.get("scope") != scope or state["stage"] != "complete" or
-                time.time() >= state["deadline"] or not (self.directory / source / "original.enc").exists()):
+                time.time() >= state["deadline"] or not (self.directory / source / "original.mp4").exists()):
             raise ValueError("source_unavailable")
         return self.directory / source
 
@@ -368,21 +334,17 @@ class Jobs:
                     with self.lock:
                         state["stage"] = value
                         self.save(path, state)
-                # Working files are transient, owner-only; only encrypted files
-                # are published as durable checkpoints.
+                # Working files are transient, owner-only; only finished files
+                # are published to the job folder as durable checkpoints.
                 with tempfile.TemporaryDirectory(prefix="video-", dir=self.scratch) as tmp:
                     folder = Path(tmp)
                     work.folder, work.alive, work.stage = folder, alive, stage
                     deadline = time.monotonic() + max(0, state["deadline"] - time.time())
-                    original = folder / "original.mp4"
-                    checkpoint = path / "original.enc"
+                    original = path / "original.mp4"
                     if state.get("op") == "compress":
                         with self.lock:
-                            source = self.source(state["source"], state["scope"], job)
-                        open_file(source / "original.enc", original, self.key)
-                    elif checkpoint.exists():
-                        open_file(checkpoint, original, self.key)
-                    else:
+                            original = self.source(state["source"], state["scope"], job) / "original.mp4"
+                    elif not original.exists():
                         stage("downloading")
                         originals = folder / "originals"
                         originals.mkdir()
@@ -394,8 +356,7 @@ class Jobs:
                         files = [Path(f).resolve() for f in json.loads(receipt.read_text())["files"]]
                         if len(files) != 1 or not files[0].is_relative_to(originals.resolve()) or files[0].suffix.lower() != ".mp4":
                             raise ValueError("single_video_required")
-                        files[0].replace(original)
-                        seal_file(original, checkpoint, self.key)
+                        publish(files[0], original)
                     if state.get("op") == "download":
                         # The original stays here for a compress job to read.
                         stage("complete")
@@ -405,7 +366,7 @@ class Jobs:
                     output = compress(original, folder / "send.mp4", state["max_bytes"], deadline, **options)
                     if not alive():
                         raise LeaseExpired()
-                    seal_file(output, path / "result.enc", self.key)
+                    publish(output, path / "result.mp4")
                     stage("complete")
         except (TimeoutError, LeaseExpired):
             with self.lock:
@@ -422,19 +383,39 @@ class Jobs:
             with self.lock:
                 self.active.pop(job, None)
 
-    def result(self, job, destination):
+    def result(self, job):
+        """The verified send copy of a completed compress job."""
         with self.lock:
             path = self.path(job)
             state = self.load(path)
             if state["stage"] != "complete" or time.time() >= state["deadline"] or state.get("op") == "download":
                 raise ValueError("result_unavailable")
-            open_file(path / "result.enc", destination, self.key)
-            if not 0 < destination.stat().st_size <= state["max_bytes"]:
+            result = path / "result.mp4"
+            if not 0 < result.stat().st_size <= state["max_bytes"]:
                 raise ValueError("size_limit")
+            return result
 
 
-def create_server(root, token, port, output_root=None):
-    jobs = Jobs(root, token, output_root)
+TAILNET = ipaddress.ip_network("100.64.0.0/10")
+
+
+def bind_address(value):
+    """Loopback, or this machine's Tailscale address: never a LAN or every interface.
+
+    Tailscale encrypts and authenticates the link to the SmsBot server; plain
+    HTTP on a LAN would expose the bearer token to anything on the network.
+    """
+    try:
+        address = ipaddress.ip_address(value)
+    except ValueError:
+        raise ValueError("bind address must be an IP address")
+    if address.version != 4 or not (address.is_loopback or address in TAILNET):
+        raise ValueError("bind address must be 127.0.0.1 or a Tailscale 100.x address")
+    return str(address)
+
+
+def create_server(root, token, port, output_root=None, bind="127.0.0.1"):
+    jobs = Jobs(root, output_root)
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):
@@ -485,16 +466,14 @@ def create_server(root, token, port, output_root=None):
                     self.end_headers()
                     self.wfile.write(data)
                 elif self.command == "GET" and len(parts) == 5 and parts[4] == "result":
-                    with tempfile.TemporaryDirectory(prefix="result-", dir=jobs.scratch) as tmp:
-                        destination = Path(tmp) / "result.mp4"
-                        jobs.result(job, destination)
+                    result = jobs.result(job)
+                    with result.open("rb") as src:
                         self.send_response(200)
                         self.send_header("Content-Type", "video/mp4")
-                        self.send_header("Content-Length", str(destination.stat().st_size))
+                        self.send_header("Content-Length", str(os.fstat(src.fileno()).st_size))
                         self.send_header("Cache-Control", "no-store")
                         self.end_headers()
-                        with destination.open("rb") as src:
-                            shutil.copyfileobj(src, self.wfile)
+                        shutil.copyfileobj(src, self.wfile)
                 else:
                     self.send_error(404)
             except (BrokenPipeError, ConnectionResetError):
@@ -511,7 +490,7 @@ def create_server(root, token, port, output_root=None):
             # Old synchronous helpers must be upgraded with the bot.
             self.send_error(410, "async_download_required")
 
-    return ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    return ThreadingHTTPServer((bind_address(bind), port), Handler)
 
 
 if __name__ == "__main__":
@@ -520,7 +499,14 @@ if __name__ == "__main__":
     parser.add_argument("--output-root", type=Path)
     parser.add_argument("--token-file", type=Path, required=True)
     parser.add_argument("--port", type=int, default=8767)
+    parser.add_argument("--bind", default="127.0.0.1",
+                        help="127.0.0.1 (default), or this machine's Tailscale 100.x address "
+                             "to serve a SmsBot running on another machine")
     args = parser.parse_args()
+    try:
+        bind_address(args.bind)
+    except ValueError as e:
+        raise SystemExit(str(e))
     if not (args.root / "research/rednote_downloader/app/downloader.py").is_file():
         raise SystemExit("Existing Rednote engine not found.")
     if not args.token_file.exists():
@@ -532,5 +518,6 @@ if __name__ == "__main__":
     worker_token = args.token_file.read_text(encoding="ascii").strip()
     if len(worker_token) < 32:
         raise SystemExit("Invalid worker token file.")
-    print("Download worker ready on loopback; originals remain in the configured downloads folder.", flush=True)
-    create_server(args.root.resolve(), worker_token, args.port, output_root=args.output_root).serve_forever()
+    print(f"Download worker ready on {args.bind}:{args.port}; originals remain in the configured downloads folder.", flush=True)
+    create_server(args.root.resolve(), worker_token, args.port, output_root=args.output_root,
+                  bind=args.bind).serve_forever()

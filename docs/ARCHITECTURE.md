@@ -101,8 +101,9 @@ sends twice.
   fresh input. Dispatch makes short idempotent requests to a token-authenticated
   loopback worker and defers its next poll in `job_work`, letting other sends run.
   One background upload lane also yields dispatch; its results are committed only
-  by dispatch after repeating safety checks. Activity exposes sanitized stages. The single-slot worker encrypts
-  originals, verified MP4 results and metadata; checkpoints survive worker restart.
+  by dispatch after repeating safety checks. Activity exposes sanitized stages. The single-slot worker keeps
+  originals, verified MP4 results and job state as plain files in the owner-only
+  downloads folder; checkpoints survive worker restart.
   Progress watchdogs and a renewable lease stop stalled or unauthorized work.
   Every normal enrollment, pause, attachment and send check still applies, with
   the execution deadline replacing post-acceptance freshness for these jobs.

@@ -23,13 +23,29 @@ It needs no sudo. It installs:
 - Engine and virtual environment: `~/.local/lib/smsbot/downloader/research`.
 - Worker scripts: `~/.local/lib/smsbot/downloader/worker`.
 - FFmpeg/FFprobe: `~/.local/lib/smsbot/downloader/bin`.
-- Encrypted originals, send copies and state: `~/.local/share/smsbot/downloads/<random job>`.
+- Originals, send copies and job state (plain files): `~/.local/share/smsbot/downloads/<random job>`.
 - Worker token: `~/.local/share/smsbot/vault/download-worker-token`.
 - User service: `smsbot-downloader.service`, listening only on `127.0.0.1:8767`.
 
-No Windows worker or SSH tunnel is required. Rednote's source is pinned to
+### A worker on another PC
+
+A Windows PC with an NVIDIA GPU on the same Tailscale network can run a worker by
+hand, listening only on its Tailscale address:
+
+```powershell
+.\scripts\start-worker.ps1 -Root D:\Project\douyin-downloader
+```
+
+`-Root` holds `research\rednote_downloader` and `research\.oss-venv`; `ffmpeg` and
+`ffprobe` with `h264_nvenc` must be on PATH. The script finds the PC's Tailscale
+address, creates a token file under `%LOCALAPPDATA%\SmsBot` (never printed) and
+keeps files under `Downloads\smsbot`. The worker refuses any address that isn't
+loopback or Tailscale. SmsBot itself still accepts only its local worker; using a
+worker on another PC needs server support that is not built yet.
+
+The Linux worker needs no Windows worker or SSH tunnel. Rednote's source is pinned to
 `106966f552e45eb3af75055810ab51f940f767be`. The installer records resolved Python
-dependencies (including checkpoint encryption with `cryptography`) and FFmpeg's URL/checksum and installs bundled Chromium. It does not
+dependencies and FFmpeg's URL/checksum and installs bundled Chromium. It does not
 restart or reconfigure SmsBot itself.
 
 After deploying the new command code, append these flags to SmsBot's existing
@@ -78,7 +94,8 @@ Linux uses H.264 (`libx264`), AAC and one thread per CPU core; the worker servic
 runs at `Nice=10` with a CPU quota of all cores but one, so encoding yields to
 the rest of the host and never takes every core. One pass omits
 the pass log and first analysis pass; two passes preserve the existing analysis
-and encoding flow. Windows uses the existing AV1 NVENC/HQ path. Presets map to
+and encoding flow. Windows uses H.264 NVENC/HQ (`h264_nvenc`, `yuv420p`), which
+every phone plays; it replaced AV1, which older phones can't decode. Presets map to
 NVENC p3/p4/p5/p6/p7 respectively; one pass maps to `-multipass disabled`, two
 to `-multipass fullres` inside a single NVENC invocation. Attempts and
 `copy_if_fits` apply equally to CPU and NVENC. The UI cost line is a worst-case
@@ -108,7 +125,7 @@ before creating a worker job. `POST /download/jobs/<job>` then includes:
 ```
 
 The worker independently validates all enums and bounds, including the deadline
-window and byte ceiling. The encrypted checkpoint stores all effective settings;
+window and byte ceiling. The job's checkpoint stores all effective settings;
 a restart uses those settings, even if code defaults changed. Changed settings
 for an existing job are rejected. The host's single preparation slot and CPU
 thread count stay outside commands. Legacy protocol requests remain supported.
@@ -134,7 +151,7 @@ it exactly. Job IDs are `sha256(<bot job> + NUL + <step id>)`; `scope` is the bo
 {"protocol":3,"op":"compress","scope":"<bot job>","source":"<download job>","max_bytes":19990000,"deadline":1800000000,"settings":{"preset":"medium","passes":2,"max_attempts":3,"copy_if_fits":true,"max_mb":19.99,"execution_minutes":15}}
 ```
 
-A download job keeps only the encrypted original and has no result. A compress
+A download job keeps only the original and has no result. A compress
 job is refused unless its `source` is a completed download job of the same
 `scope`, so one bot job can never read another's original; only job IDs cross
 the boundary, never paths. The compress job checkpoints its effective settings
@@ -154,15 +171,19 @@ background upload runs independently of command dispatch, under the remaining
 execution deadline. Only dispatch can commit its result after repeating every
 safety check, persist outbound intent, and invoke the send pipeline.
 
-The worker has one preparation slot. It checkpoints the downloaded original and
-verified send copy with AES-GCM encryption; URL and job metadata are encrypted
-too. A worker restart resumes an active job from its saved original on the next
+The worker has one preparation slot. It checkpoints the downloaded original
+(`original.mp4`), the verified send copy (`result.mp4`) and the job's URL, settings
+and stage (`state.json`) as plain files in the job's folder, by the owner's choice:
+the videos come from public links, and the folder is owner-only. Finished files
+are moved into place in one step, so a crash never leaves a partial file under its
+final name. A worker restart resumes an active job from its saved original on the next
 bot poll. A complete result can be fetched again without repeating preparation.
 Encoding interrupted before verification restarts encoding from the original.
 Transient plaintext processing files live in an owner-only scratch directory,
 are removed after use, and are cleared on worker startup after a crash. Retained
-checkpoints are under the job ID directory; keep the worker token to read them.
-The token is outside source and also derives the checkpoint encryption key.
+checkpoints are under the job ID directory. The token is outside source. Job
+folders written by older, encrypting workers (`*.enc` files) are no longer read;
+a poll for such a job starts it again, and the old folders can be deleted.
 
 Every poll renews a 30-second preparation lease. If the bot pauses, cancels, loses
 consent, or stops polling, the lease expires and stops running preparation.

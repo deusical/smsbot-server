@@ -57,7 +57,7 @@ def main():
     if not python.exists():
         checked([sys.executable, "-m", "venv", "--without-pip", str(python.parent.parent)])
     print("Checking isolated Python dependencies...", flush=True)
-    checked([sys.executable, "-m", "pip", "--python", str(python), "install", "-r", str(source / "requirements.txt"), "cryptography>=45,<47"])
+    checked([sys.executable, "-m", "pip", "--python", str(python), "install", "-r", str(source / "requirements.txt")])
     print("Installing full Chromium (headless shell is not used)...", flush=True)
     checked([str(python), "-m", "playwright", "install", "chromium", "--no-shell"])
     print("Checking FFmpeg and writing local service...", flush=True)
