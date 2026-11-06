@@ -50,21 +50,32 @@ request at a time.
 
 | Setting | Default | Allowed values |
 | --- | --- | --- |
-| `preset` | `slow` | `veryfast`, `faster`, `fast`, `medium`, `slow` |
+| `preset` | `medium` | `veryfast`, `faster`, `fast`, `medium`, `slow` |
 | `passes` | 2 | 1-2 |
 | `max_attempts` | 3 | 1-3 |
 | `copy_if_fits` | true | boolean |
 | `max_mb` | 19.99 | 0.1-19.99 decimal MB, further capped by host attachment limits |
 | `execution_minutes` | 15 | 1-60 |
 
-Defaults preserve slow two-pass encoding, three attempts, copying an original
-that fits, and the existing 15-minute lifetime. The byte target is now explicitly
+Defaults are `medium` two-pass encoding, three attempts, copying an original
+that fits, and a 15-minute lifetime. `medium` replaced `slow` as the default:
+measured on the Acer host with real 1080p and 4K clips at the 19.99 MB target,
+it scored within 0.3 VMAF of `slow` in about two thirds of the time, while
+`veryfast` lost 3 to 4.5 VMAF. Commands saved earlier keep the preset they
+were saved with. The byte target is now explicitly
 19.99 decimal MB, capped by both the per-file and combined attachment limits.
 The default host limit is 10 MiB per file. Configured and effective values are
 shown separately when the host lowers the command target. No encoder name,
 thread count, path or shell flag is accepted in command settings.
 
-Linux uses H.264 (`libx264`), AAC and two host-controlled threads. One pass omits
+Encoded copies are at most 1920 pixels on their long side, with the aspect ratio
+kept (portrait stays portrait), even dimensions, and no upscaling. At a send-sized
+byte budget a 4K encode spends bits on detail a phone screen doesn't show: scaling
+a 4K clip to 1080p scored slightly higher and encoded about four times faster.
+Copied originals are not scaled.
+
+Linux uses H.264 (`libx264`), AAC and one thread per CPU core; the worker service
+runs at `Nice=10`, so encoding yields to the rest of the host. One pass omits
 the pass log and first analysis pass; two passes preserve the existing analysis
 and encoding flow. Windows uses the existing AV1 NVENC/HQ path. Presets map to
 NVENC p3/p4/p5/p6/p7 respectively; one pass maps to `-multipass disabled`, two
@@ -92,7 +103,7 @@ The bot probes authenticated `GET /download/capabilities` for `{"protocol":2}`
 before creating a worker job. `POST /download/jobs/<job>` then includes:
 
 ```json
-{"protocol":2,"url":"https://douyin.com/example","max_bytes":19990000,"deadline":1800000000,"settings":{"preset":"slow","passes":2,"max_attempts":3,"copy_if_fits":true,"max_mb":19.99,"execution_minutes":15}}
+{"protocol":2,"url":"https://douyin.com/example","max_bytes":19990000,"deadline":1800000000,"settings":{"preset":"medium","passes":2,"max_attempts":3,"copy_if_fits":true,"max_mb":19.99,"execution_minutes":15}}
 ```
 
 The worker independently validates all enums and bounds, including the deadline
@@ -119,7 +130,7 @@ it exactly. Job IDs are `sha256(<bot job> + NUL + <step id>)`; `scope` is the bo
 
 ```json
 {"protocol":3,"op":"download","scope":"<bot job>","url":"https://douyin.com/example","deadline":1800000000}
-{"protocol":3,"op":"compress","scope":"<bot job>","source":"<download job>","max_bytes":19990000,"deadline":1800000000,"settings":{"preset":"slow","passes":2,"max_attempts":3,"copy_if_fits":true,"max_mb":19.99,"execution_minutes":15}}
+{"protocol":3,"op":"compress","scope":"<bot job>","source":"<download job>","max_bytes":19990000,"deadline":1800000000,"settings":{"preset":"medium","passes":2,"max_attempts":3,"copy_if_fits":true,"max_mb":19.99,"execution_minutes":15}}
 ```
 
 A download job keeps only the encrypted original and has no result. A compress

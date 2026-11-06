@@ -1760,7 +1760,7 @@ components:
               type: boolean
             generation:
               $ref: '#/components/schemas/Generation'
-            preset: {type: string, enum: [veryfast, faster, fast, medium, slow], default: slow}
+            preset: {type: string, enum: [veryfast, faster, fast, medium, slow], default: medium}
             passes: {type: integer, minimum: 1, maximum: 2, default: 2}
             max_attempts: {type: integer, minimum: 1, maximum: 3, default: 3}
             copy_if_fits: {type: boolean, default: true}
@@ -1840,7 +1840,7 @@ components:
           type: object
           additionalProperties: false
           properties:
-            preset: {type: string, enum: [veryfast, faster, fast, medium, slow], default: slow}
+            preset: {type: string, enum: [veryfast, faster, fast, medium, slow], default: medium}
             passes: {type: integer, minimum: 1, maximum: 2, default: 2}
             max_attempts: {type: integer, minimum: 1, maximum: 3, default: 3}
             copy_if_fits: {type: boolean, default: true}

@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import os
 import time
 import sys
 import shutil
@@ -129,6 +130,22 @@ class WorkerBoundaryTests(unittest.TestCase):
             finally:
                 worker.work.__dict__.clear()
 
+    @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "FFmpeg tools required")
+    def test_encoded_copies_cap_the_long_side_and_keep_the_shape(self):
+        # Landscape and portrait sources above the cap shrink to it; a small
+        # odd-sized one is never upscaled, only rounded to even dimensions.
+        for size, want in (("2400x1350", (1920, 1080)), ("1350x2400", (1080, 1920)), ("641x361", (640, 360))):
+            with self.subTest(size=size), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                source = root / "source.mp4"
+                worker.run(["ffmpeg", "-nostdin", "-v", "error", "-y", "-f", "lavfi", "-i",
+                            f"testsrc2=size={size}:rate=10", "-t", "1", "-c:v", "libx264", "-preset", "ultrafast",
+                            "-crf", "8", "-pix_fmt", "yuv444p", str(source)], time.monotonic()+60)
+                output = worker.compress(source, root / "send.mp4", source.stat().st_size // 2, time.monotonic()+120,
+                                         encoder="libx264", settings={"passes": 1, "copy_if_fits": False})
+                stream = next(s for s in worker.probe(output, time.monotonic()+30)["streams"] if s["codec_type"] == "video")
+                self.assertEqual((stream["width"], stream["height"]), want)
+
     def test_url_allowlist(self):
         for url in ("https://douyin.com.attacker.test/video/1", "http://douyin.com/", "https://user:pass@douyin.com/", "https://douyin.com:443/", "file:///C:/private"):
             self.assertFalse(worker.valid_url(url))
@@ -226,8 +243,9 @@ class ProtocolV2Tests(unittest.TestCase):
                     self.assertEqual(len(encodes), passes if encoder == "libx264" else 1)
                     for args in encodes:
                         self.assertEqual(args[args.index("-preset")+1], preset if encoder == "libx264" else nvenc)
+                        self.assertEqual(args[args.index("-vf")+1], worker.SCALE)
                         if encoder == "libx264":
-                            self.assertEqual(args[args.index("-threads")+1], "2")
+                            self.assertEqual(args[args.index("-threads")+1], str(os.cpu_count() or 2))
                             self.assertEqual("-pass" in args, passes == 2)
                         else:
                             self.assertEqual(args[args.index("-multipass")+1], "fullres" if passes == 2 else "disabled")
