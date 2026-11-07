@@ -177,3 +177,18 @@
     animation: none;
   }
 }
+
+.refresh-bar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-bottom: 10px;
+  font-size: 0.85rem;
+}
+.refresh-bar button svg { margin-right: 4px; }
+.refresh-bar button:disabled svg { animation: refresh-spin 1s linear infinite; }
+@keyframes refresh-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .refresh-bar button:disabled svg { animation: none; }
+}

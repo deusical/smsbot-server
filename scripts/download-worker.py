@@ -28,6 +28,8 @@ from urllib.parse import urlsplit
 
 LIMIT = 20_000_000 - 1
 work = threading.local()
+# How long a download may show no new bytes before it counts as stuck.
+DOWNLOAD_STALL_SECONDS = 300
 
 
 DEFAULT_SETTINGS = {"preset": "medium", "passes": 2, "max_attempts": 3,
@@ -242,9 +244,15 @@ def fetch_original(root, url, folder, deadline):
     originals.mkdir()
     receipt = folder / "receipt.json"
     python = root / "research/.oss-venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
-    run([str(python), str(Path(__file__).with_name("download-source.py")),
-         "--root", str(root), url, "--output", str(originals),
-         "--receipt", str(receipt), "--timeout", str(max(1, int(deadline-time.monotonic())))], deadline)
+    # Opening the page and finding the video writes nothing for a while; only
+    # the file transfer itself shows growth, so allow a longer quiet spell.
+    work.stall_seconds = DOWNLOAD_STALL_SECONDS
+    try:
+        run([str(python), str(Path(__file__).with_name("download-source.py")),
+             "--root", str(root), url, "--output", str(originals),
+             "--receipt", str(receipt), "--timeout", str(max(1, int(deadline-time.monotonic())))], deadline)
+    finally:
+        work.__dict__.pop("stall_seconds", None)
     files = [Path(f).resolve() for f in json.loads(receipt.read_text())["files"]]
     if len(files) != 1 or not files[0].is_relative_to(originals.resolve()) or files[0].suffix.lower() != ".mp4":
         raise ValueError("single_video_required")
@@ -272,6 +280,19 @@ class TaskFailed(Exception):
     def __init__(self, code):
         super().__init__(code)
         self.code = code if isinstance(code, str) and CODE.fullmatch(code) else "task_failed"
+
+
+# Why a subprocess was stopped, kept as the job's failure code so the dashboard
+# can say more than "task failed". Nothing from the subprocess itself is kept.
+STOP_CODES = {"progress_stalled", "process_failed"}
+
+
+def failure_code(error):
+    if isinstance(error, TaskFailed):
+        return error.code
+    if isinstance(error, RuntimeError) and error.args and error.args[0] in STOP_CODES:
+        return error.args[0]
+    return "task_failed"
 
 
 class TaskJob:
@@ -580,7 +601,7 @@ class Jobs:
             with self.lock:
                 state["stage"] = "failed"
                 if state.get("protocol") == 4:
-                    state["code"] = e.code if isinstance(e, TaskFailed) else "task_failed"
+                    state["code"] = failure_code(e)
                 self.save(path, state)
         finally:
             work.__dict__.clear()

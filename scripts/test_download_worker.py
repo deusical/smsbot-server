@@ -476,6 +476,17 @@ class ProtocolV4Tests(unittest.TestCase):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
                 jobs.poll("6"*64, bad)
 
+    def test_a_stopped_download_reports_why(self):
+        root, jobs = self.jobs()
+        request = {"protocol": 4, "task": "video.download", "version": 1, "scope": self.scope,
+                   "inputs": {"url": {"type": "url", "text": "https://v.douyin.com/synthetic/"}}, "deadline": int(time.time())+600}
+        for n, (error, code) in enumerate(((RuntimeError("progress_stalled"), "progress_stalled"),
+                                           (RuntimeError("process_failed"), "process_failed"),
+                                           (RuntimeError("secret detail from a subprocess"), "task_failed"))):
+            with self.subTest(code=code), mock.patch.object(worker, "run", side_effect=error):
+                failed = self.run_job(jobs, str(n+1)*64, request)
+            self.assertEqual(failed["code"], code)
+
     def test_builtin_video_tasks(self):
         root, jobs = self.jobs()
         download, compress = "7"*64, "8"*64

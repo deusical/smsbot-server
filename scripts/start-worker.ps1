@@ -13,7 +13,7 @@ The server needs the same token: copy the token file to the server once and
 point its worker configuration at it. The token is never printed.
 
 .EXAMPLE
-.\scripts\start-worker.ps1 -Root D:\Project\douyin-downloader
+.\scripts\start-worker.ps1 -Root C:\Project\douyin-downloader
 #>
 param(
     # Folder holding research\rednote_downloader and research\.oss-venv.

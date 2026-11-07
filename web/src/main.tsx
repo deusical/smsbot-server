@@ -14,6 +14,7 @@ import { usePendingFollower } from "./lib/pendingSends";
 import { Icon } from "./components/Icon";
 import { SettingsPage } from "./pages/Settings";
 import { Switch } from "./components/ui";
+import { clearResources } from "./lib/resource";
 import { useWorkspace } from "./lib/workspace";
 import {
   notificationRoute,
@@ -48,6 +49,7 @@ function App() {
   // Expiry and sign-out end the session, clear its data and return home. Finding
   // no session when the app opens keeps the address, so signing in lands on it.
   const endSession = useCallback(() => {
+    clearResources();
     session.end();
     dashboardReset.current();
     if (!wasSignedIn.current) return;

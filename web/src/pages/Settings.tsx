@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { LoadingState } from "../components/Loading";
+import { RefreshBar } from "../components/RefreshBar";
 import { ReplacePhone } from "../components/ReplacePhone";
 import { NotificationSettings } from "../components/NotificationSettings";
 import { WorkerSettings } from "../components/WorkerSettings";
@@ -87,6 +88,14 @@ export function SettingsPage({
         </button>
       </nav>
       <div className="settings-body">
+        {["models", "providers", "limits"].includes(section) && (
+          <RefreshBar
+            updatedAt={workspace.loadedAt}
+            refreshing={workspace.refreshing}
+            error={workspace.loadError}
+            onRefresh={workspace.reload}
+          />
+        )}
         {section === "models" && <ModelsSection {...shared} />}
         {section === "providers" && <ProvidersSection {...shared} />}
         {section === "limits" && <LimitsSection {...shared} />}
