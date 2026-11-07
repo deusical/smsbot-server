@@ -33,7 +33,7 @@ A Windows PC with an NVIDIA GPU on the same Tailscale network can run a worker b
 hand, listening only on its Tailscale address:
 
 ```powershell
-.\scripts\start-worker.ps1 -Root D:\Project\douyin-downloader
+.\scripts\start-worker.ps1 -Root C:\Project\douyin-downloader
 ```
 
 `-Root` holds `research\rednote_downloader` and `research\.oss-venv`; `ffmpeg` and

@@ -30,9 +30,19 @@ export function refusalText(reason?: string): string {
   return reasons[reason] ?? reason.replaceAll("_", " ");
 }
 
+// Why a worker task stopped, in words, keyed by the codes the worker reports.
+const taskCodes: Record<string, string> = {
+  task_failed: "The worker couldn't finish this task",
+  progress_stalled:
+    "The worker stopped getting data from the site for too long and gave up. Try the link again",
+  process_failed: "The program that downloads or compresses the video failed",
+  worker_unauthorized: "The worker refused the server's token",
+  task_rejected: "The worker didn't accept this task",
+};
+
 /** A job's result for display: the refusal in words when known, else its code. */
 export function jobResult(job: Pick<Job, "code" | "reason">): string {
   const why = refusalText(job.reason);
   if (why) return `Not sent: ${why}.`;
-  return job.code ? job.code.replaceAll("_", " ") : "";
+  return job.code ? (taskCodes[job.code] ?? job.code.replaceAll("_", " ")) : "";
 }

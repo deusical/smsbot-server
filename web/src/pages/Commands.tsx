@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { LoadingState } from "../components/Loading";
+import { RefreshBar } from "../components/RefreshBar";
 import {
   api,
   ApiError,
@@ -198,6 +199,12 @@ export function CommandsPage({
     );
   return (
     <div className="page-stack">
+      <RefreshBar
+        updatedAt={workspace.loadedAt}
+        refreshing={workspace.refreshing}
+        error={workspace.loadError}
+        onRefresh={workspace.reload}
+      />
       <div className="page-tabs">
         <Segmented
           label="Command sections"

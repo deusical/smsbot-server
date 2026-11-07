@@ -1,6 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, ApiError } from "../lib/api";
 import { LoadingState } from "./Loading";
+import { RefreshBar } from "./RefreshBar";
+import { useResource } from "../lib/resource";
 import { Field, Group, Notice, StatusPill } from "./ui";
 
 export type WorkerEntry = { name: string; endpoint: string; token_file?: string };
@@ -34,6 +36,15 @@ export function parseRoute(text: string): string[] {
     .filter(Boolean);
 }
 
+function loadProblem(e: unknown): string {
+  if (e instanceof ApiError && e.status === 503) return "Workers are not available on this server.";
+  return "Could not reach the server.";
+}
+
+const draftsOf = (v: WorkersView): Draft[] => v.config.workers.map((w) => ({ ...w, token: "" }));
+const routesOf = (v: WorkersView): Record<string, string> =>
+  Object.fromEntries(Object.entries(v.config.routes ?? {}).map(([t, ws]) => [t, ws.join(", ")]));
+
 function problem(e: unknown): string {
   if (e instanceof ApiError && e.detail.detail) return e.detail.detail;
   if (e instanceof ApiError && e.status === 503) return "Workers are not available on this server.";
@@ -46,22 +57,35 @@ function problem(e: unknown): string {
  * reached over Tailscale. The same settings live in workers.json on the server.
  */
 export function WorkerSettings() {
-  const [view, setView] = useState<WorkersView | null>(null);
-  const [drafts, setDrafts] = useState<Draft[]>([]);
-  const [routes, setRoutes] = useState<Record<string, string>>({});
+  // What was loaded last time shows at once; a fresh copy replaces it quietly.
+  const resource = useResource<WorkersView>("workers", () => api<WorkersView>("/workers"), loadProblem);
+  const view = resource.data;
+  const [drafts, setDrafts] = useState<Draft[]>(() => (view ? draftsOf(view) : []));
+  const [routes, setRoutes] = useState<Record<string, string>>(() => (view ? routesOf(view) : {}));
   const [error, setError] = useState("");
   const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState(false);
-
-  function load(v: WorkersView) {
-    setView(v);
-    setDrafts(v.config.workers.map((w) => ({ ...w, token: "" })));
-    setRoutes(Object.fromEntries(Object.entries(v.config.routes ?? {}).map(([t, ws]) => [t, ws.join(", ")])));
-  }
+  // The saved settings the drafts were last copied from, and whether the user
+  // has edited since. A refresh never overwrites edits in progress.
+  const synced = useRef<string | null>(view ? JSON.stringify(view.config) : null);
+  const touched = useRef(false);
 
   useEffect(() => {
-    api<WorkersView>("/workers").then(load, (e) => setError(problem(e)));
-  }, []);
+    if (!view) return;
+    const signature = JSON.stringify(view.config);
+    if (synced.current === signature || (synced.current !== null && touched.current)) return;
+    synced.current = signature;
+    setDrafts(draftsOf(view));
+    setRoutes(routesOf(view));
+  }, [view]);
+
+  function load(v: WorkersView) {
+    touched.current = false;
+    synced.current = JSON.stringify(v.config);
+    resource.set(v);
+    setDrafts(draftsOf(v));
+    setRoutes(routesOf(v));
+  }
 
   async function save() {
     setBusy(true);
@@ -91,16 +115,30 @@ export function WorkerSettings() {
   }
 
   function edit(i: number, patch: Partial<Draft>) {
+    touched.current = true;
     setDrafts((ds) => ds.map((d, j) => (j === i ? { ...d, ...patch } : d)));
     setSaved(false);
   }
 
-  if (!view) return error ? <Notice tone="bad" role="alert">{error}</Notice> : <LoadingState what="workers" />;
+  if (!view)
+    return (
+      <LoadingState
+        what="workers"
+        error={resource.error}
+        onRetry={() => void resource.refresh()}
+      />
+    );
   const status = (name: string) => view.status.find((s) => s.name === name);
   const tasks = knownTasks(view);
 
   return (
     <>
+      <RefreshBar
+        updatedAt={resource.updatedAt}
+        refreshing={resource.refreshing}
+        error={resource.error}
+        onRefresh={() => void resource.refresh()}
+      />
       <Group
         title="Workers"
         description="Workers run tasks for commands, such as downloading and compressing a video. A task goes to the first worker in order that runs it and is online. Workers on other machines are reached over Tailscale; start one with scripts/start-worker.ps1."
@@ -133,13 +171,19 @@ export function WorkerSettings() {
                   </Field>
                 )}
               </div>
-              <button type="button" className="danger" onClick={() => setDrafts((ds) => ds.filter((_, j) => j !== i))}>
+              <button type="button" className="danger" onClick={() => {
+                  touched.current = true;
+                  setDrafts((ds) => ds.filter((_, j) => j !== i));
+                }}>
                 Remove
               </button>
             </li>
           ))}
         </ul>
-        <button type="button" onClick={() => setDrafts((ds) => [...ds, { name: "", endpoint: "", token: "" }])}>
+        <button type="button" onClick={() => {
+            touched.current = true;
+            setDrafts((ds) => [...ds, { name: "", endpoint: "", token: "" }]);
+          }}>
           Add worker
         </button>
       </Group>
@@ -157,6 +201,7 @@ export function WorkerSettings() {
                   value={routes[t] ?? ""}
                   placeholder="Any worker"
                   onChange={(e) => {
+                    touched.current = true;
                     setRoutes((r) => ({ ...r, [t]: e.target.value }));
                     setSaved(false);
                   }}

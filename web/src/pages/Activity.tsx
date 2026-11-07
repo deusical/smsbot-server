@@ -21,6 +21,13 @@ const stateLabels: Record<string, string> = {
   cancelled: "Cancelled",
 };
 const stateLabel = (s: string) => stateLabels[s] ?? s.replaceAll("_", " ");
+// A request stays "queued" while a worker prepares its files, so say it is
+// working once the worker has begun, and keep "Queued" for real waiting.
+const working = (j: Job) =>
+  j.state === "queued" &&
+  !!j.preparation_stage &&
+  j.preparation_stage !== "waiting_worker";
+const jobState = (j: Job) => (working(j) ? "Working" : stateLabel(j.state));
 function stateTone(s: string) {
   if (s === "awaiting_approval") return "wait";
   if (pendingStates.includes(s) || s === "submitting") return "busy";
@@ -83,7 +90,7 @@ export function ActivityFeed({
                   {timeAgo(j.created_at)}
                 </time>
                 <span className="status">
-                  {stateLabel(j.state)}
+                  {jobState(j)}
                   {current(j)
                     ? ` · ${moduleTitle(modules, current(j)!.module)}`
                     : ""}

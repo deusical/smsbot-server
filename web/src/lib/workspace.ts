@@ -8,6 +8,21 @@ import {
   type InboxSettings,
   type Model,
 } from "./api";
+import { peekResource, storeResource } from "./resource";
+
+/** What one settings load returns, kept so a refresh starts with it. */
+type Loaded = {
+  config: Configuration;
+  models: Model[];
+  openRouterConfigured: boolean;
+  compatible: CompatibleProviderStatus;
+};
+const keptKey = "workspace";
+/** Keeps a saved configuration, so a refresh after saving starts with it. */
+function keepConfig(config: Configuration) {
+  const kept = peekResource<Loaded>(keptKey);
+  if (kept) storeResource<Loaded>(keptKey, { ...kept.data, config });
+}
 
 export const defaultGeneration: Generation = {
   reasoning: "default",
@@ -106,6 +121,8 @@ export function useWorkspace(
       configured: false,
     }),
     [loadError, setLoadError] = useState(""),
+    [loadedAt, setLoadedAt] = useState<number | null>(null),
+    [refreshing, setRefreshing] = useState(false),
     [saveError, setSaveError] = useState(""),
     [saving, setSaving] = useState(false);
   const [inboxDraft, setInboxDraft] = useState<InboxSettings | null>(
@@ -125,6 +142,18 @@ export function useWorkspace(
     }
     let active = true;
     let retry: ReturnType<typeof setTimeout> | undefined;
+    // Show what was loaded before right away, while a fresh copy loads. It is
+    // kept in memory only, never in browser storage.
+    const kept = peekResource<Loaded>(keptKey);
+    if (kept && !savedRef.current) {
+      setSaved(kept.data.config);
+      setConfig(kept.data.config);
+      setModels(kept.data.models);
+      setOpenRouterConfigured(kept.data.openRouterConfigured);
+      setCompatible(kept.data.compatible);
+      setLoadedAt(kept.at);
+    }
+    setRefreshing(true);
     Promise.all([
       api<Configuration>("/config"),
       api<Model[]>("/models"),
@@ -144,6 +173,11 @@ export function useWorkspace(
         setOpenRouterConfigured(k.configured);
         setCompatible(p);
         setLoadError("");
+        setLoadedAt(Date.now());
+        storeResource<Loaded>(
+          keptKey,
+          { config: value, models: m ?? [], openRouterConfigured: k.configured, compatible: p },
+        );
       })
       .catch((e) => {
         if (!active) return;
@@ -151,6 +185,9 @@ export function useWorkspace(
         // Keep trying after a failure. The wait starts when the attempt ends, so
         // a slow answer is never thrown away by the next attempt.
         retry = setTimeout(() => setLoads((n) => n + 1), 8000);
+      })
+      .finally(() => {
+        if (active) setRefreshing(false);
       });
     return () => {
       active = false;
@@ -187,6 +224,7 @@ export function useWorkspace(
     setLoads((n) => n + 1);
   }
   function replaceSaved(value: Configuration) {
+    keepConfig(value);
     setSaved(value);
     setConfig(value);
   }
@@ -206,6 +244,7 @@ export function useWorkspace(
         const value = normalize(
           await api<Configuration>("/config", "PUT", config),
         );
+        keepConfig(value);
         setSaved(value);
         setConfig(value);
       }
@@ -237,6 +276,8 @@ export function useWorkspace(
     compatible,
     setCompatible,
     loadError,
+    loadedAt,
+    refreshing,
     saveError,
     saving,
     configDirty,

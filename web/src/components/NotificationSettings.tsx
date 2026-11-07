@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api, ApiError, type Conversation } from "../lib/api";
+import { useResource } from "../lib/resource";
+import { RefreshBar } from "./RefreshBar";
 import {
   deviceName,
   disableThisDevice,
@@ -30,6 +32,8 @@ function problem(e: unknown): string {
   return "Notifications could not be updated. Try again.";
 }
 
+const couldNotLoad = () => "Could not load notification settings.";
+
 function summary(p: NotificationPrefs): string {
   const messages = { all: "All messages", bot_on: "Bot-on messages", chosen: `${p.conversations.length} chosen conversations`, off: "No messages" }[p.messages];
   const alerts = [p.approvals && "approvals", p.problems && "problems", p.connection && "connection"].filter(Boolean);
@@ -41,34 +45,31 @@ function summary(p: NotificationPrefs): string {
  * its own settings, editable from any signed-in device.
  */
 export function NotificationSettings({ conversations, notify }: { conversations: Conversation[]; notify: (text: string) => void }) {
-  const [state, setState] = useState<NotificationState | null>(null);
-  const [mine, setMine] = useState<string | null>(null);
+  // The last answers show at once and a fresh copy loads quietly behind them.
+  const list = useResource<NotificationState>("notifications", () => api<NotificationState>("/notifications"), couldNotLoad);
+  const here = useResource<{ id: string | null }>(
+    "notifications-this-device",
+    async () => ({ id: (await thisDevice())?.id ?? null }),
+    couldNotLoad,
+  );
+  const state = list.data;
+  const mine = here.data ? here.data.id : null;
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [name, setName] = useState(deviceName);
   const [editing, setEditing] = useState("");
   const unsupported = pushUnsupported();
 
-  const load = async () => {
-    const next = await api<NotificationState>("/notifications");
-    setState(next);
-    return next;
+  const setMine = (id: string | null) => here.set({ id });
+  const load = () => list.refresh();
+  // Looking up this device tells the server it is still here, so list again after.
+  const refreshAll = async () => {
+    await here.refresh();
+    if (!pushUnsupported()) await list.refresh();
   };
   useEffect(() => {
-    let disposed = false;
-    (async () => {
-      try {
-        await load();
-        const here = await thisDevice().catch(() => null);
-        if (!disposed) setMine(here?.id ?? null);
-        if (here && !disposed) await load();
-      } catch {
-        if (!disposed) setError("Could not load notification settings.");
-      }
-    })();
-    return () => {
-      disposed = true;
-    };
+    void refreshAll();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function run(fn: () => Promise<unknown>) {
@@ -86,10 +87,21 @@ export function NotificationSettings({ conversations, notify }: { conversations:
   const devices = state?.devices ?? [];
   const current = devices.find((d) => d.id === mine);
   const others = devices.filter((d) => d.id !== mine);
-  const replace = (d: NotificationDevice) => setState((s) => (s ? { ...s, devices: s.devices.map((x) => (x.id === d.id ? d : x)) } : s));
+  const replace = (d: NotificationDevice) => {
+    if (state) list.set({ ...state, devices: state.devices.map((x) => (x.id === d.id ? d : x)) });
+  };
+  const checking = !unsupported && !!state && !here.data;
 
   return (
     <>
+      {state && !unsupported && (
+        <RefreshBar
+          updatedAt={list.updatedAt}
+          refreshing={list.refreshing || here.refreshing}
+          error={list.error || here.error}
+          onRefresh={() => void refreshAll()}
+        />
+      )}
       <Group
         title="This device"
         description="Get notified here even when SmsBot is closed. Each device has its own settings."
@@ -103,7 +115,15 @@ export function NotificationSettings({ conversations, notify }: { conversations:
         {unsupported ? (
           <Notice role="status">{unsupported}</Notice>
         ) : !state ? (
-          <LoadingState what="notification settings" />
+          <LoadingState what="notification settings" error={list.error} onRetry={() => void refreshAll()} />
+        ) : checking ? (
+          here.error ? (
+            <Notice tone="bad" role="alert">
+              Couldn’t check whether this device is on. <button type="button" className="small ghost" onClick={() => void here.refresh()}>Try again</button>
+            </Notice>
+          ) : (
+            <LoadingState what="this device" />
+          )
         ) : current ? (
           <>
             <DevicePrefs key={current.id} device={current} conversations={conversations} onSaved={replace} onError={setError} />

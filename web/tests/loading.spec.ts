@@ -99,3 +99,52 @@ test("the conversation list does not claim there are none while it is still load
   release();
   await expect(page.getByText("Loading conversations…")).toHaveCount(0);
 });
+
+const workers = {
+  config: { workers: [{ name: "lenovo", endpoint: "http://100.64.0.1:8767/download" }] },
+  status: [{ name: "lenovo", endpoint: "http://100.64.0.1:8767/download", token: true, online: true, tasks: {} }],
+  local: false,
+};
+
+test("a tab you already opened shows what it had at once while a slow refresh runs", async ({ page }) => {
+  let calls = 0;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  await page.route("**/api/v1/workers", async (route) => {
+    calls++;
+    if (calls > 1) await gate;
+    await route.fulfill({ json: workers });
+  });
+  await signIn(page);
+  await nav(page, "Settings").click();
+  const tabs = page.getByRole("navigation", { name: "Settings sections" });
+  await tabs.getByRole("button", { name: "Workers" }).click();
+  await expect(page.getByText("lenovo").first()).toBeVisible();
+  await expect(page.getByText("Updated just now")).toBeVisible();
+  // Leave and come back: the workers are there immediately, not a loading screen.
+  await tabs.getByRole("button", { name: "Limits & quiet hours" }).click();
+  await tabs.getByRole("button", { name: "Workers" }).click();
+  await expect(page.getByText("lenovo").first()).toBeVisible();
+  await expect(page.getByText("Loading workers…")).toHaveCount(0);
+  await expect(page.getByText("Updating…")).toBeVisible();
+  release();
+  await expect(page.getByText("Updated just now")).toBeVisible();
+});
+
+test("a failed refresh keeps the workers on screen and Refresh tries again", async ({ page }) => {
+  let failing = false;
+  await page.route("**/api/v1/workers", async (route) =>
+    failing ? route.fulfill({ status: 500, json: { error: "boom" } }) : route.fulfill({ json: workers }),
+  );
+  await signIn(page);
+  await nav(page, "Settings").click();
+  await page.getByRole("navigation", { name: "Settings sections" }).getByRole("button", { name: "Workers" }).click();
+  await expect(page.getByText("Updated just now")).toBeVisible();
+  failing = true;
+  await page.getByRole("button", { name: "Refresh" }).click();
+  await expect(page.getByText(/Couldn’t update\. Showing what was loaded/)).toBeVisible();
+  await expect(page.getByText("lenovo").first()).toBeVisible();
+  failing = false;
+  await page.getByRole("button", { name: "Refresh" }).click();
+  await expect(page.getByText("Updated just now")).toBeVisible();
+});
