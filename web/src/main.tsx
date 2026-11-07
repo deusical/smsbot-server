@@ -391,6 +391,8 @@ function App() {
             canLoadMore={!!inbox?.enabled && !!dashboard.conversationCursor}
             onLoadMore={loadMoreConversations}
             onResume={() => void togglePaused()}
+            loaded={lastUpdated !== null}
+            loadError={error}
           />
         )}
         {page === "Commands" && (
@@ -406,6 +408,8 @@ function App() {
             conversations={conversations}
             busy={busy}
             act={act}
+            loaded={lastUpdated !== null}
+            loadError={error}
           />
         )}
         {page === "Archive" && <ArchivePage conversations={conversations} inbox={inbox} state={state} workspace={workspace} />}

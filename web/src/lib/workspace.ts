@@ -124,6 +124,7 @@ export function useWorkspace(
       return;
     }
     let active = true;
+    let retry: ReturnType<typeof setTimeout> | undefined;
     Promise.all([
       api<Configuration>("/config"),
       api<Model[]>("/models"),
@@ -144,9 +145,16 @@ export function useWorkspace(
         setCompatible(p);
         setLoadError("");
       })
-      .catch((e) => active && setLoadError(failure(e)));
+      .catch((e) => {
+        if (!active) return;
+        setLoadError(failure(e));
+        // Keep trying after a failure. The wait starts when the attempt ends, so
+        // a slow answer is never thrown away by the next attempt.
+        retry = setTimeout(() => setLoads((n) => n + 1), 8000);
+      });
     return () => {
       active = false;
+      clearTimeout(retry);
     };
   }, [signedIn, loads]);
   // Polling may update the saved inbox version, but must not erase an open draft.

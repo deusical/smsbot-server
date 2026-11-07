@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { LoadingState } from "../components/Loading";
 import {
   api,
   ApiError,
@@ -140,13 +141,7 @@ export function CommandsPage({
   if (!config)
     return (
       <div className="panel loading-panel">
-        {workspace.loadError ? (
-          <p role="alert" className="inline-alert">
-            {workspace.loadError}
-          </p>
-        ) : (
-          <p className="muted">Loading commands…</p>
-        )}
+        <LoadingState what="commands" error={workspace.loadError} onRetry={workspace.reload} rows={4} />
       </div>
     );
   const commands = config.commands;

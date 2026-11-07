@@ -11,6 +11,7 @@ import { ConversationHistory } from "./ConversationHistory";
 import { formatListTime, sortConversations, useSeen } from "../lib/conversationOrder";
 import { useTyping } from "../lib/typing";
 import { Icon } from "../components/Icon";
+import { LoadingState } from "../components/Loading";
 import { Avatar, Segmented, Switch } from "../components/ui";
 
 type Filter = "all" | "enrolled" | "available";
@@ -26,7 +27,12 @@ export function ConversationsPage({
   canLoadMore,
   onLoadMore,
   onResume,
+  loaded = true,
+  loadError = "",
 }: {
+  /** False until the first read of the conversation list has finished. */
+  loaded?: boolean;
+  loadError?: string;
   conversations: Conversation[];
   inbox: InboxSettings | null;
   state: State | null;
@@ -207,7 +213,8 @@ export function ConversationsPage({
             </li>
           ))}
         </ul>
-        {!visible.length && (
+        {!visible.length && !loaded && <LoadingState what="conversations" error={loadError} rows={6} />}
+        {!visible.length && loaded && (
           <div className="empty small">
             <strong>
               {conversations.length
