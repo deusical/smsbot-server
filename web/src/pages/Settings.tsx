@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
+import { LoadingState } from "../components/Loading";
 import { ReplacePhone } from "../components/ReplacePhone";
 import { NotificationSettings } from "../components/NotificationSettings";
 import { WorkerSettings } from "../components/WorkerSettings";
@@ -55,14 +56,9 @@ export function SettingsPage({
   if (!config)
     return (
       <div className="panel loading-panel">
-        {!state?.fixture && <ReplacePhone />}
-        {workspace.loadError ? (
-          <p role="alert" className="inline-alert">
-            {workspace.loadError}
-          </p>
-        ) : (
-          <p className="muted">Loading settings…</p>
-        )}
+        <LoadingState what="settings" error={workspace.loadError} onRetry={workspace.reload} rows={4} />
+        {/* Pairing a phone takes the service into maintenance, when settings can't load. */}
+        {workspace.loadError && !state?.fixture && <ReplacePhone />}
       </div>
     );
   const shared = { workspace, busy, act, notify };

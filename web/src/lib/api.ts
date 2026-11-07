@@ -332,8 +332,16 @@ export async function api<T>(
     body: body === undefined ? undefined : JSON.stringify(body),
     cache: "no-store",
   });
-  const data = await response.json();
+  // A reply that isn't JSON, such as a proxy's error page, still becomes an ApiError.
+  let data: any;
+  let parsed = true;
+  try {
+    data = await response.json();
+  } catch {
+    parsed = false;
+  }
   if (!response.ok)
-    throw new ApiError(response.status, data.error ?? "request_failed", data);
+    throw new ApiError(response.status, (parsed && data?.error) || "request_failed", parsed && data ? data : {});
+  if (!parsed) throw new ApiError(response.status, "invalid_response");
   return data as T;
 }

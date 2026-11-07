@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, ApiError } from "../lib/api";
+import { LoadingState } from "./Loading";
 import { Field, Group, Notice, StatusPill } from "./ui";
 
 export type WorkerEntry = { name: string; endpoint: string; token_file?: string };
@@ -94,7 +95,7 @@ export function WorkerSettings() {
     setSaved(false);
   }
 
-  if (!view) return error ? <Notice tone="bad" role="alert">{error}</Notice> : <p className="muted">Loading workers...</p>;
+  if (!view) return error ? <Notice tone="bad" role="alert">{error}</Notice> : <LoadingState what="workers" />;
   const status = (name: string) => view.status.find((s) => s.name === name);
   const tasks = knownTasks(view);
 

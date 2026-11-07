@@ -113,3 +113,67 @@
   color: var(--rose);
 }
 
+
+/* loading and load-failure states */
+.load-state {
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  padding: 28px 20px;
+  text-align: center;
+  color: var(--muted);
+}
+.load-state[data-phase="quiet"] .load-line,
+.load-state[data-phase="quiet"] .skeleton-rows {
+  opacity: 0;
+}
+.load-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  transition: opacity 0.2s;
+}
+.load-slow {
+  max-width: 44ch;
+  font-size: 12.5px;
+}
+.load-error {
+  color: var(--text);
+}
+.load-error strong {
+  font-family: var(--display);
+  font-size: 15px;
+  color: var(--rose);
+}
+.load-error p {
+  max-width: 44ch;
+  font-size: 13px;
+  color: var(--muted);
+}
+.skeleton-rows {
+  display: grid;
+  gap: 10px;
+  width: min(100%, 520px);
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.skeleton-row {
+  height: 14px;
+  width: var(--w, 70%);
+  border-radius: 7px;
+  background: linear-gradient(90deg, var(--line) 25%, var(--line-strong) 50%, var(--line) 75%);
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.4s ease-in-out infinite;
+}
+@keyframes skeleton-shimmer {
+  to {
+    background-position: -200% 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .skeleton-row {
+    animation: none;
+  }
+}

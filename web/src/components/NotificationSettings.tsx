@@ -11,6 +11,7 @@ import {
   type NotificationState,
 } from "../lib/notifications";
 import { Icon } from "./Icon";
+import { LoadingState } from "./Loading";
 import { Field, Group, Notice, Segmented, StatusPill, Switch } from "./ui";
 
 const messageModes: { value: NotificationPrefs["messages"]; label: string }[] = [
@@ -102,7 +103,7 @@ export function NotificationSettings({ conversations, notify }: { conversations:
         {unsupported ? (
           <Notice role="status">{unsupported}</Notice>
         ) : !state ? (
-          <p className="muted">Loading…</p>
+          <LoadingState what="notification settings" />
         ) : current ? (
           <>
             <DevicePrefs key={current.id} device={current} conversations={conversations} onSaved={replace} onError={setError} />

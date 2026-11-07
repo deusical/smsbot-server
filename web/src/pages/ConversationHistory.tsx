@@ -3,6 +3,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "re
 import { MessageActions } from "../components/MessageActions";
 import { Composer } from "../components/Composer";
 import { Icon } from "../components/Icon";
+import { LoadingState } from "../components/Loading";
 import { MessageBubble, PendingBubble } from "../components/MessageBubble";
 import { Avatar } from "../components/ui";
 import {
@@ -335,9 +336,10 @@ export function ConversationHistory({ conversation, state, busy, act, inbox, enr
             {loading ? "Loading messages…" : olderNotice}
           </p>
         )}
-        {messages.length === 0 && (
+        {messages.length === 0 && loading && <LoadingState what="messages" rows={4} />}
+        {messages.length === 0 && !loading && (
           <div className="thread-empty">
-            <strong>{loading ? "Loading messages…" : query ? `No messages match “${query}”.` : "No messages here yet."}</strong>
+            <strong>{query ? `No messages match “${query}”.` : "No messages here yet."}</strong>
             {query ? (
               <button
                 type="button"
@@ -350,12 +352,10 @@ export function ConversationHistory({ conversation, state, busy, act, inbox, enr
                 Clear search
               </button>
             ) : (
-              !loading && (
-                <small>
-                  New texts appear as they arrive
-                  {!inbox?.enabled && state?.capabilities.includes("history_import") ? ". Use the history button to import older ones." : "."}
-                </small>
-              )
+              <small>
+                New texts appear as they arrive
+                {!inbox?.enabled && state?.capabilities.includes("history_import") ? ". Use the history button to import older ones." : "."}
+              </small>
             )}
           </div>
         )}

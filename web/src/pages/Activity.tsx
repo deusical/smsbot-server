@@ -2,6 +2,7 @@ import { useState } from "react";
 import { api, type Conversation, type Job } from "../lib/api";
 import { moduleTitle, useModules } from "../lib/modules";
 import { Icon } from "../components/Icon";
+import { LoadingState } from "../components/Loading";
 import { Segmented, timeAgo } from "../components/ui";
 import { jobResult } from "../lib/sendReasons";
 
@@ -243,11 +244,16 @@ export function ActivityPage({
   conversations,
   busy,
   act,
+  loaded = true,
+  loadError = "",
 }: {
   jobs: Job[];
   conversations: Conversation[];
   busy: boolean;
   act: (fn: () => Promise<unknown>) => Promise<void>;
+  /** False until the first read of Activity has finished. */
+  loaded?: boolean;
+  loadError?: string;
 }) {
   const [filter, setFilter] = useState<Filter>("all"),
     [search, setSearch] = useState("");
@@ -331,7 +337,9 @@ export function ActivityPage({
             />
           </label>
         </div>
-        {shown.length ? (
+        {!loaded && !jobs.length ? (
+          <LoadingState what="activity" error={loadError} rows={5} />
+        ) : shown.length ? (
           <ActivityFeed
             jobs={shown}
             conversations={conversations}

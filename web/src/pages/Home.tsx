@@ -2,6 +2,7 @@ import type { Conversation, InboxSettings, Job, State } from "../lib/api";
 import { connectionSummary } from "../lib/connection";
 import { ActivityFeed } from "./Activity";
 import { Icon } from "../components/Icon";
+import { useLoadPhase } from "../components/Loading";
 import { Avatar } from "../components/ui";
 
 type Destination = "Conversations" | "Commands" | "Activity";
@@ -29,6 +30,7 @@ export function Home({
   navigate: (p: Destination) => void;
   openConversation: (id: string) => void;
 }) {
+  const connecting = useLoadPhase(!state);
   const enrolled = conversations.filter((c) => c.enrolled);
   const live = !!state && !state.paused;
   const manual = inbox?.enabled && inbox.automatic_replies === false;
@@ -43,7 +45,9 @@ export function Home({
         ? "Manual"
         : "Live";
   const summary = !state
-    ? "Checking the server…"
+    ? connecting === "slow"
+      ? "Still trying to reach the server. It keeps trying, so you don’t need to reload."
+      : "Checking the server…"
     : !state.transport_ready
       ? connectionSummary(state)
       : state.paused
