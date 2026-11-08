@@ -98,3 +98,38 @@ test("the owner can make a group share one AI conversation", async ({ page }) =>
     await putInbox(page, original);
   }
 });
+
+test("the owner can switch several people, or everyone, without waiting between switches", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await login(page);
+  const original = await getInbox(page);
+  await putInbox(page, { ...original, enabled: true, scope: "all", groups: true, load_older: false });
+  await setMembers(page, ["demo-member-a", "demo-member-b"]);
+  const enrolled = async () =>
+    ((await (await page.request.get("/api/v1/inbox/conversations")).json()).conversations as { id: string; enrolled_members?: string[] }[]).find((c) => c.id === "demo-group")?.enrolled_members ?? [];
+  try {
+    await page.reload();
+    await openGroup(page);
+    const chip = page.locator(".group-bot").getByRole("button").first();
+    await chip.click();
+    // Labels show on a phone too.
+    await expect(page.locator(".group-bot-panel").getByText("Bot replies for Alex")).toBeVisible();
+    const alex = page.getByRole("switch", { name: "Bot replies for Alex" });
+    const sam = page.getByRole("switch", { name: "Bot replies for Sam" });
+    const everyone = page.getByRole("switch", { name: "Bot replies for everyone" });
+    await alex.click();
+    await expect(sam).toBeEnabled();
+    await sam.click();
+    await expect(everyone).toBeChecked();
+    await expect(chip).toHaveText("Bot on for Alex, Sam");
+    await expect.poll(async () => (await enrolled()).sort()).toEqual(["demo-member-a", "demo-member-b"]);
+    await everyone.click();
+    await expect(alex).not.toBeChecked();
+    await expect(sam).not.toBeChecked();
+    await expect(chip).toHaveText("Bot off");
+    await expect.poll(enrolled).toEqual([]);
+  } finally {
+    await page.request.delete("/api/v1/enrollment/demo-group", { headers });
+    await putInbox(page, original);
+  }
+});
