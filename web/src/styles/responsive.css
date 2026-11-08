@@ -136,6 +136,10 @@
   .thread-tools .switch-row .switch-text {
     display: none;
   }
+  /* The group bot panel opens from the thread tools but needs its labels. */
+  .thread-tools .group-bot-panel .switch-row .switch-text {
+    display: grid;
+  }
   .bubble {
     max-width: 86%;
   }
