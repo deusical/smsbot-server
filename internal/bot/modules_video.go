@@ -279,6 +279,7 @@ func taskDownload(r *runCtx, s *cmdflow.Step, st sourceState) (cmdflow.Outcome, 
 		status, err = e.Tasks.Poll(ctx, &st.Task, workerJob(r.j, s.ID), r.j.ID, deadline, TaskRequest{
 			Task: "video.download", Version: 1, Inputs: map[string]TaskValue{"url": {Type: "url", Text: st.URL}}, Settings: map[string]any{},
 		})
+		st.Task.Stage = status.Stage
 		return status.Stage, err
 	})
 	if serr := s.Save(st); err == nil {
@@ -309,6 +310,7 @@ func taskCompress(r *runCtx, s *cmdflow.Step, st compressState, source cmdflow.V
 		status, err := e.Tasks.Poll(ctx, &st.Task, workerJob(r.j, s.ID), r.j.ID, deadline, TaskRequest{
 			Task: "video.compress", Version: 1, Inputs: map[string]TaskValue{"source": {Handle: source.Handle}}, Settings: settings,
 		})
+		st.Task.Stage = status.Stage
 		if err != nil || status.Stage != "complete" {
 			return status.Stage, err
 		}

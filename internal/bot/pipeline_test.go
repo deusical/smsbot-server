@@ -341,6 +341,7 @@ func TestCustomVideoWithCaption(t *testing.T) {
 		t.Fatal(ok, err)
 	}
 	_, p, _ := e.Store.JobPlan(store.Hash(m.ConversationID + "\x00no-link"))
+	p = present(p)
 	if p.Reply != noVideoLink || !p.Pipeline.Halted() || p.ExecutionDeadline != "" {
 		t.Fatal("missing link not answered", p.Reply)
 	}

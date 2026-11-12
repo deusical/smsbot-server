@@ -28,7 +28,7 @@ and can answer commands you define (fixed text or AI) in the conversations you c
 
 ## Quick start (offline demo)
 
-You need Go 1.27.3 and Node.js 24.15 or newer in the 24.x series. On Windows:
+You need Go 1.27.4 and Node.js 24.15 or newer in the 24.x series. On Windows:
 
 ```powershell
 .\scripts\build.ps1  # builds and tests everything

@@ -42,6 +42,18 @@ func threadAccept(t *testing.T, e *Engine, m transport.Incoming) store.Plan {
 	if err != nil {
 		t.Fatal(err)
 	}
+	return present(p)
+}
+
+// present copies the run's reply and AI turn onto the plan fields tests
+// already assert. The stored plan itself does not keep those copies.
+func present(p store.Plan) store.Plan {
+	if st, ok := planTurn(p); ok {
+		p.Model, p.Input, p.Instructions, p.Generation, p.File, p.Context = st.Model, st.Input, st.Instructions, st.Generation, st.File, st.History
+	}
+	if t := planReply(p); t != "" {
+		p.Reply = t
+	}
 	return p
 }
 func threadEcho(t *testing.T, e *Engine, m transport.Incoming, wire string) {
@@ -348,6 +360,7 @@ func TestAskOwnerFollowupsRequireCurrentPermissionAndAreDeduplicated(t *testing.
 	}
 	id := store.Hash("demo-chat\x00owner-child")
 	_, p, err := e.Store.JobPlan(id)
+	p = present(p)
 	if err != nil || !p.Owner || len(p.Context) != 2 {
 		t.Fatal("owner context invalid", err)
 	}
@@ -420,6 +433,7 @@ func TestAskConcurrentSiblingPromptsSnapshotSameParent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	b, c = present(b), present(c)
 	if b.Thread.Parent != c.Thread.Parent || !reflect.DeepEqual(b.Context, c.Context) || len(b.Context) != 2 {
 		t.Fatal("concurrent branches mixed context")
 	}
@@ -471,6 +485,7 @@ func TestOwnerThreadFollowupMatchingAIAnswerUsesExactProvenance(t *testing.T) {
 			}
 			if want {
 				_, p, err := e.Store.JobPlan(store.Hash("demo-chat\x00" + m.ID))
+				p = present(p)
 				if err != nil || !p.Owner || p.Thread == nil || len(p.Context) != 2 || p.Input != "AI: hello" {
 					t.Fatal("followup lost its context", err)
 				}

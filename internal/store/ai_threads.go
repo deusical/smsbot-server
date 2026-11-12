@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 )
 
@@ -170,6 +171,46 @@ func (s *Store) AIHistory(parent AIParent, conv, peer, command string, epoch int
 	}
 	return turns, omitted, nil
 }
+
+// acceptedPrompt is the question sealed with a new AI exchange. It is the
+// turn step's saved input, which is fixed when the command is accepted.
+func acceptedPrompt(p Plan) string {
+	if p.Pipeline == nil {
+		return p.Input
+	}
+	steps := p.Pipeline.Steps
+	id, first := "", ""
+	for _, s := range steps {
+		if s.Module != "ai.chat" {
+			continue
+		}
+		if first == "" {
+			first = s.ID
+		}
+		from, _, _ := strings.Cut(s.Inputs["context"], ".")
+		for _, c := range steps {
+			if c.ID == from && (c.Module == "context.rolling" || c.Module == "context.thread") {
+				id = s.ID
+			}
+		}
+	}
+	if id == "" {
+		id = first
+	}
+	for _, s := range steps {
+		if s.ID != id || len(s.State) == 0 {
+			continue
+		}
+		var st struct {
+			Input string `json:"input"`
+		}
+		if json.Unmarshal(s.State, &st) == nil && st.Input != "" {
+			return st.Input
+		}
+	}
+	return p.Input
+}
+
 func (s *Store) enqueueAIExchange(tx *sql.Tx, id, conv, command string, p Plan, now time.Time) error {
 	if p.Thread.Parent == "" {
 		epoch, err := memoryEpochOf(tx, conv, p.ThreadOwner())
@@ -198,7 +239,7 @@ func (s *Store) enqueueAIExchange(tx *sql.Tx, id, conv, command string, p Plan, 
 			return ErrAIThreadUnavailable
 		}
 	}
-	payload, err := s.sealAI("ai-exchange:"+id, aiExchange{Prompt: p.Input, Owner: p.Owner})
+	payload, err := s.sealAI("ai-exchange:"+id, aiExchange{Prompt: acceptedPrompt(p), Owner: p.Owner})
 	if err != nil {
 		return err
 	}

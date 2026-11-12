@@ -157,8 +157,10 @@ row is their total, so the daily budget is checked before every request and an
 unknown cost on any step blocks further requests. Several AI steps, like a
 long-running step, give the job the pipeline's execution deadline instead of
 the two-minute window. The job's conversation turn is the AI step that reads a
-conversation (else the first AI step); only it sets the plan's AI request
-fields.
+conversation (else the first AI step). That step's saved state is the question,
+the model and the earlier turns. The plan keeps the host facts the run does not:
+who may receive the reply, the memory epoch, the thread's wire id, approval and
+the execution deadline.
 
 | Module | Does |
 |---|---|
@@ -175,10 +177,11 @@ Acceptance snapshots the pipeline into the encrypted plan and runs the steps
 whose inputs are known then (`immediate` modules); a step can decline the command
 (no usable model) or end it early with a reply (no link, unreadable file,
 expired thread). Dispatch runs the remaining steps in order; long steps yield
-through `job_work`. Modules never send. The reply step's inputs are an intent
-that fills the plan's text and attachments only at dispatch, after every
-earlier step; uploads, every pre-send check, the persisted outbound intent and
-uncertain-send handling stay in the dispatcher. A queued job whose stored run
+through `job_work`. Modules never send. The reply text stays on the run. A file is taken onto the
+plan so its bytes can be sealed in `job_files`, apart from the run. At send, the
+dispatcher reads the text from the run, freezes it for that one submission, and
+then runs the uploads, the pre-send checks and the persisted outbound intent.
+Uncertain-send handling stays in the dispatcher. A queued job whose stored run
 this version can't read (one saved by an older version before an upgrade)
 fails once with `pipeline_unavailable` and sends nothing.
 

@@ -14,8 +14,8 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 env:
-  GO_VERSION: '1.27.3'
-  GOTOOLCHAIN: go1.27.3
+  GO_VERSION: '1.27.4'
+  GOTOOLCHAIN: go1.27.4
 jobs:
   # Frontend checks, Go lint and audits, download worker fixtures.
   build:
