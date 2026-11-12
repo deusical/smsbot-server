@@ -22,10 +22,9 @@ type Engine struct {
 	Store      *store.Store
 	Transport  transport.Transport
 	Provider   Provider
-	Downloader DownloadProvider
-	// Tasks runs steps' tasks on the configured workers; when set, video
-	// steps use it instead of Downloader.
-	Tasks *Tasks
+	// Tasks runs a video step's task. The live service uses *Tasks, which
+	// speaks protocol 4. Fixture mode and tests use a stand-in.
+	Tasks TaskClient
 	// WorkerPollDelay spaces polls of the download worker between stages;
 	// zero means one second.
 	WorkerPollDelay time.Duration

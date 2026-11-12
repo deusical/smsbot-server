@@ -401,6 +401,12 @@ func order(cfg WorkerConfig, task string, local bool) []string {
 	return names
 }
 
+// TaskClient runs one named task and fetches a file it produced.
+type TaskClient interface {
+	Poll(ctx context.Context, st *TaskState, id, scope string, deadline time.Time, req TaskRequest) (TaskStatus, error)
+	File(ctx context.Context, handle string, limit int64) ([]byte, string, error)
+}
+
 // Poll runs one poll of a step's task job id, for bot job scope. The first
 // poll chooses a worker; later polls keep the job there. A task with a file
 // input runs on the worker holding the file. A worker unreachable for Grace

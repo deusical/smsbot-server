@@ -2,14 +2,13 @@ package bot
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"time"
 )
 
-// FixtureDownloader stands in for the local video worker in offline fixture
-// mode. It never touches the network: each job reports one "downloading"
-// stage, then completes with a tiny synthetic video.
+// FixtureDownloader stands in for a video worker in offline fixture mode.
+// It never touches the network: each task reports one progress stage, then
+// completes. A compress task's file is a tiny synthetic video.
 type FixtureDownloader struct {
 	mu   sync.Mutex
 	seen map[string]bool
@@ -25,25 +24,39 @@ func (f *FixtureDownloader) advance(id string) string {
 	}
 	if !f.seen[id] {
 		f.seen[id] = true
-		return "downloading"
+		return "working"
 	}
 	return "complete"
 }
 
-func (f *FixtureDownloader) PollDownload(_ context.Context, id, _ string, limit int64, _ time.Time) ([]byte, string, error) {
-	if stage := f.advance(id); stage != "complete" {
-		return nil, stage, nil
+// Poll advances one task job. The first poll is still working; the next
+// finishes it. The original stays a handle. The send copy is fetched with File.
+func (f *FixtureDownloader) Poll(_ context.Context, _ *TaskState, id, _ string, _ time.Time, req TaskRequest) (TaskStatus, error) {
+	stage := f.advance(id)
+	if stage != "complete" {
+		if req.Task == "video.compress" {
+			return TaskStatus{Stage: "compressing"}, nil
+		}
+		return TaskStatus{Stage: "downloading"}, nil
 	}
+	switch req.Task {
+	case "video.download":
+		return TaskStatus{Stage: "complete", Outputs: map[string]TaskValue{
+			"original": {Type: "video", Handle: id + "/original"},
+		}}, nil
+	case "video.compress":
+		return TaskStatus{Stage: "complete", Outputs: map[string]TaskValue{
+			"video": {Type: "video", Handle: id + "/video"},
+		}}, nil
+	default:
+		return TaskStatus{}, taskFailed{"unknown_task"}
+	}
+}
+
+// File returns the synthetic send copy, or refuses it when it would not fit.
+func (f *FixtureDownloader) File(_ context.Context, _ string, limit int64) ([]byte, string, error) {
 	if int64(len(fixtureVideo)) > limit {
-		return nil, "", errors.New("download_failed")
+		return nil, "", taskFailed{"task_output_too_large"}
 	}
 	return fixtureVideo, "complete", nil
-}
-
-func (f *FixtureDownloader) PollSource(_ context.Context, id, _, _ string, _ time.Time) (string, error) {
-	return f.advance(id), nil
-}
-
-func (f *FixtureDownloader) PollCompress(ctx context.Context, id, _, _ string, limit int64, deadline time.Time, _ VideoSettings) ([]byte, string, error) {
-	return f.PollDownload(ctx, id, "", limit, deadline)
 }

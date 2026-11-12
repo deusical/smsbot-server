@@ -2,10 +2,6 @@ package bot
 
 import (
 	"context"
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
@@ -14,11 +10,66 @@ import (
 	"github.com/deusical/smsbot-server/internal/transport"
 )
 
-type downloadFunc func(context.Context, string, int64) ([]byte, error)
+// scriptTasks is an in-process video worker. Download finishes on the first
+// poll. Compress calls fn for the bytes, unless hold is set: the first
+// compress poll then returns that stage and the next one calls fn.
+type scriptTasks struct {
+	fn     func(context.Context, string, int64) ([]byte, error)
+	hold   string
+	onPoll func(time.Time)
+	url    string
+	data   []byte
+	polls  int
+	held   bool
+}
 
-func (f downloadFunc) PollDownload(ctx context.Context, id, u string, limit int64, deadline time.Time) ([]byte, string, error) {
-	data, err := f(ctx, u, limit)
-	return data, "complete", err
+func (s *scriptTasks) Poll(ctx context.Context, _ *TaskState, id, _ string, deadline time.Time, req TaskRequest) (TaskStatus, error) {
+	if s.onPoll != nil {
+		s.onPoll(deadline)
+	}
+	switch req.Task {
+	case "video.download":
+		if v, ok := req.Inputs["url"]; ok {
+			s.url = v.Text
+		}
+		return TaskStatus{Stage: "complete", Outputs: map[string]TaskValue{"original": {Handle: id + "/original"}}}, nil
+	case "video.compress":
+		s.polls++
+		if s.hold != "" && !s.held {
+			s.held = true
+			return TaskStatus{Stage: s.hold}, nil
+		}
+		settings, _ := req.Settings.(map[string]any)
+		limit := settingInt(settings["max_bytes"])
+		data, err := s.fn(ctx, s.url, limit)
+		if err != nil {
+			return TaskStatus{}, err
+		}
+		s.data = data
+		return TaskStatus{Stage: "complete", Outputs: map[string]TaskValue{"video": {Handle: id + "/video"}}}, nil
+	default:
+		return TaskStatus{}, taskFailed{"unknown_task"}
+	}
+}
+
+func (s *scriptTasks) File(context.Context, string, int64) ([]byte, string, error) {
+	if len(s.data) == 0 {
+		return nil, "", taskFailed{"task_output_unavailable"}
+	}
+	return s.data, "complete", nil
+}
+
+func settingInt(v any) int64 {
+	switch n := v.(type) {
+	case int64:
+		return n
+	case int:
+		return int64(n)
+	case float64:
+		return int64(n)
+	default:
+		return 0
+	}
 }
 
 func TestExtractDownloadURL(t *testing.T) {
@@ -52,34 +103,33 @@ func TestDownloadCommandSafety(t *testing.T) {
 				t.Fatal(err)
 			}
 			calls := 0
-			e.Downloader = downloadFunc(func(ctx context.Context, target string, limit int64) ([]byte, error) {
-				calls++
-				if target != "https://v.douyin.com/synthetic/" || limit > downloadLimit {
-					t.Fatal("wrong worker input")
-				}
-				switch mode {
-				case "pause":
-					if err := e.Pause(true); err != nil {
-						t.Fatal(err)
+			if mode != "worker_missing" {
+				e.Tasks = &scriptTasks{fn: func(ctx context.Context, target string, limit int64) ([]byte, error) {
+					calls++
+					if target != "https://v.douyin.com/synthetic/" || limit > downloadLimit {
+						t.Fatal("wrong worker input")
 					}
-					if ctx.Err() == nil {
-						t.Fatal("pause did not cancel work")
+					switch mode {
+					case "pause":
+						if err := e.Pause(true); err != nil {
+							t.Fatal(err)
+						}
+						if ctx.Err() == nil {
+							t.Fatal("pause did not cancel work")
+						}
+					case "unenroll":
+						if err := e.Unenroll("demo-chat"); err != nil {
+							t.Fatal(err)
+						}
+					case "slow":
+						e.now = func() time.Time { return time.Now().Add(3 * time.Minute) }
+					case "expired":
+						e.now = func() time.Time { return time.Now().Add(16 * time.Minute) }
+					case "oversize":
+						return make([]byte, limit+1), nil
 					}
-				case "unenroll":
-					if err := e.Unenroll("demo-chat"); err != nil {
-						t.Fatal(err)
-					}
-				case "slow":
-					e.now = func() time.Time { return time.Now().Add(3 * time.Minute) }
-				case "expired":
-					e.now = func() time.Time { return time.Now().Add(16 * time.Minute) }
-				case "oversize":
-					return make([]byte, limit+1), nil
-				}
-				return []byte("synthetic-video"), nil
-			})
-			if mode == "worker_missing" {
-				e.Downloader = nil
+					return []byte("synthetic-video"), nil
+				}}
 			}
 			if mode == "unknown_send" {
 				fixture.Fail = "unknown"
@@ -123,70 +173,6 @@ func TestDownloadCommandSafety(t *testing.T) {
 	}
 }
 
-func TestDownloadWorkerClient(t *testing.T) {
-	t.Parallel()
-	for _, mode := range []string{"success", "oversize", "bad_status", "bad_type", "redirect"} {
-		t.Run(mode, func(t *testing.T) {
-			calls := 0
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				calls++
-				if r.Header.Get("Authorization") != "Bearer SYNTHETIC_WORKER_TOKEN" {
-					t.Error("missing worker auth")
-				}
-				var input struct {
-					URL string `json:"url"`
-					Max int64  `json:"max_bytes"`
-				}
-				if r.Method == "POST" {
-					if err := json.NewDecoder(r.Body).Decode(&input); err != nil || input.Max != 100 || input.URL != "https://v.douyin.com/synthetic/" {
-						t.Error("wrong worker request")
-					}
-				}
-				if mode == "redirect" {
-					w.Header().Set("Location", "/other")
-					w.WriteHeader(302)
-					return
-				}
-				if mode == "bad_status" {
-					w.WriteHeader(502)
-					w.Write([]byte("private upstream error"))
-					return
-				}
-				if r.Method == "POST" {
-					json.NewEncoder(w).Encode(map[string]string{"stage": "complete"})
-					return
-				}
-				w.Header().Set("Content-Type", "video/mp4")
-				if mode == "bad_type" {
-					w.Header().Set("Content-Type", "text/html")
-				}
-				if mode == "oversize" {
-					w.Write(make([]byte, 101))
-					return
-				}
-				w.Write([]byte("synthetic-video"))
-			}))
-			defer server.Close()
-			d := &HTTPDownloader{Endpoint: server.URL, Token: "SYNTHETIC_WORKER_TOKEN"}
-			data, _, err := d.PollDownload(context.Background(), strings.Repeat("a", 64), "https://v.douyin.com/synthetic/", 100, time.Now().Add(15*time.Minute))
-			if mode == "success" || mode == "slow" {
-				if err != nil || string(data) != "synthetic-video" {
-					t.Fatal("valid worker output rejected", err)
-				}
-			} else if err == nil || strings.Contains(err.Error(), "private") {
-				t.Fatal("unsafe worker response handling")
-			}
-			wantCalls := 2
-			if mode == "bad_status" || mode == "redirect" {
-				wantCalls = 1
-			}
-			if calls != wantCalls {
-				t.Fatal("worker request retried or redirect followed")
-			}
-		})
-	}
-}
-
 // Polls must yield the dispatcher, snapshot the lifetime, and leave uncertain
 // submission terminal even when another preparation poll would be safe.
 func TestDurableDownloadPolling(t *testing.T) {
@@ -200,34 +186,18 @@ func TestDurableDownloadPolling(t *testing.T) {
 			if err := e.SetConfiguration(cfg); err != nil {
 				t.Fatal(err)
 			}
-			calls := 0
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.Header.Get("Authorization") != "Bearer SYNTHETIC" {
-					t.Error("missing auth")
-				}
-				if r.Method == "GET" {
-					w.Header().Set("Content-Type", "video/mp4")
-					w.Write([]byte("synthetic-video"))
-					return
-				}
-				calls++
-				var request struct {
-					Deadline int64 `json:"deadline"`
-				}
-				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-					t.Error(err)
-				}
-				if request.Deadline < time.Now().Add(19*time.Minute).Unix() {
-					t.Error("deadline not snapshotted")
-				}
-				stage := "downloading"
-				if calls > 1 {
-					stage = "complete"
-				}
-				json.NewEncoder(w).Encode(map[string]string{"stage": stage})
-			}))
-			defer server.Close()
-			e.Downloader = &HTTPDownloader{Endpoint: server.URL + "/download", Token: "SYNTHETIC"}
+			tasks := &scriptTasks{
+				hold: "downloading",
+				onPoll: func(deadline time.Time) {
+					if deadline.Before(time.Now().Add(19 * time.Minute)) {
+						t.Error("deadline not snapshotted")
+					}
+				},
+				fn: func(context.Context, string, int64) ([]byte, error) {
+					return []byte("synthetic-video"), nil
+				},
+			}
+			e.Tasks = tasks
 			m := incoming()
 			m.Text = "!download https://v.douyin.com/synthetic/"
 			if ok, err := e.Accept(context.Background(), m); !ok || err != nil {
@@ -245,7 +215,7 @@ func TestDurableDownloadPolling(t *testing.T) {
 			if err := e.Dispatch(context.Background()); err != nil {
 				t.Fatal(err)
 			}
-			if stateOf(t, e, id) != "queued" || calls != 1 || len(fixture.Sent) != 0 {
+			if stateOf(t, e, id) != "queued" || tasks.polls != 1 || len(fixture.Sent) != 0 {
 				t.Fatal("poll did not yield")
 			}
 			ping := incoming()
@@ -256,7 +226,7 @@ func TestDurableDownloadPolling(t *testing.T) {
 			if err := e.Dispatch(context.Background()); err != nil {
 				t.Fatal(err)
 			}
-			if len(fixture.Sent) != 1 || calls != 1 {
+			if len(fixture.Sent) != 1 || tasks.polls != 1 {
 				t.Fatal("download blocked another command")
 			}
 			_, after, err := e.Store.JobPlan(id)
@@ -298,11 +268,11 @@ func TestDurableDownloadPolling(t *testing.T) {
 			if got := stateOf(t, e, id); got != want {
 				t.Fatalf("state %s want %s", got, want)
 			}
-			before := calls
+			before := tasks.polls
 			if err := e.Dispatch(context.Background()); err != nil {
 				t.Fatal(err)
 			}
-			if calls != before {
+			if tasks.polls != before {
 				t.Fatal("terminal job polled again")
 			}
 		})
@@ -379,7 +349,7 @@ func TestDownloadUploadYieldsAndChecksConsentAgain(t *testing.T) {
 			if err := e.SetConfiguration(cfg); err != nil {
 				t.Fatal(err)
 			}
-			e.Downloader = downloadFunc(func(context.Context, string, int64) ([]byte, error) { return []byte("synthetic-video"), nil })
+			e.Tasks = &scriptTasks{fn: func(context.Context, string, int64) ([]byte, error) { return []byte("synthetic-video"), nil }}
 			entered, release := make(chan struct{}), make(chan struct{})
 			e.Transport = downloadUploadTransport{Fixture: fixture, upload: func(ctx context.Context, files []media.File) ([]media.File, error) {
 				close(entered)

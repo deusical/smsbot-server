@@ -1,12 +1,9 @@
 package bot
 
 import (
-	"bytes"
 	"cmp"
 	"context"
-	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -21,115 +18,27 @@ import (
 
 const downloadLimit int64 = 20_000_000 - 1
 
-type DownloadProvider interface {
-	PollDownload(context.Context, string, string, int64, time.Time) ([]byte, string, error)
-}
-
 // HTTPDownloader talks to one owner-configured worker: the host's own, or one
 // on another machine over Tailscale. The worker URL is not taken from chat
-// input. Its token remains outside configuration/API.
+// input. Its token remains outside configuration/API. Jobs are protocol 4.
 type HTTPDownloader struct {
 	Endpoint, Token string
 	Client          *http.Client
-	Warning         func(string)
 	// Remote workers deliver files in the background: 20 MB over Tailscale
 	// takes tens of seconds, longer than one dispatch poll may block.
-	Remote   bool
-	outdated sync.Once
-	noV3     sync.Once
-	fetchMu  sync.Mutex
-	fetches  map[string]*fileFetch
+	Remote  bool
+	fetchMu sync.Mutex
+	fetches map[string]*fileFetch
 }
 
-// PollDownload repeats preparation requests by durable job ID, never sends.
-func (d *HTTPDownloader) PollDownload(ctx context.Context, id, target string, limit int64, deadline time.Time) ([]byte, string, error) {
-	return d.pollDownload(ctx, id, target, limit, deadline, nil)
-}
-
-func (d *HTTPDownloader) pollDownload(ctx context.Context, id, target string, limit int64, deadline time.Time, settings *VideoSettings) ([]byte, string, error) {
-	endpoint := strings.TrimRight(d.Endpoint, "/") + "/jobs/" + id
-	payload := map[string]any{"url": target, "max_bytes": limit, "deadline": deadline.Unix()}
-	if settings != nil {
-		payload["protocol"] = 2
-		payload["settings"] = settings
-	}
-	body, _ := json.Marshal(payload)
-	request, err := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewReader(body))
-	if err != nil {
-		return nil, "", errors.New("download_failed")
-	}
-	request.Header.Set("Authorization", "Bearer "+d.Token)
-	request.Header.Set("Content-Type", "application/json")
+func (d *HTTPDownloader) client() *http.Client {
 	client := http.Client{}
 	if d.Client != nil {
 		client = *d.Client
 	}
 	client.Timeout = 5 * time.Second
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	response, err := client.Do(request)
-	if err != nil {
-		return nil, "waiting_worker", nil
-	}
-	defer response.Body.Close()
-	if response.StatusCode == 503 {
-		return nil, "waiting_worker", nil
-	}
-	if response.StatusCode != 200 {
-		return nil, "", errors.New("download_failed")
-	}
-	var status struct {
-		Stage string `json:"stage"`
-	}
-	if err := json.NewDecoder(io.LimitReader(response.Body, 4096)).Decode(&status); err != nil {
-		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || ctx.Err() != nil {
-			return nil, "waiting_worker", nil
-		}
-		return nil, "", errors.New("download_failed")
-	}
-	switch status.Stage {
-	case "queued", "downloading", "compressing", "verifying":
-		return nil, status.Stage, nil
-	case "complete":
-	default:
-		return nil, "", errors.New("download_failed")
-	}
-	result, err := http.NewRequestWithContext(ctx, "GET", endpoint+"/result", nil)
-	if err != nil {
-		return nil, "", errors.New("download_failed")
-	}
-	result.Header.Set("Authorization", "Bearer "+d.Token)
-	res, err := client.Do(result)
-	if err != nil {
-		return nil, "waiting_worker", nil
-	}
-	defer res.Body.Close()
-	if res.StatusCode != 200 || res.Header.Get("Content-Type") != "video/mp4" {
-		return nil, "", errors.New("download_failed")
-	}
-	data, err := io.ReadAll(io.LimitReader(res.Body, limit+1))
-	if err != nil {
-		return nil, "waiting_worker", nil
-	}
-	if len(data) == 0 || int64(len(data)) > limit {
-		return nil, "", errors.New("download_failed")
-	}
-	return data, "complete", nil
-}
-
-// Negotiate before job creation so an old worker checkpoints only its defaults.
-func (d *HTTPDownloader) PollDownloadSettings(ctx context.Context, id, target string, limit int64, deadline time.Time, settings VideoSettings) ([]byte, string, error) {
-	if err := settings.Validate(); err != nil {
-		return nil, "", errors.New("download_failed")
-	}
-	supported, waiting, err := d.protocols(ctx)
-	if err != nil || waiting {
-		return nil, "waiting_worker", err
-	}
-	if !supported[2] {
-		d.warn(&d.outdated, "download_worker_outdated_using_defaults")
-		return d.pollDownload(ctx, id, target, limit, deadline, nil)
-	}
-	return d.pollDownload(ctx, id, target, limit, deadline, &settings)
+	return &client
 }
 
 var shareURL = regexp.MustCompile(`https?://[^\s<>"'，。；、]+`)
@@ -161,7 +70,7 @@ func downloadURL(input string) string {
 // step's output and calls finishWorkerStep. Otherwise dispatch ends here:
 // the job was deferred until its next poll, or completed as failed.
 func (e *Engine) pollWorker(ctx context.Context, j store.Job, p *store.Plan, poll func(ctx context.Context, deadline time.Time) (string, error)) (complete bool, err error) {
-	if e.Downloader == nil && e.Tasks == nil {
+	if e.Tasks == nil {
 		return false, e.Store.Complete(j.ID, "failed", "download_worker_unavailable")
 	}
 	ok, err := e.Store.Transition(j.ID, "queued", "generating")
