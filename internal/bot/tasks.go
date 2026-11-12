@@ -138,6 +138,8 @@ type TaskStatus struct {
 type TaskState struct {
 	Worker  string `json:"worker,omitempty"`
 	Waiting int64  `json:"waiting,omitempty"`
+	// Stage is the worker's last progress word, kept with the step.
+	Stage string `json:"stage,omitempty"`
 }
 
 // taskFailed is a task's failure code, which becomes the job's.

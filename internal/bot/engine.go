@@ -795,7 +795,7 @@ func (e *Engine) Dispatch(ctx context.Context) error {
 		return err
 	}
 	// The conversation turn's earlier history, as checked by the AI step.
-	return e.submit(ctx, j, p, cfg, p.Context)
+	return e.submit(ctx, j, p, cfg)
 }
 
 // nextReady returns the next queued job that passes every pre-send check.
@@ -1019,12 +1019,14 @@ func (e *Engine) prepareFiles(ctx context.Context, j store.Job, p *store.Plan) (
 // submit persists the send intent (submitting, with a new transaction ID),
 // then calls the transport once. A transport error other than a definite
 // non-submission is recorded as unknown_submission and never retried.
-func (e *Engine) submit(ctx context.Context, j store.Job, p store.Plan, cfg Configuration, history []store.Turn) error {
+func (e *Engine) submit(ctx context.Context, j store.Job, p store.Plan, cfg Configuration) error {
 	current, err := e.Store.Job(j.ID)
 	if err != nil || current.State != "queued" {
 		return err
 	}
-	if p.Reply == "" && len(p.Attachments) == 0 {
+	turn, hasTurn := planTurn(p)
+	reply := planReply(p)
+	if reply == "" && len(p.Attachments) == 0 {
 		err = e.Store.Complete(j.ID, "failed", "empty_reply")
 		return err
 	}
@@ -1032,9 +1034,16 @@ func (e *Engine) submit(ctx context.Context, j store.Job, p store.Plan, cfg Conf
 	if max == 0 {
 		max = 12000
 	}
-	runes := []rune(p.Reply)
+	runes := []rune(reply)
 	if len(runes) > max {
-		p.Reply = string(runes[:max-25]) + "\n[Reply shortened.]"
+		reply = string(runes[:max-25]) + "\n[Reply shortened.]"
+	}
+	// Frozen for this send and for the AI exchange sealed with it. The run
+	// stays the record; this copy is what was handed to the transport.
+	p.Reply = reply
+	if hasTurn {
+		p.Model = turn.Model
+		p.Input = turn.Input
 	}
 	if p.ReplyTarget != "" {
 		c, lookupErr := e.lookupConversation(ctx, j.ConversationID)
@@ -1116,15 +1125,15 @@ func (e *Engine) submit(ctx context.Context, j store.Job, p store.Plan, cfg Conf
 			return err
 		}
 	}
-	if p.Model != "" && p.Memory && p.Thread == nil {
+	if hasTurn && turn.Model != "" && p.Memory && p.Thread == nil {
 		cmd, _, _, _, ok := resolve(cfg, strings.TrimPrefix(j.Command, "!"))
 		epoch, epochErr := e.Store.MemoryEpoch(j.ConversationID, p.MemberOf())
 		if epochErr != nil {
 			return epochErr
 		}
 		if ok && cmd.Memory && epoch == p.MemoryEpoch {
-			history = append(history, store.Turn{Role: "user", Content: p.Input}, store.Turn{Role: "assistant", Content: p.Reply})
-			if err = e.Store.Remember(memoryScope(j.ConversationID, j.Command, p.Model, p.MemberOf()), history, e.now().Add(time.Duration(p.MemoryHours)*time.Hour)); err != nil {
+			history := append(append([]store.Turn{}, turn.History...), store.Turn{Role: "user", Content: turn.Input}, store.Turn{Role: "assistant", Content: p.Reply})
+			if err = e.Store.Remember(memoryScope(j.ConversationID, j.Command, turn.Model, p.MemberOf()), history, e.now().Add(time.Duration(p.MemoryHours)*time.Hour)); err != nil {
 				return err
 			}
 		}

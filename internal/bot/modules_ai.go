@@ -268,9 +268,6 @@ func aiChatModule() module {
 			if !known {
 				// Built from a later value; prepared when the step runs. A
 				// thread needs its prompt now, which validation guarantees.
-				if turnStep(s.Steps()) == s.ID {
-					mirrorAI(p, st)
-				}
 				if err := s.Save(st); err != nil {
 					return cmdflow.Outcome{}, err
 				}
@@ -299,11 +296,6 @@ func aiChatModule() module {
 				st.Input = askerLabel(*p) + ": " + st.Input
 				st.Instructions += "\nThis conversation is shared by a group chat. Each question starts with who asked it; answer the one who asked."
 			}
-			// A job makes one AI request; the plan records it, and with a
-			// conversation it is the turn recorded when the reply is sent.
-			if turnStep(s.Steps()) == s.ID {
-				mirrorAI(p, st)
-			}
 			st.Prepared = true
 			if err := s.Save(st); err != nil {
 				return cmdflow.Outcome{}, err
@@ -329,9 +321,6 @@ func aiChatModule() module {
 				if err := s.Save(st); err != nil {
 					return cmdflow.Outcome{}, err
 				}
-				if turnStep(s.Steps()) == s.ID {
-					mirrorAI(r.p, st)
-				}
 			}
 			history := st.History
 			if st.Conversation != "none" && r.p.Memory {
@@ -343,7 +332,6 @@ func aiChatModule() module {
 				cmd, _, _, _, enabled := resolve(*r.cfg, strings.TrimPrefix(r.j.Command, "!"))
 				if epoch != r.p.MemoryEpoch || !enabled || !cmd.Memory {
 					r.p.Memory = false
-					r.p.Context = nil
 					history = nil
 				}
 			}
@@ -376,10 +364,6 @@ func aiChatModule() module {
 			return cmdflow.Done(), nil
 		},
 	}
-}
-
-func mirrorAI(p *store.Plan, st aiState) {
-	p.Model, p.Input, p.Instructions, p.Generation, p.File, p.Context = st.Model, st.Input, st.Instructions, st.Generation, st.File, st.History
 }
 
 // aiCall is one provider request an AI step makes.

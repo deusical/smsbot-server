@@ -117,6 +117,7 @@ func TestQueueSnapshotsGenerationAndContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	p = present(p)
 	var snap Generation
 	json.Unmarshal(p.Generation, &snap)
 	if snap.Reasoning != "high" || snap.Tokens != 4096 || p.Instructions != "Synthetic instructions" || len(p.Context) != 0 || p.Thread == nil {

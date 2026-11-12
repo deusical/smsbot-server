@@ -173,9 +173,8 @@ func longRunning(p Pipeline) bool {
 }
 
 // turnStep is the AI step whose request is the job's conversation turn: the
-// one reading a conversation, else the first AI step. Only it sets the plan's
-// AI request fields (model, prompt, earlier turns) that the dispatcher uses
-// to record the turn and that Activity shows.
+// one reading a conversation, else the first AI step. The dispatcher reads
+// that step's saved state when it records the turn.
 func turnStep(steps []cmdflow.StepRun) string {
 	first := ""
 	for _, s := range steps {
@@ -226,9 +225,9 @@ type simState struct {
 	model, text string
 }
 
-// planHost is SmsBot's side of a run: the Reply step's intent fills the
-// plan's text and attachment, which the dispatcher then checks and sends; a
-// halt replies with a fixed text instead.
+// planHost is SmsBot's side of a run. The reply text stays on the run. A file
+// is taken onto the plan so its bytes can be sealed apart from the run. A
+// halt stores its text on the step and drops any AI turn the plan had started.
 type planHost struct {
 	e *Engine
 	j store.Job
@@ -236,8 +235,6 @@ type planHost struct {
 }
 
 func (h planHost) Effect(s *cmdflow.Step) error {
-	h.p.Reply = s.Text("text")
-	// The plan carries a file's bytes once, as the reply's attachment.
 	if v, ok := s.Take("file"); ok {
 		if f := valueMedia(v); f != nil {
 			h.p.Attachments = []media.File{*f}
@@ -246,8 +243,12 @@ func (h planHost) Effect(s *cmdflow.Step) error {
 	return nil
 }
 
-func (h planHost) Halt(_ *cmdflow.Step, v cmdflow.Value) error {
-	haltPlan(h.p, v.Text)
+func (h planHost) Halt(s *cmdflow.Step, v cmdflow.Value) error {
+	if s.Outputs == nil {
+		s.Outputs = map[string]cmdflow.Value{}
+	}
+	s.Outputs["halt"] = v
+	haltPlan(h.p)
 	return nil
 }
 
@@ -265,14 +266,85 @@ func (h planHost) Fail(code string) error {
 	return h.e.Store.Complete(h.j.ID, "failed", code)
 }
 
-// haltPlan ends the pipeline with a fixed reply and no AI conversation turn.
-func haltPlan(p *store.Plan, text string) {
-	p.Reply = text
+// haltPlan drops an AI turn a halted run must not record. The reply text is
+// on the halted step.
+func haltPlan(p *store.Plan) {
 	p.Model = ""
+	p.Input = ""
+	p.Instructions = ""
+	p.Generation = nil
+	p.File = nil
 	p.Memory = false
 	p.Thread = nil
 	p.Context = nil
 	p.Attachments = nil
+}
+
+// planReply is the text the dispatcher sends: a step that halted, else the
+// reply step's text, else a built-in reply stored on the plan.
+func planReply(p store.Plan) string {
+	if t, ok := haltedText(p.Pipeline); ok {
+		return t
+	}
+	if t := stepText(p.Pipeline, "reply", "text"); t != "" {
+		return t
+	}
+	return p.Reply
+}
+
+func haltedText(run *cmdflow.Run) (string, bool) {
+	if run == nil {
+		return "", false
+	}
+	for _, s := range run.Steps {
+		if s.Status != cmdflow.StatusHalted {
+			continue
+		}
+		if v, ok := s.Outputs["halt"]; ok && v.Text != "" {
+			return v.Text, true
+		}
+	}
+	return "", false
+}
+
+func stepText(run *cmdflow.Run, module, port string) string {
+	if run == nil {
+		return ""
+	}
+	for _, s := range run.Steps {
+		if s.Module != module {
+			continue
+		}
+		from, name, ok := strings.Cut(s.Inputs[port], ".")
+		if !ok {
+			continue
+		}
+		for _, src := range run.Steps {
+			if src.ID == from {
+				if v, ok := src.Outputs[name]; ok {
+					return v.Text
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// planTurn is the AI step the reply continues, read from the run.
+func planTurn(p store.Plan) (aiState, bool) {
+	if p.Pipeline == nil {
+		return aiState{}, false
+	}
+	id := turnStep(p.Pipeline.Steps)
+	for _, s := range p.Pipeline.Steps {
+		if s.ID == id && s.Module == "ai.chat" && len(s.State) > 0 {
+			var st aiState
+			if json.Unmarshal(s.State, &st) == nil {
+				return st, true
+			}
+		}
+	}
+	return aiState{}, false
 }
 
 func triggerValues(args string, m transport.Incoming) map[string]cmdflow.Value {
