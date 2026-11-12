@@ -40,49 +40,55 @@ class WorkerBoundaryTests(unittest.TestCase):
                 except urllib.error.HTTPError as error:
                     self.assertEqual(error.code, expected)
             try:
-                valid = {"url": "https://v.douyin.com/synthetic/", "max_bytes": 19999999, "deadline": int(time.time())+900}
+                valid = {"protocol": 4, "task": "video.download", "version": 1, "scope": "c"*64,
+                         "inputs": {"url": {"type": "url", "text": "https://v.douyin.com/synthetic/"}},
+                         "settings": {}, "deadline": int(time.time())+900}
                 call(valid, "Bearer invalid", 401)
-                call({**valid, "url": "http://127.0.0.1/private"}, "Bearer " + token, 502)
-                call({**valid, "max_bytes": 20000000}, "Bearer " + token, 502)
-                call({**valid, "deadline": int(time.time())+7200}, "Bearer " + token, 502)
-                self.assertEqual(call(valid, "Bearer " + token, 200), {"stage": "queued"})
-                self.assertEqual(call(valid, "Bearer " + token, 200), {"stage": "queued"})
-                call({**valid, "url": "https://xhslink.com/different"}, "Bearer " + token, 502)
+                call({**valid, "protocol": 2}, "Bearer " + token, 502)
+                bad = {"protocol": 4, "task": "video.download", "version": 1, "scope": "c"*64,
+                       "inputs": {"url": {"type": "url", "text": "http://127.0.0.1/private"}},
+                       "settings": {}, "deadline": valid["deadline"]}
+                call(bad, "Bearer " + token, 502)
+                call({**valid, "deadline": int(time.time())+25*3600}, "Bearer " + token, 502)
+                huge = {"protocol": 4, "task": "video.compress", "version": 1, "scope": "c"*64,
+                        "inputs": {"source": {"handle": "d"*64+"/original"}},
+                        "settings": {"max_bytes": 20000000}, "deadline": valid["deadline"]}
+                call(huge, "Bearer " + token, 502)
+                self.assertEqual(call(valid, "Bearer " + token, 200), {"stage": "queued", "protocol": 4})
+                self.assertEqual(call(valid, "Bearer " + token, 200), {"stage": "queued", "protocol": 4})
+                changed = {**valid, "inputs": {"url": {"type": "url", "text": "https://xhslink.com/different"}}}
+                call(changed, "Bearer " + token, 502)
                 call(valid, "Bearer " + token, 502, "/download/jobs/../../private")
                 self.assertEqual(worker.Jobs.execute.call_count, 1)
-                self.assertEqual(json.loads(next(root.rglob("state.json")).read_text())["url"], valid["url"])
+                saved = json.loads(next(root.rglob("state.json")).read_text())
+                self.assertEqual(saved["inputs"]["url"]["text"], "https://v.douyin.com/synthetic/")
             finally:
                 server.shutdown()
                 server.server_close()
                 thread.join(timeout=3)
 
-    def test_checkpoint_restart_reuses_original_and_result(self):
+    def test_checkpoint_restart_reuses_saved_original(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             jobs = worker.Jobs(root)
             job = "b"*64
             path = jobs.path(job)
-            request = {"url": "https://xhslink.com/synthetic", "max_bytes": 100000, "deadline": int(time.time())+900}
-            jobs.save(path, {**request, "stage": "compressing"})
-            (path / "original.mp4").write_bytes(b"synthetic-original")
+            (path / "files").mkdir()
+            (path / "files" / "original").write_bytes(b"synthetic-original")
+            request = {"protocol": 4, "task": "video.download", "version": 1, "scope": "c"*64,
+                       "inputs": {"url": {"type": "url", "text": "https://xhslink.com/synthetic"}},
+                       "settings": {}, "deadline": int(time.time())+900, "stage": "downloading"}
+            jobs.save(path, request)
             # A fresh process has no in-memory state. The saved original must
-            # suffice; source download is forbidden in this test.
+            # suffice; fetching the link again is forbidden in this test.
             restarted = worker.Jobs(root)
             restarted.active[job] = time.monotonic()+30
-            def compress(source, destination, limit, deadline):
-                self.assertEqual(source.read_bytes(), b"synthetic-original")
-                destination.write_bytes(b"synthetic-send-copy")
-                return destination
-            with mock.patch.object(worker, "compress", side_effect=compress), mock.patch.object(worker, "run", side_effect=AssertionError("redownloaded")):
+            with mock.patch.object(worker, "fetch_original", side_effect=AssertionError("redownloaded")):
                 restarted.execute(job)
-            self.assertEqual(restarted.poll(job, request), {"stage": "complete"})
-            third = worker.Jobs(root)
-            self.assertEqual(third.result(job).read_bytes(), b"synthetic-send-copy")
-            self.assertEqual((path / "original.mp4").read_bytes(), b"synthetic-original")
-            # A result over the job's byte limit is never served.
-            (path / "result.mp4").write_bytes(b"x" * (request["max_bytes"] + 1))
-            with self.assertRaises(ValueError):
-                third.result(job)
+            state = restarted.load(path)
+            self.assertEqual(state["stage"], "complete")
+            self.assertEqual((path / "files" / "original").read_bytes(), b"synthetic-original")
+            self.assertEqual(state["outputs"]["original"]["handle"], job + "/original")
 
     def test_progress_stall_lease_and_absolute_deadline_kill_children(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -155,230 +161,6 @@ class WorkerBoundaryTests(unittest.TestCase):
         for url in ("https://douyin.com.attacker.test/video/1", "http://douyin.com/", "https://user:pass@douyin.com/", "https://douyin.com:443/", "file:///C:/private"):
             self.assertFalse(worker.valid_url(url))
         self.assertTrue(worker.valid_url("https://xhslink.com/synthetic"))
-
-
-class ProtocolV2Tests(unittest.TestCase):
-    def test_parsing_and_bounds(self):
-        self.assertEqual(worker.protocol_settings({"protocol": 2, "settings": {}}), worker.DEFAULT_SETTINGS)
-        for key, bad in (("preset", "unsafe"), ("preset", None), ("passes", 0), ("passes", 3),
-                         ("passes", True), ("max_attempts", 0), ("max_attempts", 4),
-                         ("copy_if_fits", 1), ("max_mb", .01), ("max_mb", 20),
-                         ("max_mb", float("nan")), ("execution_minutes", 0), ("execution_minutes", 61),
-                         ("encoder", "libx264")):
-            with self.subTest(key=key, bad=bad), self.assertRaises(ValueError):
-                worker.protocol_settings({"protocol": 2, "settings": {key: bad}})
-        with self.assertRaises(ValueError):
-            worker.protocol_settings({"protocol": 3, "settings": {}})
-
-    def test_http_v2_and_execution_deadline(self):
-        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(worker.Jobs, "execute"):
-            token = "SYNTHETIC_TOKEN_FOR_OFFLINE_TEST_ONLY"
-            server = worker.create_server(Path(tmp), token, 0)
-            thread = threading.Thread(target=server.serve_forever, daemon=True)
-            thread.start()
-            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-            base = "http://127.0.0.1:%s/download" % server.server_port
-            try:
-                req = urllib.request.Request(base + "/capabilities", headers={"Authorization": "Bearer " + token})
-                with opener.open(req) as response:
-                    self.assertEqual(json.loads(response.read()), {"protocol": 2, "protocols": [1, 2, 3, 4], "tasks": {"video.compress": 1, "video.download": 1}})
-                value = {"url": "https://douyin.com/synthetic", "max_bytes": 100000,
-                         "deadline": int(time.time())+600, "protocol": 2, "settings": {"execution_minutes": 1}}
-                def call(value):
-                    req = urllib.request.Request(base + "/jobs/" + "e"*64, data=json.dumps(value).encode(),
-                        headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"})
-                    return opener.open(req)
-                with self.assertRaises(urllib.error.HTTPError) as error:
-                    call(value)
-                self.assertEqual(error.exception.code, 502)
-                value["settings"] = {"execution_minutes": 10}
-                with call(value) as response:
-                    self.assertEqual(json.loads(response.read()), {"stage": "queued", "protocol": 2})
-            finally:
-                server.shutdown(); server.server_close(); thread.join(timeout=3)
-
-    def test_checkpoint_resume_uses_persisted_settings(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp); jobs = worker.Jobs(root); job = "c"*64
-            settings = {**worker.DEFAULT_SETTINGS, "preset": "fast", "passes": 1, "max_attempts": 2,
-                        "copy_if_fits": False, "max_mb": 1, "execution_minutes": 5}
-            request = {"url": "https://xhslink.com/synthetic", "max_bytes": 500000,
-                       "deadline": int(time.time())+300, "protocol": 2, "settings": settings}
-            with mock.patch.object(worker.threading, "Thread"):
-                jobs.poll(job, request)
-            path = jobs.path(job)
-            effective = {**settings, "max_mb": .5}
-            self.assertEqual(jobs.load(path)["settings"], effective)
-            (path / "original.mp4").write_bytes(b"synthetic-original")
-            restarted = worker.Jobs(root)
-            restarted.active[job] = time.monotonic()+30
-            def compress(source, destination, limit, deadline, settings):
-                self.assertEqual(settings, effective)
-                destination.write_bytes(b"synthetic-result"); return destination
-            with mock.patch.dict(worker.DEFAULT_SETTINGS, {"preset": "veryfast", "passes": 2}), \
-                 mock.patch.object(worker, "compress", side_effect=compress), \
-                 mock.patch.object(worker, "run", side_effect=AssertionError("redownloaded")):
-                restarted.execute(job)
-            self.assertEqual(restarted.load(path)["stage"], "complete")
-            self.assertEqual(restarted.load(path)["settings"], effective)
-            with self.assertRaises(ValueError):
-                restarted.poll(job, {**request, "settings": {**settings, "preset": "slow"}})
-
-    def encode(self, settings, encoder="libx264", source_size=200000, sizes=None):
-        folder = tempfile.TemporaryDirectory(); self.addCleanup(folder.cleanup)
-        root = Path(folder.name); source = root / "original.mp4"; source.write_bytes(b"x"*source_size)
-        calls = []; sizes = iter(sizes or [10]*3)
-        info = {"format": {"duration": "1"}, "streams": [{"codec_type": "video"}, {"codec_type": "audio"}]}
-        def run(args, deadline, **kwargs):
-            calls.append(args)
-            if "-c:v" in args and args[-1].endswith(".mp4"):
-                Path(args[-1]).write_bytes(b"x"*next(sizes))
-        with mock.patch.object(worker, "probe", return_value=info), mock.patch.object(worker, "run", side_effect=run):
-            worker.compress(source, root / "send.mp4", 500000, time.monotonic()+60, encoder=encoder,
-                            settings={**worker.DEFAULT_SETTINGS, "max_mb": .1, **settings})
-        return calls
-
-    def test_each_preset_and_passes_map_to_ffmpeg(self):
-        for preset, nvenc in (("veryfast", "p3"), ("faster", "p4"), ("fast", "p5"), ("medium", "p6"), ("slow", "p7")):
-            for encoder in ("libx264", "h264_nvenc"):
-                for passes in (1, 2):
-                    calls = self.encode({"preset": preset, "passes": passes}, encoder)
-                    encodes = [args for args in calls if "-c:v" in args]
-                    self.assertEqual(len(encodes), passes if encoder == "libx264" else 1)
-                    for args in encodes:
-                        self.assertEqual(args[args.index("-preset")+1], preset if encoder == "libx264" else nvenc)
-                        self.assertEqual(args[args.index("-vf")+1], worker.SCALE)
-                        if encoder == "libx264":
-                            self.assertEqual(args[args.index("-threads")+1], str(os.cpu_count() or 2))
-                            self.assertEqual("-pass" in args, passes == 2)
-                        else:
-                            self.assertEqual(args[args.index("-multipass")+1], "fullres" if passes == 2 else "disabled")
-                    self.assertEqual(sum("-xerror" in args for args in calls), 1)
-
-    def test_copy_attempts_and_max_mb(self):
-        self.assertFalse(any("-c:v" in args for args in self.encode({}, source_size=10)))
-        self.assertTrue(any("-c:v" in args for args in self.encode({"copy_if_fits": False}, source_size=10)))
-        for encoder in ("libx264", "h264_nvenc"):
-            with self.assertRaisesRegex(ValueError, "size_limit"):
-                self.encode({"max_attempts": 1}, encoder, sizes=[200000])
-            calls = self.encode({"max_attempts": 2}, encoder, sizes=[200000, 10])
-            self.assertEqual(sum("-c:v" in args and args[-1].endswith(".mp4") for args in calls), 2)
-        small = self.encode({"max_mb": .1, "passes": 1, "copy_if_fits": False})
-        large = self.encode({"max_mb": .2, "passes": 1, "copy_if_fits": False})
-        def bitrate(calls):
-            args = next(args for args in calls if "-b:v" in args)
-            return int(args[args.index("-b:v")+1])
-        self.assertGreater(bitrate(large), bitrate(small))
-
-
-if __name__ == "__main__":
-    unittest.main()
-
-
-class ProtocolV3Tests(unittest.TestCase):
-    scope = "d"*64
-    download = "1"*64
-    compress_job = "2"*64
-
-    def jobs(self):
-        folder = tempfile.TemporaryDirectory(); self.addCleanup(folder.cleanup)
-        root = Path(folder.name)
-        return root, worker.Jobs(root)
-
-    def download_request(self, **extra):
-        return {"protocol": 3, "op": "download", "scope": self.scope,
-                "url": "https://v.douyin.com/synthetic/", "deadline": int(time.time())+600, **extra}
-
-    def compress_request(self, **extra):
-        return {"protocol": 3, "op": "compress", "scope": self.scope, "source": self.download,
-                "max_bytes": 500000, "deadline": int(time.time())+600,
-                "settings": {"preset": "fast", "passes": 1, "execution_minutes": 15}, **extra}
-
-    def finish_download(self, root, jobs):
-        with mock.patch.object(worker.threading, "Thread"):
-            self.assertEqual(jobs.poll(self.download, self.download_request()), {"stage": "queued", "protocol": 3})
-        path = jobs.path(self.download)
-        jobs.active[self.download] = time.monotonic()+30
-        def run(args, deadline, **kwargs):
-            out = Path(args[args.index("--output")+1]); receipt = Path(args[args.index("--receipt")+1])
-            (out / "video.mp4").write_bytes(b"synthetic-original")
-            receipt.write_text(json.dumps({"files": [str(out / "video.mp4")]}))
-        with mock.patch.object(worker, "run", side_effect=run), \
-             mock.patch.object(worker, "compress", side_effect=AssertionError("download job compressed")):
-            jobs.execute(self.download)
-        return path
-
-    def test_parsing(self):
-        self.assertIsNone(worker.protocol_settings(self.download_request()))
-        self.assertEqual(worker.protocol_settings(self.compress_request())["preset"], "fast")
-        for bad in (self.download_request(op="encode"), self.download_request(scope="../x"),
-                    self.download_request(max_bytes=100000), self.download_request(settings={}),
-                    self.compress_request(source="/etc/passwd"), self.compress_request(url="https://douyin.com/x"),
-                    self.compress_request(settings={"encoder": "x"})):
-            with self.subTest(bad=bad), self.assertRaises(ValueError):
-                worker.protocol_settings(bad)
-
-    def test_download_keeps_only_the_original(self):
-        root, jobs = self.jobs()
-        path = self.finish_download(root, jobs)
-        state = jobs.load(path)
-        self.assertEqual(state["stage"], "complete")
-        self.assertEqual((path / "original.mp4").read_bytes(), b"synthetic-original")
-        self.assertFalse((path / "result.mp4").exists())
-        with self.assertRaises(ValueError):
-            jobs.result(self.download)
-
-    def test_compress_reads_the_scoped_source_and_resumes_with_its_settings(self):
-        root, jobs = self.jobs()
-        # No source yet: rejected before any job is created.
-        with self.assertRaises(ValueError):
-            jobs.poll(self.compress_job, self.compress_request())
-        self.finish_download(root, jobs)
-        # Another bot job's scope can't use this original.
-        with self.assertRaises(ValueError):
-            jobs.poll(self.compress_job, self.compress_request(scope="e"*64))
-        with mock.patch.object(worker.threading, "Thread"):
-            self.assertEqual(jobs.poll(self.compress_job, self.compress_request())["stage"], "queued")
-        restarted = worker.Jobs(root)
-        restarted.active[self.compress_job] = time.monotonic()+30
-        seen = {}
-        def compress(source, destination, limit, deadline, settings):
-            seen.update(source=source.read_bytes(), settings=settings)
-            destination.write_bytes(b"synthetic-send-copy"); return destination
-        with mock.patch.dict(worker.DEFAULT_SETTINGS, {"preset": "veryfast"}), \
-             mock.patch.object(worker, "compress", side_effect=compress), \
-             mock.patch.object(worker, "run", side_effect=AssertionError("redownloaded")):
-            restarted.execute(self.compress_job)
-        self.assertEqual(seen["source"], b"synthetic-original")
-        self.assertEqual((seen["settings"]["preset"], seen["settings"]["passes"]), ("fast", 1))
-        self.assertEqual(restarted.result(self.compress_job).read_bytes(), b"synthetic-send-copy")
-        with self.assertRaises(ValueError):
-            restarted.poll(self.compress_job, self.compress_request(settings={"preset": "slow", "execution_minutes": 15}))
-
-    def test_http_v3_shapes(self):
-        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(worker.Jobs, "execute"):
-            token = "SYNTHETIC_TOKEN_FOR_OFFLINE_TEST_ONLY"
-            server = worker.create_server(Path(tmp), token, 0)
-            thread = threading.Thread(target=server.serve_forever, daemon=True)
-            thread.start()
-            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-            base = "http://127.0.0.1:%s/download/jobs/" % server.server_port
-            def call(job, value):
-                req = urllib.request.Request(base + job, data=json.dumps(value).encode(),
-                    headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"})
-                try:
-                    with opener.open(req) as response:
-                        return response.status, json.loads(response.read())
-                except urllib.error.HTTPError as error:
-                    return error.code, None
-            try:
-                self.assertEqual(call(self.download, self.download_request()), (200, {"stage": "queued", "protocol": 3}))
-                self.assertEqual(call(self.download, self.download_request(url="http://127.0.0.1/x"))[0], 502)
-                # The source download isn't complete: compress is refused.
-                self.assertEqual(call(self.compress_job, self.compress_request())[0], 502)
-                self.assertEqual(call(self.compress_job, self.compress_request(max_bytes=20000000))[0], 502)
-            finally:
-                server.shutdown(); server.server_close(); thread.join(timeout=3)
 
 
 PLUGIN = '''

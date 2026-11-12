@@ -45,7 +45,7 @@ func (w *taskWorker) serve(t *testing.T, tasks map[string]int) *httptest.Server 
 		parts := strings.Split(r.URL.Path, "/")
 		switch {
 		case strings.HasSuffix(r.URL.Path, "/capabilities"):
-			json.NewEncoder(rw).Encode(map[string]any{"protocol": 2, "protocols": []int{1, 2, 3, 4}, "tasks": w.tasks})
+			json.NewEncoder(rw).Encode(map[string]any{"protocol": 4, "protocols": []int{4}, "tasks": w.tasks})
 		case r.Method == "GET" && len(parts) == 6 && parts[4] == "files":
 			rw.Write([]byte("bytes-of-" + parts[5]))
 		case r.Method == "POST":

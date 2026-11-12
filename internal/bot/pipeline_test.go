@@ -313,7 +313,7 @@ func TestCustomVideoWithCaption(t *testing.T) {
 	if err := e.SetConfiguration(c); err != nil {
 		t.Fatal(err)
 	}
-	e.Downloader = downloadFunc(func(context.Context, string, int64) ([]byte, error) { return []byte("synthetic-video"), nil })
+	e.Tasks = &scriptTasks{fn: func(context.Context, string, int64) ([]byte, error) { return []byte("synthetic-video"), nil }}
 	m := incoming()
 	m.Text = "!grab https://v.douyin.com/synthetic/"
 	if ok, err := e.Accept(context.Background(), m); !ok || err != nil {
@@ -466,10 +466,10 @@ func TestVideoLinkFromALaterStep(t *testing.T) {
 	e.Provider = &transcriptProvider{}
 	asked := ""
 	var limit int64
-	e.Downloader = downloadFunc(func(_ context.Context, u string, max int64) ([]byte, error) {
+	e.Tasks = &scriptTasks{fn: func(_ context.Context, u string, max int64) ([]byte, error) {
 		asked, limit = u, max
 		return []byte("synthetic-video"), nil
-	})
+	}}
 	m := incoming()
 	m.Text = "!find https://v.douyin.com/late/"
 	if ok, err := e.Accept(context.Background(), m); !ok || err != nil {
