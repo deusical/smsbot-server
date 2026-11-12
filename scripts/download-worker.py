@@ -61,36 +61,6 @@ def validate_settings(value):
 JOB = re.compile(r"[a-f0-9]{64}")
 
 
-def protocol_settings(request):
-    protocol = request.get("protocol", 1)
-    if type(protocol) is not int or protocol not in (1, 2, 3):
-        raise ValueError("unsupported_protocol")
-    if protocol == 3:
-        # v3 splits one bot video into separate jobs: "download" keeps the
-        # original here; "compress" makes a send copy from a download job of
-        # the same bot job (scope). Only job IDs cross the boundary, never paths.
-        op = request.get("op")
-        if not isinstance(request.get("scope"), str) or not JOB.fullmatch(request["scope"]):
-            raise ValueError("invalid_request")
-        if op == "download":
-            if set(request) - {"protocol", "op", "scope", "url", "deadline"}:
-                raise ValueError("invalid_request")
-            return None
-        if op == "compress":
-            if (set(request) - {"protocol", "op", "scope", "source", "max_bytes", "deadline", "settings"} or
-                    not isinstance(request.get("source"), str) or not JOB.fullmatch(request["source"])):
-                raise ValueError("invalid_request")
-            return validate_settings(request.get("settings"))
-        raise ValueError("invalid_request")
-    if protocol == 2:
-        if set(request) - {"url", "max_bytes", "deadline", "protocol", "settings"}:
-            raise ValueError("invalid_request")
-        return validate_settings(request.get("settings"))
-    if "settings" in request:
-        raise ValueError("invalid_settings")
-    return None
-
-
 class LeaseExpired(Exception):
     pass
 
@@ -491,16 +461,10 @@ class Jobs:
         return f
 
     def poll(self, job, request):
-        if request.get("protocol") == 4:
-            with self.lock:
-                request = self.task_request(request)
-        settings = protocol_settings(request) if request.get("protocol") != 4 else None
-        if settings is not None:
-            settings["max_mb"] = min(settings["max_mb"], request["max_bytes"] / 1_000_000)
-            request = {**request, "settings": settings}
+        if not isinstance(request, dict) or request.get("protocol") != 4:
+            raise ValueError("unsupported_protocol")
         with self.lock:
-            if request.get("op") == "compress":
-                self.source(request["source"], request["scope"], job)
+            request = self.task_request(request)
             path = self.path(job)
             if (path / "state.json").exists():
                 state = self.load(path)
@@ -520,24 +484,12 @@ class Jobs:
                     threading.Thread(target=self.execute, args=(job,), daemon=True).start()
                 else:
                     raise RuntimeError("busy")
-            if state.get("protocol") == 4:
-                answer = {"stage": state["stage"], "protocol": 4}
-                if state["stage"] == "complete":
-                    answer["outputs"] = state.get("outputs", {})
-                if state["stage"] == "failed":
-                    answer["code"] = state.get("code", "task_failed")
-                return answer
-            return {"stage": state["stage"], **({"protocol": state["protocol"]} if state.get("protocol") in (2, 3) else {})}
-
-    def source(self, source, scope, job):
-        """The completed download job of the same bot job that a compress job reads."""
-        if source == job or not (self.directory / source / "state.json").exists():
-            raise ValueError("source_unavailable")
-        state = self.load(self.directory / source)
-        if (state.get("op") != "download" or state.get("scope") != scope or state["stage"] != "complete" or
-                time.time() >= state["deadline"] or not (self.directory / source / "original.mp4").exists()):
-            raise ValueError("source_unavailable")
-        return self.directory / source
+            answer = {"stage": state["stage"], "protocol": 4}
+            if state["stage"] == "complete":
+                answer["outputs"] = state.get("outputs", {})
+            if state["stage"] == "failed":
+                answer["code"] = state.get("code", "task_failed")
+            return answer
 
     def execute(self, job):
         state, path = None, None
@@ -561,35 +513,15 @@ class Jobs:
                     folder = Path(tmp)
                     work.folder, work.alive, work.stage = folder, alive, stage
                     deadline = time.monotonic() + max(0, state["deadline"] - time.time())
-                    if state.get("protocol") == 4:
-                        task = self.tasks.get(state["task"])
-                        if task is None or task["version"] != state["version"]:
-                            raise TaskFailed("unknown_task")
-                        tj = TaskJob(self, job, path, state, folder, deadline, stage)
-                        task["run"](tj)
-                        if not alive():
-                            raise LeaseExpired()
-                        with self.lock:
-                            state["outputs"] = tj.outputs
-                        stage("complete")
-                        return
-                    original = path / "original.mp4"
-                    if state.get("op") == "compress":
-                        with self.lock:
-                            original = self.source(state["source"], state["scope"], job) / "original.mp4"
-                    elif not original.exists():
-                        stage("downloading")
-                        publish(fetch_original(self.root, state["url"], folder, deadline), original)
-                    if state.get("op") == "download":
-                        # The original stays here for a compress job to read.
-                        stage("complete")
-                        return
-                    stage("compressing")
-                    options = {"settings": state["settings"]} if state.get("protocol") in (2, 3) else {}
-                    output = compress(original, folder / "send.mp4", state["max_bytes"], deadline, **options)
+                    task = self.tasks.get(state.get("task"))
+                    if state.get("protocol") != 4 or task is None or task["version"] != state.get("version"):
+                        raise TaskFailed("unknown_task")
+                    tj = TaskJob(self, job, path, state, folder, deadline, stage)
+                    task["run"](tj)
                     if not alive():
                         raise LeaseExpired()
-                    publish(output, path / "result.mp4")
+                    with self.lock:
+                        state["outputs"] = tj.outputs
                     stage("complete")
         except (TimeoutError, LeaseExpired):
             with self.lock:
@@ -600,8 +532,7 @@ class Jobs:
                 return
             with self.lock:
                 state["stage"] = "failed"
-                if state.get("protocol") == 4:
-                    state["code"] = failure_code(e)
+                state["code"] = failure_code(e)
                 self.save(path, state)
         finally:
             work.__dict__.clear()
@@ -618,18 +549,6 @@ class Jobs:
                     "handle" not in state.get("outputs", {}).get(name, {}) or not f.is_file()):
                 raise ValueError("result_unavailable")
             return f
-
-    def result(self, job):
-        """The verified send copy of a completed compress job."""
-        with self.lock:
-            path = self.path(job)
-            state = self.load(path)
-            if state["stage"] != "complete" or time.time() >= state["deadline"] or state.get("op") == "download":
-                raise ValueError("result_unavailable")
-            result = path / "result.mp4"
-            if not 0 < result.stat().st_size <= state["max_bytes"]:
-                raise ValueError("size_limit")
-            return result
 
 
 TAILNET = ipaddress.ip_network("100.64.0.0/10")
@@ -664,8 +583,7 @@ def create_server(root, token, port, output_root=None, bind="127.0.0.1", tasks=N
                 return
             try:
                 if self.command == "GET" and self.path == "/download/capabilities":
-                    # protocol stays 2 for bots that compare it exactly.
-                    data = json.dumps({"protocol": 2, "protocols": [1, 2, 3, 4],
+                    data = json.dumps({"protocol": 4, "protocols": [4],
                                        "tasks": {n: t["version"] for n, t in sorted(jobs.tasks.items())}}).encode()
                     self.send_response(200)
                     self.send_header("Content-Type", "application/json")
@@ -685,29 +603,8 @@ def create_server(root, token, port, output_root=None, bind="127.0.0.1", tasks=N
                     if not 0 < length <= 1 << 20:
                         raise ValueError()
                     request = json.loads(self.rfile.read(length))
-                    if not isinstance(request, dict):
+                    if not isinstance(request, dict) or request.get("protocol") != 4:
                         raise ValueError()
-                    if request.get("protocol") == 4:
-                        data = json.dumps(jobs.poll(job, request)).encode()
-                        self.send_response(200)
-                        self.send_header("Content-Type", "application/json")
-                        self.send_header("Content-Length", str(len(data)))
-                        self.send_header("Cache-Control", "no-store")
-                        self.end_headers()
-                        self.wfile.write(data)
-                        return
-                    if length > 16384:
-                        raise ValueError()
-                    op = request.get("op") if request.get("protocol") == 3 else None
-                    if ((op != "compress" and not valid_url(request.get("url"))) or
-                        (op != "download" and (type(request.get("max_bytes")) is not int or
-                                               not 100000 <= request["max_bytes"] <= LIMIT)) or
-                        type(request.get("deadline")) is not int or
-                        not time.time()-5 < request["deadline"] <= time.time()+3600):
-                        raise ValueError()
-                    settings = protocol_settings(request)
-                    if settings is not None and request["deadline"] > time.time() + settings["execution_minutes"] * 60 + 5:
-                        raise ValueError("invalid_deadline")
                     data = json.dumps(jobs.poll(job, request)).encode()
                     self.send_response(200)
                     self.send_header("Content-Type", "application/json")
@@ -720,15 +617,6 @@ def create_server(root, token, port, output_root=None, bind="127.0.0.1", tasks=N
                     with output.open("rb") as src:
                         self.send_response(200)
                         self.send_header("Content-Type", "application/octet-stream")
-                        self.send_header("Content-Length", str(os.fstat(src.fileno()).st_size))
-                        self.send_header("Cache-Control", "no-store")
-                        self.end_headers()
-                        shutil.copyfileobj(src, self.wfile)
-                elif self.command == "GET" and len(parts) == 5 and parts[4] == "result":
-                    result = jobs.result(job)
-                    with result.open("rb") as src:
-                        self.send_response(200)
-                        self.send_header("Content-Type", "video/mp4")
                         self.send_header("Content-Length", str(os.fstat(src.fileno()).st_size))
                         self.send_header("Cache-Control", "no-store")
                         self.end_headers()

@@ -141,37 +141,15 @@ limit reduction cancels a job whose snapshotted ceiling is no longer allowed.
 Legacy flat `execution_minutes` maps into settings; zero/absent in the legacy
 representation means 15. Explicit modern settings require 1-60 minutes.
 
-## Worker protocol v2
-
-The bot probes authenticated `GET /download/capabilities` for `{"protocol":2}`
-before creating a worker job. `POST /download/jobs/<job>` then includes:
-
-```json
-{"protocol":2,"url":"https://douyin.com/example","max_bytes":19990000,"deadline":1800000000,"settings":{"preset":"medium","passes":2,"max_attempts":3,"copy_if_fits":true,"max_mb":19.99,"execution_minutes":15}}
-```
-
-The worker independently validates all enums and bounds, including the deadline
-window and byte ceiling. The job's checkpoint stores all effective settings;
-a restart uses those settings, even if code defaults changed. Changed settings
-for an existing job are rejected. The host's single preparation slot and CPU
-thread count stay outside commands. Legacy protocol requests remain supported.
-
-If the worker does not advertise protocol 2, the bot submits a legacy request
-and lets that worker use its defaults, as approved by the owner. It logs only
-`download_worker_outdated_using_defaults` once per downloader instance, with no
-URL, content, contact or upstream error. The warning currently appears in the
-service log; Activity continues to show the sanitized preparation stage. The
-original deadline, byte ceiling and every dispatcher safety check still apply.
-Network failures yield another poll and do not bypass authorization.
-
 ## Worker protocol v4: tasks
 
-The worker is a general task runner. A task has a dotted name and a version;
-video download and compression are the built-in `video.download@1` and
-`video.compress@1`. Capabilities list every task the worker can run:
+The worker speaks protocol 4 only. It is a general task runner. A task has a
+dotted name and a version; video download and compression are the built-in
+`video.download@1` and `video.compress@1`. Capabilities list every task the
+worker can run:
 
 ```json
-{"protocol":2,"protocols":[1,2,3,4],"tasks":{"video.compress":1,"video.download":1}}
+{"protocol":4,"protocols":[4],"tasks":{"video.compress":1,"video.download":1}}
 ```
 
 A job runs one task. Inputs are typed values; a file input names a file output
@@ -225,30 +203,11 @@ published before a restart), `job.output(name, value)` and
 `job.output_file(name, path, type)`. Any other exception fails the job with
 `task_failed`. Task names, file names, stages and codes are lowercase identifiers.
 
-## Worker protocol v3: separate download and compression
-
 The download command is a pipeline: `text.extract_url` → `video.download` →
-`video.compress` → `reply`. With protocol 3 these are separate worker jobs, so
-the original can feed other steps later. Capabilities now answer
-`{"protocol":2,"protocols":[1,2,3]}`; `protocol` stays 2 for bots that compare
-it exactly. Job IDs are `sha256(<bot job> + NUL + <step id>)`; `scope` is the bot job.
-
-```json
-{"protocol":3,"op":"download","scope":"<bot job>","url":"https://douyin.com/example","deadline":1800000000}
-{"protocol":3,"op":"compress","scope":"<bot job>","source":"<download job>","max_bytes":19990000,"deadline":1800000000,"settings":{"preset":"medium","passes":2,"max_attempts":3,"copy_if_fits":true,"max_mb":19.99,"execution_minutes":15}}
-```
-
-A download job keeps only the original and has no result. A compress
-job is refused unless its `source` is a completed download job of the same
-`scope`, so one bot job can never read another's original; only job IDs cross
-the boundary, never paths. The compress job checkpoints its effective settings
-and resumes with them after a restart, like protocol 2.
-
-If the worker doesn't list protocol 3, the bot logs only
-`download_worker_v3_unavailable_using_v2` once and runs download and compression
-as one protocol-2 job with the same settings (falling back further to the
-legacy defaults, with the warning above, when protocol 2 is missing too).
-Upgrade both together for the separate jobs.
+`video.compress` → `reply`. Download and compression are separate task jobs, so
+the original can feed other steps later. Job IDs are `sha256(<bot job> + NUL + <step id>)`;
+`scope` is the bot job. A compress task may read only a file output of a
+completed task of the same scope on the same worker.
 
 The bot stores its job ID and encrypted plan immediately. Dispatch enqueues or
 polls preparation with short HTTP calls and yields between polls, so other
@@ -258,9 +217,9 @@ background upload runs independently of command dispatch, under the remaining
 execution deadline. Only dispatch can commit its result after repeating every
 safety check, persist outbound intent, and invoke the send pipeline.
 
-The worker has one preparation slot. It checkpoints the downloaded original
-(`original.mp4`), the verified send copy (`result.mp4`) and the job's URL, settings
-and stage (`state.json`) as plain files in the job's folder, by the owner's choice:
+The worker runs as many jobs at once as `--slots` allows (one, unless started
+with more). It checkpoints each task's state and file outputs as plain files in
+the job's folder, by the owner's choice:
 the videos come from public links, and the folder is owner-only. Finished files
 are moved into place in one step, so a crash never leaves a partial file under its
 final name. A worker restart resumes an active job from its saved original on the next
@@ -291,25 +250,15 @@ Worker responses never contain raw upstream errors, file titles or credentials.
 
 ## Helper protocol
 
-Upgrade both bot and worker together. The old synchronous `POST /download`
-returns 410. Keep the bot endpoint flag ending in `/download`; the client appends
-`/jobs/<persisted bot job ID>`.
+Upgrade the bot and the worker together. The worker accepts protocol 4 only.
+Anything else, including the old synchronous `POST /download`, is refused.
+Keep the bot endpoint flag ending in `/download`; the client appends
+`/jobs/<task job ID>` and `/jobs/<task job ID>/files/<name>`.
 
-`POST /download/jobs/<64 lowercase hex characters>` on loopback requires
-`Authorization: Bearer <token>` and JSON:
-
-```json
-{"url":"https://v.douyin.com/example/","max_bytes":19999999,"deadline":1793500000}
-```
-
-`deadline` is the accepted job's absolute Unix timestamp, at most one hour ahead.
-Repeated requests are idempotent and renew the lease; URL, size ceiling and deadline
-cannot change for an existing ID. Success returns JSON `{"stage":"downloading"}`
-(or another stage). `GET /download/jobs/<id>/result` returns the verified MP4 only
-when complete and still within its deadline. Responses use `Cache-Control: no-store`.
-Authentication failures return 401; invalid input and preparation failures use
-sanitized responses. Temporary request failures are polled again under the same
-job ID until expiry. No upstream send is retried by this protocol.
+Responses use `Cache-Control: no-store`. Authentication failures return 401;
+invalid input and preparation failures use sanitized responses. Temporary
+request failures are polled again under the same job ID until expiry. No
+upstream send is retried by this protocol.
 
 ## Verification
 

@@ -72,7 +72,6 @@ func videoDownloadModule() module {
 			return cmdflow.Pending(), nil
 		},
 		Run: func(r *runCtx, s *cmdflow.Step) (cmdflow.Outcome, error) {
-			e := r.e
 			var st sourceState
 			_ = s.Load(&st)
 			if st.URL == "" {
@@ -84,33 +83,7 @@ func videoDownloadModule() module {
 			if st.URL == "" {
 				return cmdflow.Fail("download_failed"), nil
 			}
-			if e.Tasks != nil {
-				return taskDownload(r, s, st)
-			}
-			worker, separate := e.Downloader.(videoWorkerV3)
-			combined := !separate
-			complete, err := e.pollWorker(r.ctx, r.j, r.p, func(ctx context.Context, deadline time.Time) (string, error) {
-				if combined {
-					return "complete", nil
-				}
-				stage, err := worker.PollSource(ctx, workerJob(r.j, s.ID), r.j.ID, st.URL, deadline)
-				if errors.Is(err, errWorkerV3Unavailable) {
-					combined = true
-					return "complete", nil
-				}
-				return stage, err
-			})
-			if !complete || err != nil {
-				return cmdflow.Yield(), err
-			}
-			if combined {
-				// The compress step downloads and compresses in one older job.
-				s.Out("source", cmdflow.Value{Type: typeStoredVideo, Text: st.URL})
-			} else {
-				s.Out("source", cmdflow.Value{Type: typeStoredVideo, Handle: workerJob(r.j, s.ID)})
-			}
-			s.Status = cmdflow.StatusDone
-			return yielded(e.finishWorkerStep(r.j, r.p))
+			return taskDownload(r, s, st)
 		},
 		Simulate: func(_ *runCtx, s *cmdflow.Step) (cmdflow.Outcome, error) {
 			s.Out("source", cmdflow.Value{Type: typeStoredVideo, Text: "(original kept on the server)"})
@@ -169,41 +142,10 @@ func videoCompressModule() module {
 				return yielded(true, e.Store.Complete(r.j.ID, "cancelled", "attachment_limits_changed"))
 			}
 			source, ok := s.In("source")
-			if !ok || source.Handle == "" && source.Text == "" {
+			if !ok || source.Handle == "" {
 				return cmdflow.Fail("download_failed"), nil
 			}
-			if e.Tasks != nil && source.Handle != "" {
-				return taskCompress(r, s, st, source)
-			}
-			var data []byte
-			complete, err := e.pollWorker(r.ctx, r.j, r.p, func(ctx context.Context, deadline time.Time) (string, error) {
-				var stage string
-				var err error
-				if source.Handle != "" {
-					worker, separate := e.Downloader.(videoWorkerV3)
-					if !separate {
-						return "", errors.New("download_failed")
-					}
-					data, stage, err = worker.PollCompress(ctx, workerJob(r.j, s.ID), r.j.ID, source.Handle, st.MaxBytes, deadline, st.Settings)
-				} else if v2, ok := e.Downloader.(interface {
-					PollDownloadSettings(context.Context, string, string, int64, time.Time, VideoSettings) ([]byte, string, error)
-				}); ok {
-					data, stage, err = v2.PollDownloadSettings(ctx, r.j.ID, source.Text, st.MaxBytes, deadline, st.Settings)
-				} else {
-					data, stage, err = e.Downloader.PollDownload(ctx, r.j.ID, source.Text, st.MaxBytes, deadline)
-				}
-				return stage, err
-			})
-			if !complete || err != nil {
-				return cmdflow.Yield(), err
-			}
-			file, done, err := e.sendableVideo(r.ctx, r.j, r.p, data, st.MaxBytes)
-			if done || err != nil {
-				return cmdflow.Yield(), err
-			}
-			s.Out("video", mediaValue(file))
-			s.Status = cmdflow.StatusDone
-			return yielded(e.finishWorkerStep(r.j, r.p))
+			return taskCompress(r, s, st, source)
 		},
 		Simulate: func(_ *runCtx, s *cmdflow.Step) (cmdflow.Outcome, error) {
 			s.Out("video", cmdflow.Value{Type: typeVideo, Text: videoPreview})

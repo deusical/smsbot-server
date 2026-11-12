@@ -6,9 +6,6 @@ import (
 	"github.com/deusical/cmdflow"
 	"github.com/deusical/smsbot-server/internal/media"
 	"github.com/deusical/smsbot-server/internal/store"
-	"net/http"
-	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 )
@@ -90,87 +87,6 @@ func TestVideoSettingsSnapshotAndEffectiveCap(t *testing.T) {
 	}
 	if *defs[2].Schema.Properties["max_mb"].EffectiveMaximum != float64(2<<20)/1e6 {
 		t.Fatal("UI cap not exposed")
-	}
-}
-func TestWorkerProtocolV2AndOutdatedFallback(t *testing.T) {
-	t.Parallel()
-	for _, outdated := range []bool{false, true} {
-		t.Run(map[bool]string{false: "v2", true: "outdated"}[outdated], func(t *testing.T) {
-			warnings := []string{}
-			posts := 0
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.Header.Get("Authorization") != "Bearer SYNTHETIC" {
-					t.Error("missing auth")
-				}
-				if strings.HasSuffix(r.URL.Path, "/capabilities") {
-					if outdated {
-						w.WriteHeader(502) // The original async worker rejects unknown paths with 502.
-						w.Write([]byte("private upstream detail"))
-					} else {
-						w.Write([]byte(`{"protocol":2}`))
-					}
-					return
-				}
-				if r.Method == "GET" {
-					w.Header().Set("Content-Type", "video/mp4")
-					w.Write([]byte("synthetic"))
-					return
-				}
-				posts++
-				var value map[string]json.RawMessage
-				if json.NewDecoder(r.Body).Decode(&value) != nil {
-					t.Error("bad body")
-				}
-				if outdated {
-					if value["settings"] != nil || value["protocol"] != nil {
-						t.Error("legacy worker given custom settings")
-					}
-				} else {
-					var got VideoSettings
-					json.Unmarshal(value["settings"], &got)
-					if string(value["protocol"]) != "2" || got.Preset != "fast" || got.Passes != 1 || got.CopyIfFits {
-						t.Error("v2 settings missing")
-					}
-				}
-				w.Write([]byte(`{"stage":"complete"}`))
-			}))
-			defer server.Close()
-			d := &HTTPDownloader{Endpoint: server.URL + "/download", Token: "SYNTHETIC", Warning: func(code string) { warnings = append(warnings, code) }}
-			v := DefaultVideoSettings()
-			v.Preset = "fast"
-			v.Passes = 1
-			v.CopyIfFits = false
-			data, stage, err := d.PollDownloadSettings(context.Background(), strings.Repeat("a", 64), "https://douyin.com/synthetic", 100000, time.Now().Add(time.Minute), v)
-			if err != nil || stage != "complete" || string(data) != "synthetic" || posts != 1 {
-				t.Fatal("job did not proceed", stage, err)
-			}
-			if outdated {
-				if len(warnings) != 1 || warnings[0] != "download_worker_outdated_using_defaults" {
-					t.Fatal("unsafe/missing warning")
-				}
-			} else if len(warnings) != 0 {
-				t.Fatal("spurious warning")
-			}
-		})
-	}
-}
-
-func TestWorkerCapabilitiesBusyYieldsWithoutFallback(t *testing.T) {
-	t.Parallel()
-	calls := 0
-	warned := false
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls++
-		if !strings.HasSuffix(r.URL.Path, "/capabilities") {
-			t.Error("busy worker received a job")
-		}
-		w.WriteHeader(503)
-	}))
-	defer server.Close()
-	d := &HTTPDownloader{Endpoint: server.URL, Warning: func(string) { warned = true }}
-	data, stage, err := d.PollDownloadSettings(context.Background(), strings.Repeat("a", 64), "https://douyin.com/synthetic", 100000, time.Now().Add(time.Minute), DefaultVideoSettings())
-	if err != nil || len(data) != 0 || stage != "waiting_worker" || warned || calls != 1 {
-		t.Fatal("busy worker did not yield safely")
 	}
 }
 func TestVideoSettingsDeadlineUsesAuthoritativeSettings(t *testing.T) {
