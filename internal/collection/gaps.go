@@ -169,12 +169,12 @@ func (h HistoryHost) NextGapAttempt() (time.Time, bool) {
 	if pending {
 		return time.Time{}, true
 	}
-	svc.mu.Lock()
-	defer svc.mu.Unlock()
-	settings, err := svc.Settings()
+	settings, err := svc.policySettings()
 	if err != nil || !settings.Enabled {
 		return time.Time{}, false
 	}
+	svc.mu.Lock()
+	defer svc.mu.Unlock()
 	gaps, err := svc.Store.CaptureGaps()
 	if err != nil {
 		return time.Time{}, false

@@ -105,14 +105,29 @@ func (f *Fixture) FetchHistory(ctx context.Context, conv, expectedPeer, cursor s
 }
 func (g *Google) FetchHistory(ctx context.Context, conv, expectedPeer, cursor string) (HistoryPage, error) {
 	if !g.Ready() {
-		return HistoryPage{}, errors.New("transport_unavailable")
+		return HistoryPage{}, ErrUnavailable
 	}
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
+	return g.fetchHistory(ctx, conv, expectedPeer, cursor, g.client.GetConversation, g.client.FetchMessages)
+}
+
+func (g *Google) fetchHistory(
+	ctx context.Context,
+	conv, expectedPeer, cursor string,
+	getConversation func(context.Context, string) (*gmproto.Conversation, error),
+	fetchMessages func(context.Context, string, int64, *gmproto.Cursor) (*gmproto.ListMessagesResponse, error),
+) (HistoryPage, error) {
 	g.countPhone(ctx, phoneLookup)
-	c, err := g.client.GetConversation(ctx, conv)
-	if err != nil || !readable(c) || peer(c) != expectedPeer {
-		return HistoryPage{}, errors.New("ineligible_conversation")
+	c, err := getConversation(ctx, conv)
+	if err != nil {
+		if !g.Ready() {
+			return HistoryPage{}, ErrUnavailable
+		}
+		return HistoryPage{}, ErrLookupFailed
+	}
+	if !readable(c) || peer(c) != expectedPeer {
+		return HistoryPage{}, ErrIneligibleConversation
 	}
 	var pointer *gmproto.Cursor
 	if cursor != "" {
@@ -130,13 +145,22 @@ func (g *Google) FetchHistory(ctx context.Context, conv, expectedPeer, cursor st
 	}
 	observed := time.Now().UTC()
 	g.countPhone(ctx, phoneMessages)
-	result, err := g.client.FetchMessages(ctx, conv, 50, pointer)
+	result, err := fetchMessages(ctx, conv, 50, pointer)
 	if err != nil {
+		if !g.Ready() {
+			return HistoryPage{}, ErrUnavailable
+		}
 		return HistoryPage{}, errors.New("history_fetch_failed")
 	}
 	g.countPhone(ctx, phoneLookup)
-	c, err = g.client.GetConversation(ctx, conv)
-	if err != nil || !readable(c) || peer(c) != expectedPeer {
+	c, err = getConversation(ctx, conv)
+	if err != nil {
+		if !g.Ready() {
+			return HistoryPage{}, ErrUnavailable
+		}
+		return HistoryPage{}, ErrLookupFailed
+	}
+	if !readable(c) || peer(c) != expectedPeer {
 		return HistoryPage{}, errors.New("conversation_identity_changed")
 	}
 	out := HistoryPage{Messages: []HistoricalMessage{}}

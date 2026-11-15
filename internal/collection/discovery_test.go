@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"github.com/deusical/smsbot-server/internal/history"
 	"testing"
 )
 
@@ -62,5 +63,35 @@ func TestCollectsMore(t *testing.T) {
 		if got := collectsMore(tc.previous, tc.next); got != tc.want {
 			t.Errorf("%s: %t, want %t", tc.name, got, tc.want)
 		}
+	}
+}
+
+func TestHistoryHostPolicySnapshotUsesConsentAndCommitRechecksSettings(t *testing.T) {
+	t.Parallel()
+	svc, _ := setup(t)
+	ctx := context.Background()
+	s := enableInbox(t, svc)
+	host := svc.HistoryHost()
+	snap, err := host.PolicySnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	convs, err := svc.Transport.Conversations(ctx)
+	if err != nil || len(convs) == 0 {
+		t.Fatal("missing fixture conversations", err)
+	}
+	c := convs[0]
+	p, err := snap(c)
+	if err != nil || p.Revision != s.Revision {
+		t.Fatalf("unexpected snapshot policy: %+v %v", p, err)
+	}
+	// Revoke collection after the policy snapshot was taken; Commit must still
+	// re-read live settings under the control lock and reject the stale policy.
+	s.Enabled = false
+	if err := svc.SetSettings(ctx, s); err != nil {
+		t.Fatal(err)
+	}
+	if err := host.Commit(ctx, history.Commit{Work: history.SeedWork, Conversation: c, Policy: p}); err == nil {
+		t.Fatal("Commit accepted a step after collection was disabled")
 	}
 }

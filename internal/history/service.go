@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"github.com/deusical/smsbot-server/internal/archive"
 	"github.com/deusical/smsbot-server/internal/store"
 	"github.com/deusical/smsbot-server/internal/transport"
 	"sort"
@@ -176,6 +177,15 @@ func (s *Service) Wake() {
 // Each lane owns its own deadline. An active import is not permission to poll
 // every completed conversation on each fast turn.
 func (s *Service) nextInterval() time.Duration {
+	_, allowed := s.policySnapshot()
+	archives, err := s.Store.Archives()
+	if err != nil {
+		return idleInterval
+	}
+	return s.nextIntervalFrom(archives, allowed)
+}
+
+func (s *Service) nextIntervalFrom(archives []store.Archive, allowed func(store.Archive) bool) time.Duration {
 	now := s.now()
 	next := now.Add(idleInterval)
 	consider := func(at time.Time) {
@@ -197,25 +207,52 @@ func (s *Service) nextInterval() time.Duration {
 			consider(at)
 		}
 	}
-	archives, err := s.Store.Archives()
-	if err != nil {
-		return idleInterval
-	}
-	for _, at := range pendingDeadlines(archives, s.allowed) {
+	for _, at := range pendingDeadlines(archives, allowed) {
 		consider(at)
 	}
 	return max(s.active(), next.Sub(now))
 }
 
-// allowed reports whether a record is an individual conversation the owner
-// currently permits collection for. Policy is a local check, never a phone call.
-func (s *Service) allowed(a store.Archive) bool {
-	if !eligibleArchive(a) {
-		return false
+// policySnapshot returns a per-turn policy lookup and allowed check. When the
+// host implements PolicySnapshotter, settings are read once for the turn;
+// otherwise policy results are memoized by conversation identity for the turn.
+func (s *Service) policySnapshot() (func(transport.Conversation) (Policy, error), func(store.Archive) bool) {
+	var lookup func(transport.Conversation) (Policy, error)
+	if snap, ok := s.Host.(PolicySnapshotter); ok {
+		fn, err := snap.PolicySnapshot()
+		lookup = func(c transport.Conversation) (Policy, error) {
+			if err != nil {
+				return Policy{}, err
+			}
+			return fn(c)
+		}
+	} else {
+		type key struct{ id, peer string }
+		type entry struct {
+			p   Policy
+			err error
+		}
+		cache := map[key]entry{}
+		lookup = func(c transport.Conversation) (Policy, error) {
+			k := key{c.ID, c.ParticipantID}
+			if v, ok := cache[k]; ok {
+				return v.p, v.err
+			}
+			p, err := s.Host.Policy(c)
+			cache[k] = entry{p, err}
+			return p, err
+		}
 	}
-	_, err := s.Host.Policy(a.Conversation)
-	return err == nil
+	allowed := func(a store.Archive) bool {
+		if !eligibleArchive(a) {
+			return false
+		}
+		_, err := lookup(a.Conversation)
+		return err == nil
+	}
+	return lookup, allowed
 }
+
 func (s *Service) active() time.Duration { return cmp.Or(s.ActiveInterval, activeInterval) }
 func activeState(state string) bool {
 	return state == "queued" || state == "running" || state == "retrying"
@@ -236,19 +273,21 @@ func (s *Service) Run(ctx context.Context) {
 				default:
 				}
 			}
-			s.Tick(ctx)
-			timer.Reset(s.nextInterval())
+			timer.Reset(s.tick(ctx, true))
 		case <-timer.C:
-			s.Tick(ctx)
-			timer.Reset(s.nextInterval())
+			timer.Reset(s.tick(ctx, true))
 		}
 	}
 }
 
 // Tick runs at most one step per workflow. Steps publish only their own
 // checkpoint, so one snapshot serves every lane; it is reloaded only after
-// discovery, which may seed new records.
+// discovery seeds or catches up records.
 func (s *Service) Tick(ctx context.Context) {
+	_ = s.tick(ctx, false)
+}
+
+func (s *Service) tick(ctx context.Context, schedule bool) time.Duration {
 	s.tickMu.Lock()
 	defer s.tickMu.Unlock()
 	defer func() {
@@ -264,23 +303,53 @@ func (s *Service) Tick(ctx context.Context) {
 		}
 	}()
 	if ctx.Err() != nil {
-		return
+		return idleInterval
 	}
 	_ = s.Host.Prune(ctx)
+	policy, allowed := s.policySnapshot()
 	archives, err := s.Store.Archives()
 	if err != nil {
-		return
+		return idleInterval
+	}
+	touched := map[string]bool{}
+	finish := func() time.Duration {
+		if !schedule {
+			return 0
+		}
+		for id := range touched {
+			updated, err := s.Store.Archive(id)
+			if err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
+					continue
+				}
+				return idleInterval
+			}
+			replaced := false
+			for i := range archives {
+				if archives[i].Conversation.ID == id {
+					archives[i] = updated
+					replaced = true
+					break
+				}
+			}
+			if !replaced {
+				archives = append(archives, updated)
+			}
+		}
+		return s.nextIntervalFrom(archives, allowed)
 	}
 	// Owner views and explicit imports keep independent, bounded opportunities.
-	focus, manual := selectPriority(s.now(), archives, s.allowed)
+	focus, manual := selectPriority(s.now(), archives, allowed)
 	if focus != nil {
-		if p, err := s.Host.Policy(focus.Conversation); err == nil {
+		if p, err := policy(focus.Conversation); err == nil {
 			_ = s.viewStep(ctx, *focus, p)
+			touched[focus.Conversation.ID] = true
 		}
 	}
 	if manual != nil {
-		if p, err := s.Host.Policy(manual.Conversation); err == nil {
+		if p, err := policy(manual.Conversation); err == nil {
 			_ = s.importStep(ctx, *manual, p, true)
+			touched[manual.Conversation.ID] = true
 		}
 	}
 	if repair, ok := s.Host.(GapRepairer); ok {
@@ -321,28 +390,51 @@ func (s *Service) Tick(ctx context.Context) {
 			if pending {
 				s.nextDiscovery = s.now().Add(s.active())
 			}
+			known := make(map[string]bool, len(archives))
+			for _, a := range archives {
+				known[a.Conversation.ID] = true
+			}
+			changed := false
 			for _, c := range list {
 				if !eligibleArchive(store.NewArchive(c)) {
 					continue
 				}
-				p, err := s.Host.Policy(c)
+				p, err := policy(c)
 				if err != nil {
 					continue
 				}
-				if _, err := s.Store.Archive(c.ID); errors.Is(err, sql.ErrNoRows) {
-					_ = s.Host.Commit(ctx, Commit{Work: SeedWork, Conversation: c, Policy: p})
-				} else if err == nil && missedActivity(c, s.catchUpSince) {
-					_ = s.Host.Commit(ctx, catchUp(c, p, s.catchUpSince, s.now()))
+				exists := known[c.ID]
+				if !exists {
+					_, lookupErr := s.Store.Archive(c.ID)
+					if errors.Is(lookupErr, sql.ErrNoRows) {
+						if s.Host.Commit(ctx, Commit{Work: SeedWork, Conversation: c, Policy: p}) == nil {
+							known[c.ID] = true
+							changed = true
+						}
+						continue
+					}
+					if lookupErr != nil {
+						continue
+					}
+					exists = true
+				}
+				if exists && missedActivity(c, s.catchUpSince) {
+					if s.Host.Commit(ctx, catchUp(c, p, s.catchUpSince, s.now())) == nil {
+						changed = true
+					}
 				}
 			}
 			if s.catchUpFresh && !pending {
 				s.catchUpSince = time.Time{}
 			}
+			if changed {
+				archives, err = s.Store.Archives()
+				if err != nil {
+					return idleInterval
+				}
+				clear(touched)
+			}
 		}
-	}
-	archives, err = s.Store.Archives()
-	if err != nil {
-		return
 	}
 	sort.Slice(archives, func(i, j int) bool { return archives[i].Conversation.ID < archives[j].Conversation.ID })
 	// Routine reconciliation and deep imports have separate stable rotations:
@@ -354,21 +446,25 @@ func (s *Service) Tick(ctx context.Context) {
 	if fallback {
 		s.nextFallback = s.now().Add(idleInterval)
 	}
-	if a, ok := rotate(archives, s.fallbackAfter, func(a store.Archive) bool { return wantsRecent(s.now(), a, fallback) && s.allowed(a) }); ok {
+	if a, ok := rotate(archives, s.fallbackAfter, func(a store.Archive) bool { return wantsRecent(s.now(), a, fallback) && allowed(a) }); ok {
 		s.fallbackAfter = a.Conversation.ID
-		if p, err := s.Host.Policy(a.Conversation); err == nil {
-			if err := s.recentStep(ctx, a, p); err != nil {
-				// A failing phone gets no further reads this turn.
-				return
+		if p, err := policy(a.Conversation); err == nil {
+			err := s.recentStep(ctx, a, p)
+			touched[a.Conversation.ID] = true
+			if errors.Is(err, transport.ErrUnavailable) {
+				// An unready phone gets no further reads this turn.
+				return finish()
 			}
 		}
 	}
-	if a, ok := rotate(archives, s.backgroundAfter, func(a store.Archive) bool { return wantsBackground(s.now(), a) && s.allowed(a) }); ok {
+	if a, ok := rotate(archives, s.backgroundAfter, func(a store.Archive) bool { return wantsBackground(s.now(), a) && allowed(a) }); ok {
 		s.backgroundAfter = a.Conversation.ID
-		if p, err := s.Host.Policy(a.Conversation); err == nil {
+		if p, err := policy(a.Conversation); err == nil {
 			_ = s.importStep(ctx, a, p, false)
+			touched[a.Conversation.ID] = true
 		}
 	}
+	return finish()
 }
 func isExplicitArchive(a store.Archive) bool {
 	return a.RequestedAt != "" || a.RequestSource == "owner" || (a.RequestSource == "" && a.Since != "")
@@ -422,6 +518,15 @@ func (s *Service) importStep(ctx context.Context, a store.Archive, p Policy, own
 	}
 	page, err := s.fetch(ctx, ImportWork, a, &p, cursor)
 	if err != nil {
+		if errors.Is(err, transport.ErrIneligibleConversation) {
+			cp.State = "ineligible"
+			cp.Error = "ineligible"
+			cp.Cursor = ""
+			cp.RetryAt = ""
+			cp.Failures = 0
+			_ = s.Host.Commit(ctx, commit(nil))
+			return nil
+		}
 		cp.Error = "history_fetch_failed"
 		cp.Failures++
 		cp.RetryAt = s.retryAfter(cp.Failures)
@@ -471,10 +576,22 @@ func (s *Service) recentStep(ctx context.Context, a store.Archive, p Policy) err
 	cursor := cp.RecentCursor
 	page, err := s.fetch(ctx, RecentWork, a, &p, cursor)
 	if err != nil {
+		if errors.Is(err, transport.ErrIneligibleConversation) {
+			cp.RecentStarted = ""
+			cp.RecentCursor = ""
+			cp.RecentRetryAt = ""
+			cp.RecentFailures = 0
+			cp.RecentError = "ineligible"
+			_ = s.Host.Commit(ctx, commit(nil))
+			return nil
+		}
 		cp.RecentError = "history_fetch_failed"
 		cp.RecentFailures++
 		cp.RecentRetryAt = s.retryAfter(cp.RecentFailures)
 		_ = s.Host.Commit(ctx, commit(nil))
+		if errors.Is(err, transport.ErrUnavailable) {
+			return transport.ErrUnavailable
+		}
 		return errors.New("history_fetch_failed")
 	}
 	if cp.RecentStarted == "" {
@@ -503,8 +620,7 @@ func (s *Service) recentStep(ctx context.Context, a store.Archive, p Policy) err
 }
 
 func (s *Service) retryAfter(failures int) string {
-	delay := time.Duration(1<<min(failures, 6)) * 5 * time.Second
-	return s.now().Add(delay).UTC().Format(time.RFC3339Nano)
+	return s.now().Add(archive.RetryDelay(failures)).UTC().Format(time.RFC3339Nano)
 }
 
 // viewStep fetches one page of the owner's viewed span.
@@ -517,6 +633,15 @@ func (s *Service) viewStep(ctx context.Context, a store.Archive, p Policy) error
 	}
 	page, err := s.fetch(ctx, ViewWork, a, &p, cp.RefreshCursor)
 	if err != nil {
+		if errors.Is(err, transport.ErrIneligibleConversation) {
+			cp.RefreshState = "ineligible"
+			cp.RefreshError = "ineligible"
+			cp.RefreshCursor = ""
+			cp.RefreshRetryAt = ""
+			cp.RefreshFailures = 0
+			_ = s.Host.Commit(ctx, commit(nil))
+			return nil
+		}
 		cp.RefreshState = "retrying"
 		cp.RefreshError = "history_fetch_failed"
 		cp.RefreshFailures++

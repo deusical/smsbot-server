@@ -4,6 +4,7 @@ package transport
 // that normalizes upstream updates into Incoming messages and receipts.
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"time"
@@ -12,6 +13,12 @@ import (
 	"go.mau.fi/mautrix-gmessages/pkg/libgm/events"
 	"go.mau.fi/mautrix-gmessages/pkg/libgm/gmproto"
 )
+
+// libgm clears longPollingConn briefly during every normal stream rollover, so
+// IsConnected() is false momentarily when nothing is wrong. Require the stream
+// to remain absent across several consecutive checks before treating it as a
+// drop; explicit failure events from libgm still trigger immediately.
+const disconnectGraceTicks = 5
 
 // libgm invokes this synchronously on its receive loop. Never wait for the
 // consumer, touch storage, or make a phone request here.
@@ -138,8 +145,9 @@ func (g *Google) Run(ctx context.Context, incoming func(Incoming), pause func(),
 	defer g.recoveryWG.Wait()
 	timer := time.NewTicker(30 * time.Second)
 	defer timer.Stop()
-	recoveryTimer := time.NewTicker(time.Second)
+	recoveryTimer := time.NewTicker(cmp.Or(g.recoveryInterval, time.Second))
 	defer recoveryTimer.Stop()
+	disconnectedTicks := 0
 	results := make(chan recoveryResult, 1)
 	interruptionHandled := false
 	var pausedEpoch uint64
@@ -186,8 +194,16 @@ func (g *Google) Run(ctx context.Context, incoming func(Incoming), pause func(),
 		case <-ctx.Done():
 			return
 		case <-recoveryTimer.C:
-			if g.client != nil && !g.client.IsConnected() && !g.healthFailure.Load() {
+			if g.healthFailure.Load() || !g.streamDisconnected() {
+				disconnectedTicks = 0
+				continue
+			}
+			disconnectedTicks++
+			if disconnectedTicks >= disconnectGraceTicks {
+				disconnectedTicks = 0
 				g.noteFailure("reconnecting", false)
+				handleFailure()
+				g.diagnose("stream_disconnected", errors.New("unavailable"))
 			}
 		case <-g.recoveryWake:
 		case result := <-results:
