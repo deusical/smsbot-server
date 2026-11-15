@@ -54,4 +54,11 @@ if __name__ == "__main__":
     parser.add_argument("--timeout", type=int, default=900)
     parser.add_argument("url")
     args = parser.parse_args()
-    fetch(args.root, args.url, args.output, args.receipt, args.timeout)
+    try:
+        fetch(args.root, args.url, args.output, args.receipt, args.timeout)
+    except ValueError as error:
+        code = error.args[0] if error.args else None
+        if code in ("single_video_required", "unsupported_platform"):
+            args.receipt.parent.mkdir(parents=True, exist_ok=True)
+            args.receipt.write_text(json.dumps({"code": code}), encoding="utf-8")
+        raise SystemExit(1)

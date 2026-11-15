@@ -142,8 +142,11 @@ func (e *Engine) sendableVideo(ctx context.Context, j store.Job, p *store.Plan, 
 	if err != nil || len(files) != 1 {
 		return nil, true, e.Store.Complete(j.ID, "failed", "download_attachment_invalid")
 	}
-	_, code, err := e.check(ctx, j, *p)
+	_, code, err := e.check(ctx, j, *p, liveLookup)
 	if err != nil {
+		if errors.Is(err, transport.ErrLookupFailed) {
+			_ = e.Store.Complete(j.ID, "failed", "final_check_failed")
+		}
 		return nil, true, err
 	}
 	if code != "" {
@@ -240,8 +243,11 @@ func (e *Engine) collectDownloadUploads(ctx context.Context) error {
 				}
 				continue
 			}
-			_, code, err := e.check(ctx, j, p)
+			_, code, err := e.check(ctx, j, p, liveLookup)
 			if err != nil {
+				if errors.Is(err, transport.ErrLookupFailed) {
+					_ = e.Store.Complete(id, "cancelled", "attachment_final_check_failed")
+				}
 				return err
 			}
 			if code != "" {

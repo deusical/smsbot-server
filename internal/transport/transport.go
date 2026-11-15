@@ -30,8 +30,12 @@ func GroupRoster(ids []string) string {
 }
 
 type Conversation struct {
-	Archived bool   `json:"archived,omitempty"`
-	ID       string `json:"id"`
+	// OutgoingID is the phone's sending identity for this conversation when
+	// read. Plans snapshot it encrypted at acceptance; it is omitted from JSON
+	// and never logged.
+	OutgoingID string `json:"-"`
+	Archived   bool   `json:"archived,omitempty"`
+	ID         string `json:"id"`
 	// ParticipantID is the other person in an individual conversation. A group
 	// has one fixed identity of its own, "group:" and its conversation ID, so
 	// that people joining or leaving doesn't disturb reading and archiving it.
@@ -81,8 +85,9 @@ type ConversationLookup interface {
 }
 
 // CachedLookup returns the phone record already held for a conversation
-// without a phone round trip. Use it only to decide what to show; anything
-// that acts must check again with Lookup.
+// without a phone round trip. Use it only to decide what to show or while
+// polling a worker task; anything that uploads, sends or acts must check again
+// with Lookup.
 type CachedLookup interface {
 	CachedConversation(string) (Conversation, bool)
 }
@@ -97,6 +102,7 @@ type Transport interface {
 }
 
 var ErrUnavailable = errors.New("phone connection unavailable")
+var ErrLookupFailed = errors.New("conversation lookup failed")
 
 var ErrUnknown = errors.New("submission outcome unknown")
 var ErrNotSubmitted = errors.New("transport did not submit")
@@ -133,9 +139,30 @@ type Fixture struct {
 	Read     map[string]int
 	// groupMembers are who is in the demo group; nil means the default pair.
 	groupMembers []string
+	// outgoingID is the sending identity for demo conversations; "" means defaultOutgoingID.
+	outgoingID string
 }
 
+const defaultOutgoingID = "demo-self"
+
 var defaultGroupMembers = []string{"demo-member-a", "demo-member-b"}
+
+// SetOutgoingID changes the sending identity of the demo conversations, as
+// switching the conversation's SIM would on a phone.
+func (f *Fixture) SetOutgoingID(id string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.outgoingID = id
+}
+
+func (f *Fixture) currentOutgoingID() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.outgoingID == "" {
+		return defaultOutgoingID
+	}
+	return f.outgoingID
+}
 
 // SetGroupMembers changes who is in the demo group, as people joining or
 // leaving would on a phone.
@@ -148,7 +175,11 @@ func (f *Fixture) SetGroupMembers(ids ...string) {
 func (f *Fixture) demoGroup() Conversation {
 	f.mu.Lock()
 	ids := f.groupMembers
+	out := f.outgoingID
 	f.mu.Unlock()
+	if out == "" {
+		out = defaultOutgoingID
+	}
 	if ids == nil {
 		ids = defaultGroupMembers
 	}
@@ -158,12 +189,13 @@ func (f *Fixture) demoGroup() Conversation {
 		members[i] = Member{ID: id, Name: names[id]}
 	}
 	sort.Slice(members, func(i, j int) bool { return members[i].ID < members[j].ID })
-	return Conversation{ID: "demo-group", ParticipantID: "group:demo-group", Label: "Group example", Protocol: "RCS", Group: true, Writable: true, Members: members, Roster: GroupRoster(ids)}
+	return Conversation{OutgoingID: out, ID: "demo-group", ParticipantID: "group:demo-group", Label: "Group example", Protocol: "RCS", Group: true, Writable: true, Members: members, Roster: GroupRoster(ids)}
 }
 func NewFixture() *Fixture     { return &Fixture{Online: true, Sent: map[string]string{}} }
 func (f *Fixture) Ready() bool { f.mu.Lock(); defer f.mu.Unlock(); return f.Online }
 func (f *Fixture) Conversations(context.Context) ([]Conversation, error) {
-	return []Conversation{{ID: "demo-chat", ParticipantID: "demo-peer", Label: "Demo conversation", Protocol: "RCS", Writable: true}, {ID: "demo-sms", ParticipantID: "demo-sms-peer", Label: "SMS example", Protocol: "SMS", Writable: true, Pinned: true}, f.demoGroup()}, nil
+	out := f.currentOutgoingID()
+	return []Conversation{{OutgoingID: out, ID: "demo-chat", ParticipantID: "demo-peer", Label: "Demo conversation", Protocol: "RCS", Writable: true}, {OutgoingID: out, ID: "demo-sms", ParticipantID: "demo-sms-peer", Label: "SMS example", Protocol: "SMS", Writable: true, Pinned: true}, f.demoGroup()}, nil
 }
 func (f *Fixture) Send(ctx context.Context, conv, txn, text string) (Receipt, error) {
 	f.mu.Lock()
@@ -179,6 +211,13 @@ func (f *Fixture) Send(ctx context.Context, conv, txn, text string) (Receipt, er
 	}
 	if f.Fail != "" {
 		return Receipt{}, refuse("upstream_rejected")
+	}
+	out := f.outgoingID
+	if out == "" {
+		out = defaultOutgoingID
+	}
+	if want, given := expectedOutgoingID(ctx); given && want != out {
+		return Receipt{}, refuse("outgoing_identity_changed")
 	}
 	if conv == "demo-group" {
 		// As on the phone, a group is sent to only as the people the owner saw.
@@ -236,4 +275,21 @@ func WithRoster(ctx context.Context, roster string) context.Context {
 func expectedRoster(ctx context.Context) (string, bool) {
 	r, ok := ctx.Value(rosterKey{}).(string)
 	return r, ok
+}
+
+type outgoingIDKey struct{}
+
+// WithOutgoingID carries the sending identity snapshotted when a job was
+// accepted. An empty id leaves ctx unchanged so plans accepted before snapshots
+// existed still compare against the transport's cached baseline.
+func WithOutgoingID(ctx context.Context, id string) context.Context {
+	if id == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, outgoingIDKey{}, id)
+}
+
+func expectedOutgoingID(ctx context.Context) (string, bool) {
+	id, ok := ctx.Value(outgoingIDKey{}).(string)
+	return id, ok && id != ""
 }

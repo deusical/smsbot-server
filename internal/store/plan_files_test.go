@@ -174,3 +174,46 @@ func TestPlanFilesLiveAsLongAsThePlan(t *testing.T) {
 		}
 	}
 }
+
+// A step that fails ends its job, which erases the plan. cmdflow then saves
+// the run once more; that late save must not bring the prompt, history or
+// files back on the ended job.
+func TestEndedJobPlanIsNotWrittenBack(t *testing.T) {
+	t.Parallel()
+	s := inboxStore(t)
+	p := Plan{Manual: true, Reply: "synthetic reply", Attachments: []media.File{syntheticFile("late", "synthetic-late", 1024)}}
+	if ok, err := s.Enqueue("late", "fixture-chat", "manual", p); err != nil || !ok {
+		t.Fatal("enqueue", ok, err)
+	}
+	for _, state := range []string{"failed", "cancelled", "expired", "submitted"} {
+		if _, err := s.DB.Exec("UPDATE jobs SET state='queued' WHERE id='late'"); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.SavePlan("late", p); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Complete("late", state, "synthetic_code"); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.SavePlan("late", p); err != nil {
+			t.Fatal(state, "late save:", err)
+		}
+		var plan string
+		if err := s.DB.QueryRow("SELECT plan FROM jobs WHERE id='late'").Scan(&plan); err != nil {
+			t.Fatal(err)
+		}
+		if plan != "" || planFileRows(t, s, "late") != 0 {
+			t.Fatalf("a late save wrote the plan back on a %s job", state)
+		}
+	}
+	// A job still in progress keeps saving normally.
+	if _, err := s.DB.Exec("UPDATE jobs SET state='generating' WHERE id='late'"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SavePlan("late", p); err != nil {
+		t.Fatal(err)
+	}
+	if _, got, err := s.JobPlan("late"); err != nil || got.Reply != "synthetic reply" {
+		t.Fatal("an in-progress job lost its plan", err)
+	}
+}

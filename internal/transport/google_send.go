@@ -53,26 +53,8 @@ func (g *Google) sendParts(ctx context.Context, id, txn, text string, files []me
 	settings := g.settings
 	g.mu.Unlock()
 	d.Protocol = int32(c.GetType())
-	// A group is sent to only as the people in it were when last verified: the
-	// baseline is kept, not updated, by a roster change seen in an event.
-	if !readable(c) {
-		return refused("conversation_ineligible")
-	}
-	if known == nil {
-		return refused("baseline_missing")
-	}
-	if peer(c) != peer(known) {
-		return refused("participant_changed")
-	}
-	if roster(c) != roster(known) {
-		return refused("roster_changed")
-	}
-	if c.GetDefaultOutgoingID() != known.GetDefaultOutgoingID() {
-		return refused("outgoing_identity_changed")
-	}
-	// Whoever is in a group now must be who the sender was shown.
-	if want, given := expectedRoster(ctx); c.GetIsGroupChat() && (!given || want == "" || roster(c) != want) {
-		return refused("roster_mismatch")
+	if reason := verifySendTarget(ctx, c, known); reason != "" {
+		return refused(reason)
 	}
 	sim := c.GetSimCard().GetSIMData().GetSIMPayload()
 	if sim == nil && len(settings.GetSIMCards()) == 1 {
@@ -105,6 +87,38 @@ func (g *Google) sendParts(ctx context.Context, id, txn, text string, files []me
 	}
 	d.Result = "submitted"
 	return Receipt{State: "submitted", MessageID: txn}, nil
+}
+
+// verifySendTarget checks a live phone conversation record against the cached
+// baseline and the identities snapshotted when the job was accepted. It returns
+// the fixed refusal code, or "" when the send may proceed.
+func verifySendTarget(ctx context.Context, c, known *gmproto.Conversation) string {
+	// A group is sent to only as the people in it were when last verified: the
+	// baseline is kept, not updated, by a roster change seen in an event.
+	if !readable(c) {
+		return "conversation_ineligible"
+	}
+	if known == nil {
+		return "baseline_missing"
+	}
+	if peer(c) != peer(known) {
+		return "participant_changed"
+	}
+	if roster(c) != roster(known) {
+		return "roster_changed"
+	}
+	if want, given := expectedOutgoingID(ctx); given {
+		if c.GetDefaultOutgoingID() != want {
+			return "outgoing_identity_changed"
+		}
+	} else if c.GetDefaultOutgoingID() != known.GetDefaultOutgoingID() {
+		return "outgoing_identity_changed"
+	}
+	// Whoever is in a group now must be who the sender was shown.
+	if want, given := expectedRoster(ctx); c.GetIsGroupChat() && (!given || want == "" || roster(c) != want) {
+		return "roster_mismatch"
+	}
+	return ""
 }
 
 // outboundParts orders files before the caption, as Google Messages Web does.

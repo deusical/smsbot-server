@@ -38,6 +38,20 @@ const taskCodes: Record<string, string> = {
   process_failed: "The program that downloads or compresses the video failed",
   worker_unauthorized: "The worker refused the server's token",
   task_rejected: "The worker didn't accept this task",
+  video_too_long: "The video is too long to fit within the size limit",
+  size_limit: "The video couldn't be compressed small enough to send",
+  single_video_required: "The link is not a single video, for example a photo gallery",
+  unsupported_platform: "That link isn't from a supported site",
+  audio_missing: "Audio was lost while compressing the video",
+  video_required: "The downloaded file didn't contain a video",
+  invalid_duration: "Couldn't read the video's length",
+  duration_changed: "The compressed video's length didn't match the original",
+  worker_unavailable: "The video worker wasn't available",
+  download_worker_unavailable: "No download worker is configured",
+  task_output_too_large: "The finished file is too large to send",
+  task_inputs_unavailable: "The input file from the previous step isn't available",
+  task_output_unavailable: "The worker didn't return a finished file",
+  execution_expired: "The request ran out of time before it could finish",
 };
 
 /** A job's result for display: the refusal in words when known, else its code. */

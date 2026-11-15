@@ -59,6 +59,9 @@ type Plan struct {
 	// Roster is exactly who was in the group when the owner sent to it. The
 	// send goes only if the group still has those people.
 	Roster string `json:"roster,omitempty"`
+	// OutgoingID is the phone's sending identity for the conversation when the
+	// job was accepted; a send refuses if the phone would use a different one.
+	OutgoingID string `json:"outgoing_id,omitempty"`
 	// Shared is set when the group the bot answers in has one AI conversation
 	// for everyone, so memory and threads belong to the group, not the asker.
 	Shared          bool            `json:"shared,omitempty"`

@@ -149,7 +149,11 @@ func (g *Google) React(ctx context.Context, conv, expectedPeer, target, emoji, o
 	if known == nil {
 		return refuse("baseline_missing")
 	}
-	if known.GetDefaultOutgoingID() != c.GetDefaultOutgoingID() {
+	if want, given := expectedOutgoingID(ctx); given {
+		if c.GetDefaultOutgoingID() != want {
+			return refuse("outgoing_identity_changed")
+		}
+	} else if known.GetDefaultOutgoingID() != c.GetDefaultOutgoingID() {
 		return refuse("outgoing_identity_changed")
 	}
 	if roster(c) != roster(known) {

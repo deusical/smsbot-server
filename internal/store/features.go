@@ -89,7 +89,15 @@ func (s *Store) SavePlan(id string, p Plan) error {
 	if err != nil {
 		return err
 	}
-	if _, err = tx.Exec("UPDATE jobs SET plan=? WHERE id=?", enc, id); err != nil {
+	// Only a job still in progress keeps a plan. A job that already ended
+	// (failed, cancelled, expired or sent) had its plan erased on purpose, so a
+	// late save, such as cmdflow saving after a step's failure was recorded,
+	// must not write the prompt, history or files back.
+	r, err := tx.Exec("UPDATE jobs SET plan=? WHERE id=? AND state IN ('queued','generating','awaiting_approval','submitting')", enc, id)
+	if err != nil {
+		return err
+	}
+	if n, err := r.RowsAffected(); err != nil || n == 0 {
 		return err
 	}
 	if err = s.writePlanFiles(tx, id, refs, writes); err != nil {

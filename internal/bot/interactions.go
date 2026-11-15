@@ -197,7 +197,7 @@ func (e *Engine) QueueReactionIn(ctx context.Context, conv, roster, target, emoj
 		return "", errors.New("quiet_hours")
 	}
 	intent := &store.MutationIntent{Target: target, WireTarget: v.UpstreamID, Protocol: "RCS", Emoji: emoji, Operation: operation, Version: version}
-	_, err = e.Store.Enqueue(id, conv, "reaction", store.Plan{Participant: c.ParticipantID, Roster: c.Roster, Manual: true, InboxOwnerOnly: true, Mutation: intent})
+	_, err = e.Store.Enqueue(id, conv, "reaction", store.Plan{Participant: c.ParticipantID, Roster: c.Roster, OutgoingID: c.OutgoingID, Manual: true, InboxOwnerOnly: true, Mutation: intent})
 	return id, err
 }
 
@@ -234,7 +234,7 @@ func (e *Engine) dispatchReaction(ctx context.Context, j store.Job, p store.Plan
 	}
 	sendctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	err = reactor.React(transport.WithRoster(sendctx, p.Roster), j.ConversationID, p.Participant, m.WireTarget, m.Emoji, m.Operation)
+	err = reactor.React(transport.WithOutgoingID(transport.WithRoster(sendctx, p.Roster), p.OutgoingID), j.ConversationID, p.Participant, m.WireTarget, m.Emoji, m.Operation)
 	if err != nil {
 		state, code := "unknown_submission", "transport_outcome_unknown"
 		if errors.Is(err, transport.ErrNotSubmitted) {

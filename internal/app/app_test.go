@@ -7,6 +7,7 @@ import (
 	"github.com/deusical/smsbot-server/internal/transport"
 	"github.com/deusical/smsbot-server/internal/vault"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -119,5 +120,55 @@ func TestAccelerateOnlyShortensWhenAsked(t *testing.T) {
 	a.Accelerate(10)
 	if a.History.ActiveInterval != 300*time.Millisecond || a.Archive.Interval != 300*time.Millisecond || a.Collection.CaptureInterval != 100*time.Millisecond || a.Collection.GapRecheck != 300*time.Millisecond || a.Notify.Interval != notifyInterval/10 || a.Engine.WorkerPollDelay != 100*time.Millisecond {
 		t.Fatal("factor 10 not applied")
+	}
+}
+
+type transientLookupFixture struct {
+	*transport.Fixture
+	fail atomic.Bool
+}
+
+func (f *transientLookupFixture) LookupConversation(ctx context.Context, id string) (transport.Conversation, error) {
+	if f.fail.Load() {
+		return transport.Conversation{}, transport.ErrLookupFailed
+	}
+	return transport.Lookup(ctx, f.Fixture, id)
+}
+
+func TestReadyLookupFailureDoesNotCancelJobsOrPauseService(t *testing.T) {
+	t.Parallel()
+	s := openStore(t)
+	tr := &transientLookupFixture{Fixture: transport.NewFixture()}
+	svc := New(s, tr, filepath.Join(filepath.Dir(s.Path), "archive"))
+	if err := svc.Init(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Enroll("demo-chat", "demo-peer"); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Engine.Pause(false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Enqueue("job-1", "demo-chat", "!ping", store.Plan{Participant: "demo-peer", Reply: "pong"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Enqueue("job-2", "demo-chat", "!ping", store.Plan{Participant: "demo-peer", Reply: "pong-2"}); err != nil {
+		t.Fatal(err)
+	}
+	tr.fail.Store(true)
+	var failed atomic.Bool
+	workers := svc.Start(context.Background(), nil, func() { failed.Store(true) })
+	defer workers.Stop()
+
+	time.Sleep(350 * time.Millisecond)
+	if failed.Load() {
+		t.Fatal("ready lookup failure triggered dispatchFailed")
+	}
+	if paused, err := s.Paused(); err != nil || paused {
+		t.Fatalf("ready lookup failure paused service: paused=%t err=%v", paused, err)
+	}
+	jobs, err := s.Jobs()
+	if err != nil || len(jobs) != 2 || jobs[0].State != "queued" || jobs[1].State != "queued" {
+		t.Fatalf("ready lookup failure cancelled queued jobs: %+v %v", jobs, err)
 	}
 }

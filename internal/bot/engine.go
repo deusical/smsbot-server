@@ -79,8 +79,47 @@ func (e *Engine) CollectionSettingsSaved(s collection.Settings) {
 	}
 }
 
+// lookupMode tells check which phase a job is in. liveLookup asks the phone for
+// the conversation now and is mandatory at acceptance (admit) and in every
+// check right before uploading or sending (sendableVideo, collectDownloadUploads,
+// prepareFiles, generateReply and submit). cachedLookup is used only while a
+// job is in its worker-preparation phase (re-dispatched solely to poll a worker
+// task): it checks the transport's cached conversation when one exists and
+// falls back to a live lookup otherwise.
+type lookupMode int
+
+const (
+	liveLookup lookupMode = iota
+	cachedLookup
+)
+
+// lookupError separates a lookup failure while the transport is still ready
+// (ErrLookupFailed, which backs off that job) from a lost connection
+// (ErrUnavailable, returned only when the transport reports not ready).
+func (e *Engine) lookupError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if !e.Transport.Ready() {
+		return transport.ErrUnavailable
+	}
+	return transport.ErrLookupFailed
+}
+
 func (e *Engine) lookupConversation(ctx context.Context, id string) (transport.Conversation, error) {
-	return transport.Lookup(ctx, e.Transport, id)
+	c, err := transport.Lookup(ctx, e.Transport, id)
+	return c, e.lookupError(err)
+}
+
+func (e *Engine) conversationForCheck(ctx context.Context, id string, mode lookupMode) (transport.Conversation, error) {
+	if mode == cachedLookup {
+		if cache, ok := e.Transport.(transport.CachedLookup); ok {
+			if c, found := cache.CachedConversation(id); found {
+				return c, nil
+			}
+		}
+	}
+	return e.lookupConversation(ctx, id)
 }
 
 func (e *Engine) Pause(value bool) error {
@@ -183,20 +222,20 @@ func (e *Engine) enrolledFor(conv string, p store.Plan) bool {
 
 // validGroupMember reports whether member is in the group conv, which can be
 // sent to and has exactly the people in roster. The owner is not in the list.
-func (e *Engine) validGroupMember(ctx context.Context, conv, member, roster string) (bool, error) {
-	c, err := e.lookupConversation(ctx, conv)
+func (e *Engine) validGroupMember(ctx context.Context, conv, member, roster string, mode lookupMode) (string, bool, error) {
+	c, err := e.conversationForCheck(ctx, conv, mode)
 	if err != nil || !c.Group || !c.Writable || roster == "" || c.Roster != roster {
-		return false, err
+		return "", false, err
 	}
 	if member == store.OwnerMember {
-		return true, nil
+		return c.OutgoingID, true, nil
 	}
 	for _, m := range c.Members {
 		if m.ID == member {
-			return true, nil
+			return c.OutgoingID, true, nil
 		}
 	}
-	return false, nil
+	return "", false, nil
 }
 func (e *Engine) Cancel(id string) error {
 	e.mu.Lock()
@@ -242,34 +281,52 @@ func (e *Engine) Approve(id string) error {
 // validPeer reports whether the person a request is for is still in the place it
 // was made: a member of the group under the roster, or the one person in an
 // individual conversation. ownerSend is the owner's own dashboard send.
-func (e *Engine) validPeer(ctx context.Context, conv, peer, roster string, ownerSend bool) (bool, error) {
+func (e *Engine) validPeer(ctx context.Context, conv, peer, roster string, ownerSend bool, mode lookupMode) (string, bool, error) {
 	if roster != "" && !ownerSend {
-		return e.validGroupMember(ctx, conv, peer, roster)
+		return e.validGroupMember(ctx, conv, peer, roster, mode)
 	}
-	return e.validConversation(ctx, conv, peer, roster, ownerSend)
+	return e.matchConversation(ctx, conv, peer, roster, ownerSend, mode)
 }
 
 // validConversation reports whether conv is still the conversation with peer
 // that can be sent to. A group is valid only where groups are allowed and has
 // exactly the people in roster; the bot's own commands pass allowGroup false.
 func (e *Engine) validConversation(ctx context.Context, conv, peer, roster string, allowGroup bool) (bool, error) {
+	_, ok, err := e.matchConversation(ctx, conv, peer, roster, allowGroup, liveLookup)
+	return ok, err
+}
+
+func (e *Engine) matchConversation(ctx context.Context, conv, peer, roster string, allowGroup bool, mode lookupMode) (string, bool, error) {
 	ok := func(c transport.Conversation) bool {
 		return c.ParticipantID == peer && c.Writable && c.Roster == roster && (allowGroup || !c.Group)
 	}
+	if mode == cachedLookup {
+		if cache, can := e.Transport.(transport.CachedLookup); can {
+			if c, found := cache.CachedConversation(conv); found {
+				if !ok(c) {
+					return "", false, nil
+				}
+				return c.OutgoingID, true, nil
+			}
+		}
+	}
 	if _, can := e.Transport.(transport.ConversationLookup); can {
 		c, err := e.lookupConversation(ctx, conv)
-		return err == nil && ok(c), err
+		if err != nil || !ok(c) {
+			return "", false, err
+		}
+		return c.OutgoingID, true, nil
 	}
 	list, err := e.Transport.Conversations(ctx)
 	if err != nil {
-		return false, err
+		return "", false, e.lookupError(err)
 	}
 	for _, c := range list {
 		if c.ID == conv && ok(c) {
-			return true, nil
+			return c.OutgoingID, true, nil
 		}
 	}
-	return false, nil
+	return "", false, nil
 }
 
 // Accept turns a fresh command into a queued job. Each step can decline the
@@ -282,7 +339,7 @@ func (e *Engine) Accept(ctx context.Context, m transport.Incoming) (bool, error)
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	cfg, peer, roster, ok, err := e.admit(ctx, m, parent)
+	cfg, peer, roster, outgoing, ok, err := e.admit(ctx, m, parent)
 	if err != nil || !ok {
 		return false, err
 	}
@@ -310,7 +367,7 @@ func (e *Engine) Accept(ctx context.Context, m transport.Incoming) (bool, error)
 	if err != nil || !limitOK {
 		return false, err
 	}
-	p := store.Plan{Participant: peer, Roster: roster, MaxChars: cfg.Settings.MaxChars, Owner: m.Outgoing}
+	p := store.Plan{Participant: peer, Roster: roster, OutgoingID: outgoing, MaxChars: cfg.Settings.MaxChars, Owner: m.Outgoing}
 	p.Shared = p.GroupBotJob() && e.Store.GroupShared(m.ConversationID)
 	reply, builtin, ok, err := e.builtinReply(m.ConversationID, p, name, input, cfg)
 	if err != nil || !ok {
@@ -343,41 +400,41 @@ func (e *Engine) commandCandidate(m transport.Incoming, text string) (*store.AIP
 }
 
 // admit applies every rule about who may run a command, and when. It returns
-// the configuration, the enrolled person the command is planned for and, in a
-// group, the roster approved for them.
-func (e *Engine) admit(ctx context.Context, m transport.Incoming, parent *store.AIParent) (cfg Configuration, peer, roster string, ok bool, err error) {
+// the configuration, the enrolled person the command is planned for, the
+// approved roster in a group, and the conversation's sending identity.
+func (e *Engine) admit(ctx context.Context, m transport.Incoming, parent *store.AIParent) (cfg Configuration, peer, roster, outgoing string, ok bool, err error) {
 	age := e.now().Sub(m.At)
 	if m.ID == "" || m.Historical || age > 2*time.Minute || age < -5*time.Second || len(m.Text) > 12000 {
-		return cfg, "", "", false, nil
+		return cfg, "", "", "", false, nil
 	}
 	paused, err := e.Store.Paused()
 	if err != nil || paused || !e.Transport.Ready() {
-		return cfg, "", "", false, err
+		return cfg, "", "", "", false, err
 	}
 	if cfg, err = e.Configuration(); err != nil {
-		return cfg, "", "", false, err
+		return cfg, "", "", "", false, err
 	}
 	peer = m.ParticipantID
 	if m.Outgoing {
 		if peer, roster, ok, err = e.ownerPeer(ctx, m, cfg, parent); err != nil || !ok {
-			return cfg, "", "", false, err
+			return cfg, "", "", "", false, err
 		}
 	} else if approved, enrolled := e.Store.GroupMemberEnrollment(m.ConversationID, peer); enrolled {
 		// A member of a group the owner enrolled, under the roster they approved.
 		roster = approved
 	}
 	if roster == "" && !e.Store.Enrolled(m.ConversationID, peer) {
-		return cfg, "", "", false, nil
+		return cfg, "", "", "", false, nil
 	}
 	inbox, err := e.Collection.Settings()
 	if err != nil || !inbox.AutomaticReplies {
-		return cfg, "", "", false, err
+		return cfg, "", "", "", false, err
 	}
-	valid, err := e.validPeer(ctx, m.ConversationID, peer, roster, false)
+	outgoing, valid, err := e.validPeer(ctx, m.ConversationID, peer, roster, false, liveLookup)
 	if err != nil || !valid || quiet(cfg.Settings, e.now()) {
-		return cfg, "", "", false, err
+		return cfg, "", "", "", false, err
 	}
-	return cfg, peer, roster, true, nil
+	return cfg, peer, roster, outgoing, true, nil
 }
 
 // ownerPeer handles a command the owner sent. The owner's own messages carry
@@ -670,7 +727,7 @@ func memoryScope(conv, command, model, member string) string {
 	}
 	return scope
 }
-func (e *Engine) check(ctx context.Context, j store.Job, p store.Plan) (Configuration, string, error) {
+func (e *Engine) check(ctx context.Context, j store.Job, p store.Plan, mode lookupMode) (Configuration, string, error) {
 	cfg, err := e.Configuration()
 	if err != nil {
 		return cfg, "", err
@@ -716,7 +773,7 @@ func (e *Engine) check(ctx context.Context, j store.Job, p store.Plan) (Configur
 		if err := inbox.FileLimits().Check(p.Attachments); err != nil {
 			return cfg, "attachment_limits_changed", nil
 		}
-		c, err := e.lookupConversation(ctx, j.ConversationID)
+		c, err := e.conversationForCheck(ctx, j.ConversationID, mode)
 		if err != nil {
 			return cfg, "", err
 		}
@@ -740,7 +797,7 @@ func (e *Engine) check(ctx context.Context, j store.Job, p store.Plan) (Configur
 			return cfg, "", err
 		}
 	}
-	valid, err := e.validPeer(ctx, j.ConversationID, p.Participant, p.Roster, p.InboxOwnerOnly)
+	_, valid, err := e.validPeer(ctx, j.ConversationID, p.Participant, p.Roster, p.InboxOwnerOnly, mode)
 	if err != nil {
 		return cfg, "", err
 	}
@@ -759,6 +816,28 @@ func (e *Engine) check(ctx context.Context, j store.Job, p store.Plan) (Configur
 	return cfg, "", nil
 }
 
+// pollsWorker reports whether dispatching p will next poll a worker task,
+// before its final pre-send checks, uploads or submission.
+func pollsWorker(p store.Plan) bool {
+	if p.Mutation != nil || p.Pipeline == nil || p.Pipeline.Halted() {
+		return false
+	}
+	for i, s := range p.Pipeline.Steps {
+		if i == 0 || s.Finished() {
+			continue
+		}
+		m, ok := commands.Module(s.Module)
+		if !ok {
+			return false
+		}
+		if m.Immediate {
+			continue
+		}
+		return m.RetryClass == "idempotent-poll"
+	}
+	return false
+}
+
 // Dispatch sends at most one queued job. The control lock is held throughout,
 // except while a provider generates text or files upload, so pause and consent
 // changes stay responsive; every check is repeated after the lock is regained.
@@ -773,7 +852,7 @@ func (e *Engine) Dispatch(ctx context.Context) error {
 		e.mu.Unlock()
 		return err
 	}
-	j, p, cfg, ready, err := e.nextReady(ctx)
+	j, p, cfg, mode, ready, err := e.nextReady(ctx)
 	if !ready || err != nil {
 		e.mu.Unlock()
 		return err
@@ -793,6 +872,25 @@ func (e *Engine) Dispatch(ctx context.Context) error {
 	} else if done, err := e.prepareFiles(ctx, j, &p); done {
 		return err
 	}
+	if mode == cachedLookup && len(p.Attachments) == 0 {
+		// A pipeline whose worker step produced no attachment skipped sendableVideo
+		// and upload checks; verify live before submitting.
+		checked, code, err := e.check(ctx, j, p, liveLookup)
+		cfg = checked
+		if err != nil {
+			if errors.Is(err, transport.ErrLookupFailed) {
+				_ = e.Store.Complete(j.ID, "failed", "final_check_failed")
+			}
+			return err
+		}
+		if code != "" {
+			state := "cancelled"
+			if code == "stale" || code == "execution_expired" {
+				state = "expired"
+			}
+			return e.Store.Complete(j.ID, state, code)
+		}
+	}
 	// The conversation turn's earlier history, as checked by the AI step.
 	return e.submit(ctx, j, p, cfg)
 }
@@ -801,29 +899,36 @@ func (e *Engine) Dispatch(ctx context.Context) error {
 // A job that fails a check is completed or sent for approval instead; a check
 // that errors backs off before the same job is tried again. Caller holds the
 // control lock.
-func (e *Engine) nextReady(ctx context.Context) (j store.Job, p store.Plan, cfg Configuration, ready bool, err error) {
+func (e *Engine) nextReady(ctx context.Context) (j store.Job, p store.Plan, cfg Configuration, mode lookupMode, ready bool, err error) {
 	paused, err := e.Store.Paused()
 	if err != nil || paused || !e.Transport.Ready() {
-		return j, p, cfg, false, err
+		return j, p, cfg, liveLookup, false, err
 	}
 	j, p, err = e.Store.Next()
 	if errors.Is(err, sql.ErrNoRows) {
-		return j, p, cfg, false, nil
+		return j, p, cfg, liveLookup, false, nil
 	}
 	if err != nil {
-		return j, p, cfg, false, err
+		return j, p, cfg, liveLookup, false, err
 	}
 	if e.preflight.job != j.ID {
 		e.preflight = preflightRetry{job: j.ID}
 	}
 	if e.now().Before(e.preflight.until) {
-		return j, p, cfg, false, nil
+		return j, p, cfg, liveLookup, false, nil
 	}
-	cfg, code, err := e.check(ctx, j, p)
+	mode = liveLookup
+	if pollsWorker(p) {
+		mode = cachedLookup
+	}
+	cfg, code, err := e.check(ctx, j, p, mode)
 	if err != nil {
+		if !e.Transport.Ready() {
+			return j, p, cfg, mode, false, transport.ErrUnavailable
+		}
 		e.preflight.failures++
 		e.preflight.until = e.now().Add(min(30*time.Second, time.Second*time.Duration(1<<min(e.preflight.failures-1, 5))))
-		return j, p, cfg, false, err
+		return j, p, cfg, mode, false, err
 	}
 	e.preflight = preflightRetry{}
 	if code != "" {
@@ -836,9 +941,9 @@ func (e *Engine) nextReady(ctx context.Context) (j store.Job, p store.Plan, cfg 
 			}
 			err = e.Store.Complete(j.ID, state, code)
 		}
-		return j, p, cfg, false, err
+		return j, p, cfg, mode, false, err
 	}
-	return j, p, cfg, true, nil
+	return j, p, cfg, mode, true, nil
 }
 
 // generateReply asks the provider for one AI step's answer, within the daily
@@ -933,7 +1038,7 @@ func (e *Engine) generateReply(ctx context.Context, j store.Job, p *store.Plan, 
 		return true, err
 	}
 	commit(result.Text)
-	checked, code, err := e.check(ctx, j, *p)
+	checked, code, err := e.check(ctx, j, *p, liveLookup)
 	*cfg = checked
 	if err != nil {
 		e.Store.Complete(j.ID, "failed", "final_check_failed")
@@ -999,7 +1104,7 @@ func (e *Engine) prepareFiles(ctx context.Context, j store.Job, p *store.Plan) (
 		err = e.Store.Complete(j.ID, "failed", "attachment_upload_failed")
 		return true, err
 	}
-	_, code, checkErr := e.check(ctx, j, *p)
+	_, code, checkErr := e.check(ctx, j, *p, liveLookup)
 	if checkErr != nil || code != "" {
 		err = e.Store.Complete(j.ID, "cancelled", "attachment_final_check_failed")
 		return true, err
@@ -1060,7 +1165,7 @@ func (e *Engine) submit(ctx context.Context, j store.Job, p store.Plan, cfg Conf
 		return err
 	}
 	// The send is serialized with pause/enrollment; once invoked its outcome may be uncertain.
-	sendctx, cancelSend := context.WithTimeout(transport.WithRoster(ctx, p.Roster), 30*time.Second)
+	sendctx, cancelSend := context.WithTimeout(transport.WithOutgoingID(transport.WithRoster(ctx, p.Roster), p.OutgoingID), 30*time.Second)
 	var receipt transport.Receipt
 	var senderr error
 	threadReply := false
@@ -1178,7 +1283,7 @@ func (e *Engine) Compose(ctx context.Context, conv, text string) (string, error)
 	for _, c := range list {
 		if c.ID == conv && !c.Group && c.Writable && e.Store.Enrolled(conv, c.ParticipantID) {
 			id := store.ID()
-			_, err = e.Store.Enqueue(id, conv, "manual", store.Plan{Participant: c.ParticipantID, Reply: text, MaxChars: cfg.Settings.MaxChars, Manual: true})
+			_, err = e.Store.Enqueue(id, conv, "manual", store.Plan{Participant: c.ParticipantID, OutgoingID: c.OutgoingID, Reply: text, MaxChars: cfg.Settings.MaxChars, Manual: true})
 			return id, err
 		}
 	}
@@ -1246,7 +1351,7 @@ func (e *Engine) Run(ctx context.Context, report func(error)) {
 				report(err)
 			}
 		case <-ticker.C:
-			if err := e.Dispatch(ctx); err != nil {
+			if err := e.Dispatch(ctx); err != nil && !errors.Is(err, transport.ErrLookupFailed) {
 				report(err)
 			}
 		}
