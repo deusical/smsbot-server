@@ -49,6 +49,40 @@ func TestCombinedVideoStepUpgrades(t *testing.T) {
 	}
 }
 
+func TestCombinedVideoStepUpgradeAvoidsIDCollisions(t *testing.T) {
+	t.Parallel()
+	// Existing step named "video_source" collides with the default upgrade id.
+	existing := Pipeline{Steps: []PipelineStep{
+		step("link", "text.extract_url", map[string]string{"text": "trigger.args"}, ""),
+		{ID: "video", Module: "video.download", Version: 1, Inputs: map[string]string{"url": "link.url"}},
+		step("video_source", "text.template", map[string]string{"input": "trigger.args"}, `{"template":"{input}"}`),
+		reply(map[string]string{"file": "video.video", "text": "video_source.text"}),
+	}}
+	if err := validatePipeline(&existing, pipelineEnv{}); err != nil {
+		t.Fatalf("existing collision failed: %v", err)
+	}
+	if existing.Steps[1].ID != "video_source_2" || existing.Steps[2].Inputs["source"] != "video_source_2.source" {
+		t.Fatalf("unexpected upgraded steps: %+v", existing.Steps)
+	}
+
+	// Two long video.download@1 step ids sharing a 17-character prefix.
+	prefix := Pipeline{Steps: []PipelineStep{
+		step("link", "text.extract_url", map[string]string{"text": "trigger.args"}, ""),
+		{ID: "douyin_video_down_one", Module: "video.download", Version: 1, Inputs: map[string]string{"url": "link.url"}},
+		{ID: "douyin_video_down_two", Module: "video.download", Version: 1, Inputs: map[string]string{"url": "link.url"}},
+		reply(map[string]string{"file": "douyin_video_down_two.video"}),
+	}}
+	if err := validatePipeline(&prefix, pipelineEnv{}); err != nil {
+		t.Fatalf("prefix collision failed: %v", err)
+	}
+	if prefix.Steps[1].ID != "douyin_video_down_source" || prefix.Steps[3].ID != "douyin_video_do_source_2" {
+		t.Fatalf("unexpected prefix-upgraded ids: %+v", prefix.Steps)
+	}
+	if prefix.Steps[2].Inputs["source"] != "douyin_video_down_source.source" || prefix.Steps[4].Inputs["source"] != "douyin_video_do_source_2.source" {
+		t.Fatalf("unexpected prefix-upgraded bindings: %+v", prefix.Steps)
+	}
+}
+
 // An AI answer with no link ends the command with how to use it, without
 // asking the worker.
 func TestMissingLinkAtDispatchRepliesWithoutDownloading(t *testing.T) {

@@ -1,6 +1,6 @@
 import { render, screen, fireEvent } from "@testing-library/react";
 import { describe, it, expect, vi } from "vitest";
-import { SchemaSettings, settingsForKind } from "./SchemaSettings";
+import { SchemaFields, SchemaSettings, settingsForKind } from "./SchemaSettings";
 import type { Workspace } from "../lib/workspace";
 import type { Command, CommandKind } from "../lib/api";
 
@@ -152,4 +152,45 @@ it("uses media cost hint and shows the effective host cap", () => {
   expect(
     screen.getByText(/6 encode passes plus a verification decode/),
   ).toHaveTextContent(String.fromCharCode(215));
+});
+
+it("omits cleared optional number fields without defaults while keeping default behavior", () => {
+  const workspace = {
+    config: { settings: { favorites: [] }, profiles: [] },
+    models: [],
+  } as unknown as Workspace;
+  const onChange = vi.fn();
+  render(
+    <SchemaFields
+      schema={{
+        type: "object",
+        properties: {
+          temperature: {
+            type: "number",
+            title: "Temperature",
+            minimum: 0,
+            maximum: 2,
+          },
+          tokens: {
+            type: "number",
+            title: "Tokens",
+            default: 2048,
+            minimum: 128,
+            maximum: 8192,
+          },
+        },
+      }}
+      values={{ temperature: 0.7, tokens: 1024 }}
+      workspace={workspace}
+      onChange={onChange}
+    />,
+  );
+  fireEvent.change(screen.getByLabelText("Temperature"), {
+    target: { value: "" },
+  });
+  expect(onChange).toHaveBeenCalledWith("temperature", undefined);
+  fireEvent.change(screen.getByLabelText("Tokens"), {
+    target: { value: "" },
+  });
+  expect(onChange).toHaveBeenCalledWith("tokens", 0);
 });

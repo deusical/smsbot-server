@@ -7,7 +7,12 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
+
+func textTooLong(s string) bool {
+	return len(s) > 4*12000 || utf8.RuneCountInString(s) > 12000
+}
 
 type Generation struct {
 	Reasoning    string   `json:"reasoning"`
@@ -105,7 +110,7 @@ func (c Configuration) Validate() error {
 	}
 	profiles := map[string]bool{}
 	for _, p := range c.Profiles {
-		if p.ID == "" || len(p.ID) > 80 || profiles[p.ID] || p.Name == "" || len(p.Name) > 80 || len(p.Model) > 200 || len(p.Instructions) > 12000 {
+		if p.ID == "" || len(p.ID) > 80 || profiles[p.ID] || p.Name == "" || len(p.Name) > 80 || len(p.Model) > 200 || textTooLong(p.Instructions) {
 			return errors.New("invalid profile")
 		}
 		profiles[p.ID] = true
@@ -115,7 +120,7 @@ func (c Configuration) Validate() error {
 		if err := normalizeCommand(&cmd); err != nil {
 			return err
 		}
-		if cmd.ExecutionMinutes < 0 || cmd.ExecutionMinutes > 60 || !commandPattern.MatchString(cmd.Name) || strings.Contains("|ping|help|status|new|more|deepseek|", "|"+cmd.Name+"|") || names[cmd.Name] || len(cmd.Description) > 200 || len(cmd.Instructions) > 12000 || commandKind(cmd) == "" || len(cmd.Model) > 200 || len(cmd.AllowedConversations) > 100 || cmd.ProfileID != "" && !profiles[cmd.ProfileID] {
+		if cmd.ExecutionMinutes < 0 || cmd.ExecutionMinutes > 60 || !commandPattern.MatchString(cmd.Name) || strings.Contains("|ping|help|status|new|more|deepseek|", "|"+cmd.Name+"|") || names[cmd.Name] || len(cmd.Description) > 200 || textTooLong(cmd.Instructions) || commandKind(cmd) == "" || len(cmd.Model) > 200 || len(cmd.AllowedConversations) > 100 || cmd.ProfileID != "" && !profiles[cmd.ProfileID] {
 			return errors.New("invalid command")
 		}
 		if cmd.Generation != nil {

@@ -221,7 +221,7 @@ func aiChatModule() module {
 			if err := strictSettings(raw, &set); err != nil {
 				return nil, err
 			}
-			if len(set.Model) > 200 || len(set.Instructions) > 12000 || len(set.ProfileID) > 80 {
+			if len(set.Model) > 200 || textTooLong(set.Instructions) || len(set.ProfileID) > 80 {
 				return nil, errors.New("invalid AI settings")
 			}
 			if set.ProfileID != "" && env.profiles != nil && !env.profiles[set.ProfileID] {

@@ -520,3 +520,133 @@ func TestAHaltingStepIsRecordedAsRun(t *testing.T) {
 		t.Fatalf("steps %+v", s)
 	}
 }
+
+func TestCJKTextRuneAndByteLimits(t *testing.T) {
+	t.Parallel()
+	okText := strings.Repeat("好", 5000)    // 5,000 runes, 15,000 UTF-8 bytes
+	tooMany := strings.Repeat("好", 12001)  // 12,001 runes, 36,003 UTF-8 bytes
+	tooLarge := strings.Repeat("😀", 12001) // > 4*12000 bytes
+
+	// Configuration commands and profiles.
+	for _, tc := range []struct {
+		name string
+		cfg  Configuration
+		want bool
+	}{
+		{
+			name: "5000 CJK command and profile accepted",
+			cfg: func() Configuration {
+				c := DefaultConfiguration()
+				c.Profiles = []Profile{{ID: "p1", Name: "P1", Instructions: okText}}
+				c.Commands = []Command{
+					{Name: "echo", Type: "fixed", Instructions: okText, Enabled: true},
+					{Name: "ask", Type: "ai", Instructions: okText, ProfileID: "p1", Enabled: true},
+				}
+				return c
+			}(),
+			want: true,
+		},
+		{
+			name: "12001 CJK command rejected",
+			cfg: func() Configuration {
+				c := DefaultConfiguration()
+				c.Commands = []Command{{Name: "echo", Type: "fixed", Instructions: tooMany, Enabled: true}}
+				return c
+			}(),
+			want: false,
+		},
+		{
+			name: "12001 CJK AI command rejected",
+			cfg: func() Configuration {
+				c := DefaultConfiguration()
+				c.Commands = []Command{{Name: "ask", Type: "ai", Instructions: tooMany, Enabled: true}}
+				return c
+			}(),
+			want: false,
+		},
+		{
+			name: "12001 CJK profile rejected",
+			cfg: func() Configuration {
+				c := DefaultConfiguration()
+				c.Profiles = []Profile{{ID: "p1", Name: "P1", Instructions: tooMany}}
+				return c
+			}(),
+			want: false,
+		},
+		{
+			name: "oversized UTF-8 byte payload rejected",
+			cfg: func() Configuration {
+				c := DefaultConfiguration()
+				c.Commands = []Command{{Name: "echo", Type: "fixed", Instructions: tooLarge, Enabled: true}}
+				return c
+			}(),
+			want: false,
+		},
+	} {
+		err := tc.cfg.Validate()
+		if (err == nil) != tc.want {
+			t.Fatalf("%s: got err=%v, want valid=%t", tc.name, err, tc.want)
+		}
+	}
+
+	// Module settings directly (text.template and ai.chat).
+	for _, bad := range []Pipeline{
+		{Steps: []PipelineStep{
+			step("t", "text.template", nil, mustJSON(t, map[string]string{"template": tooMany})),
+			reply(map[string]string{"text": "t.text"}),
+		}},
+		{Steps: []PipelineStep{
+			step("a", "ai.chat", map[string]string{"prompt": "trigger.args"}, mustJSON(t, map[string]string{"instructions": tooMany})),
+			reply(map[string]string{"text": "a.text"}),
+		}},
+	} {
+		if err := validatePipeline(&bad, pipelineEnv{}); err == nil {
+			t.Fatalf("expected module validation error for %+v", bad)
+		}
+	}
+
+	// Also verify 5,000 CJK chars pass module settings directly.
+	for _, okPl := range []Pipeline{
+		{Steps: []PipelineStep{
+			step("t", "text.template", nil, mustJSON(t, map[string]string{"template": okText})),
+			reply(map[string]string{"text": "t.text"}),
+		}},
+		{Steps: []PipelineStep{
+			step("a", "ai.chat", map[string]string{"prompt": "trigger.args"}, mustJSON(t, map[string]string{"instructions": okText})),
+			reply(map[string]string{"text": "a.text"}),
+		}},
+	} {
+		if err := validatePipeline(&okPl, pipelineEnv{}); err != nil {
+			t.Fatalf("expected 5000 CJK module validation to pass, got %v", err)
+		}
+	}
+
+	// Incoming command text in Engine.admit.
+	e, _ := setup(t)
+	arm(t, e)
+	cfg := DefaultConfiguration()
+	cfg.Commands = []Command{{Name: "echo", Type: "fixed", Instructions: "{input}", Enabled: true}}
+	if err := e.SetConfiguration(cfg); err != nil {
+		t.Fatal(err)
+	}
+	m := incoming()
+	m.ID = "cjk-ok"
+	m.Text = "!echo " + okText
+	if ok, err := e.Accept(context.Background(), m); !ok || err != nil {
+		t.Fatalf("5000 CJK incoming command rejected: ok=%t err=%v", ok, err)
+	}
+	m.ID = "cjk-too-long"
+	m.Text = "!echo " + tooMany
+	if ok, err := e.Accept(context.Background(), m); ok || err != nil {
+		t.Fatalf("12001 CJK incoming command accepted: ok=%t err=%v", ok, err)
+	}
+}
+
+func mustJSON(t *testing.T, v any) string {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}

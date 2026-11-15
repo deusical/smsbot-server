@@ -404,7 +404,7 @@ func (e *Engine) commandCandidate(m transport.Incoming, text string) (*store.AIP
 // approved roster in a group, and the conversation's sending identity.
 func (e *Engine) admit(ctx context.Context, m transport.Incoming, parent *store.AIParent) (cfg Configuration, peer, roster, outgoing string, ok bool, err error) {
 	age := e.now().Sub(m.At)
-	if m.ID == "" || m.Historical || age > 2*time.Minute || age < -5*time.Second || len(m.Text) > 12000 {
+	if m.ID == "" || m.Historical || age > 2*time.Minute || age < -5*time.Second || textTooLong(m.Text) {
 		return cfg, "", "", "", false, nil
 	}
 	paused, err := e.Store.Paused()

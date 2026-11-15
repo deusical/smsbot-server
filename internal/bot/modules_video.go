@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"strconv"
 	"time"
 
 	"github.com/deusical/cmdflow"
@@ -177,23 +178,43 @@ func prepareCompressState(e *Engine, minutes int, s *cmdflow.Step) error {
 // "<id>.video" still work. An unpinned step is the old kind when it has
 // compression settings or a later step reads its "video" output.
 func upgradeVideoSteps(p *Pipeline) {
+	used := make(map[string]bool, len(p.Steps))
+	for _, s := range p.Steps {
+		used[s.ID] = true
+	}
 	steps := []PipelineStep{}
 	for i, s := range p.Steps {
 		if s.Module != "video.download" || s.Version != 1 && (s.Version != 0 || !combinedVideoStep(p.Steps[i+1:], s)) {
 			steps = append(steps, s)
 			continue
 		}
-		// Shorten the id itself, so the new id still starts with a letter.
-		base := s.ID
-		if len(base) > 24-len("_source") {
-			base = base[:24-len("_source")]
-		}
-		source := base + "_source"
+		source := uniqueSourceStepID(s.ID, used)
 		steps = append(steps,
 			PipelineStep{ID: source, Module: "video.download", Version: 2, Inputs: s.Inputs},
 			PipelineStep{ID: s.ID, Module: "video.compress", Version: 1, Inputs: map[string]string{"source": source + ".source"}, Settings: s.Settings})
 	}
 	p.Steps = steps
+}
+
+func uniqueSourceStepID(id string, used map[string]bool) string {
+	// Shorten the id itself, so the new id still starts with a letter.
+	const maxLen = 24
+	const suffix = "_source"
+	base := id
+	if len(base) > maxLen-len(suffix) {
+		base = base[:maxLen-len(suffix)]
+	}
+	source := base + suffix
+	for n := 2; used[source]; n++ {
+		tail := suffix + "_" + strconv.Itoa(n)
+		b := id
+		if len(b) > maxLen-len(tail) {
+			b = b[:maxLen-len(tail)]
+		}
+		source = b + tail
+	}
+	used[source] = true
+	return source
 }
 
 func combinedVideoStep(later []PipelineStep, s PipelineStep) bool {

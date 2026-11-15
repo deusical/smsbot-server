@@ -233,7 +233,9 @@ export function SchemaFields({
             onChange={(e) =>
               update(
                 schema.type === "number"
-                  ? Number(e.target.value)
+                  ? e.target.value === "" && schema.default === undefined
+                    ? undefined
+                    : Number(e.target.value)
                   : e.target.value,
               )
             }
