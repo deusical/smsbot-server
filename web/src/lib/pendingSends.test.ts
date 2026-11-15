@@ -67,6 +67,15 @@ describe("pending send tracking", () => {
     expect(getPending(conversation, pending.key)).toBeUndefined();
   });
 
+  it("treats an expired send as not sent and stops polling for it", async () => {
+    await follow([job("expired")]);
+    expect(getPending(conversation, pending.key)).toMatchObject({
+      phase: "failed", failure: "not_sent", error: "Not sent. It waited too long to reach your phone.",
+    });
+    await act(async () => { await vi.advanceTimersByTimeAsync(60000); });
+    expect(vi.mocked(api).mock.calls).toEqual([["/activity"]]);
+  });
+
   it("does not poll when tracking is inactive and cancels polling on unmount", async () => {
     addPending(conversation, pending);
     const inactive = renderHook(() => usePendingFollower(false));

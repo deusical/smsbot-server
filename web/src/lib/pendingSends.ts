@@ -136,11 +136,18 @@ export function usePendingFollower(active: boolean) {
               submitted = true;
             } else if (job.state === "unknown_submission") {
               patchPending(conversation, p.key, { phase: "failed", failure: "uncertain", error: "Not confirmed. Check your phone before sending this again." });
-            } else if (job.state === "failed" || job.state === "cancelled") {
+            } else if (job.state === "failed" || job.state === "cancelled" || job.state === "expired") {
               patchPending(conversation, p.key, {
                 phase: "failed",
                 failure: "not_sent",
-                error: job.state === "cancelled" ? "Not sent. It was cancelled before reaching your phone." : job.reason ? jobResult(job) : `Not sent${job.code ? `: ${job.code.replaceAll("_", " ")}` : ""}.`,
+                error:
+                  job.state === "cancelled"
+                    ? "Not sent. It was cancelled before reaching your phone."
+                    : job.state === "expired"
+                      ? "Not sent. It waited too long to reach your phone."
+                      : job.reason
+                        ? jobResult(job)
+                        : `Not sent${job.code ? `: ${job.code.replaceAll("_", " ")}` : ""}.`,
               });
             }
           }
