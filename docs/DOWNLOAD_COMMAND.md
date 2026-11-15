@@ -42,6 +42,29 @@ address, creates a token file under `%LOCALAPPDATA%\SmsBot` (never printed) and
 keeps files under `Downloads\smsbot`. The worker refuses any address that isn't
 loopback or Tailscale.
 
+To start the Windows worker automatically when you sign in, without admin rights:
+
+```powershell
+.\scripts\start-worker.ps1 -Root C:\Project\douyin-downloader -Install
+```
+
+`-Install` registers and starts a per-user Scheduled Task named `SmsBot worker`
+that runs hidden at your logon, restarts a few times on failure, and has no
+execution time limit. Any `-Root`, `-OutputRoot`, `-TokenFile`, `-Bind`, `-Port`,
+`-Slots`, or `-KeepDays` flags are saved on the task; omitting `-Bind` keeps
+resolving the PC's Tailscale address at each start rather than baking an old
+address in. To stop and remove the task:
+
+```powershell
+.\scripts\start-worker.ps1 -Uninstall
+```
+
+Pass `-KeepDays N` (or `--keep-days N` directly to `download-worker.py`) to
+delete terminal job folders (`complete`, `failed`, or `expired`) under the
+output root whose `state.json` was modified or whose deadline passed more than
+`N` days ago. Cleanup runs at startup and hourly, and never touches active or
+non-terminal jobs. It is off by default so originals stay until you opt in.
+
 To use it, open **Settings > Workers** on the dashboard, add the worker with its
 Tailscale address (`http://<100.x address>:8767/download`) and paste the contents of
 its token file. The token is stored encrypted and never shown again. The page shows
@@ -65,9 +88,12 @@ worker fails with `worker_unavailable` (retry the command). Workers only prepare
 files and only the bot sends, so a missing worker can't cause a second reply. A
 remote worker's result is fetched in the background (Activity shows `receiving`).
 
-Upgrade the SmsBot host's worker first (re-run the installer): SmsBot sends video
-steps as protocol-4 tasks, and logs `download_worker_outdated` at startup if the
-local worker doesn't run tasks yet.
+Upgrade the SmsBot host's worker together with the server (re-run the installer
+for new dependencies, or run `scripts/deploy-remote.ps1`, which also updates the
+worker scripts under `~/.local/lib/smsbot/downloader/worker` and restarts
+`smsbot-downloader.service` when present): SmsBot sends video steps as
+protocol-4 tasks, and logs `download_worker_outdated` at startup if the local
+worker doesn't run tasks yet.
 
 The Linux worker needs no Windows worker or SSH tunnel. Rednote's source is pinned to
 `106966f552e45eb3af75055810ab51f940f767be`. The installer records resolved Python

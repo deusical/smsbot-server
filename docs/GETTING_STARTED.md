@@ -187,8 +187,11 @@ merged `main`:
 The host runs the service as the user unit `smsbot.service`, with the binary at
 `~/.local/lib/smsbot/smsbot` and state under `~/.local/share/smsbot`. The script
 builds a Linux binary, backs up the database and session on the host, swaps the binary,
-and waits for the health check. It rolls back if anything fails. Set up the host once by
-hand first, including pairing; the script never reads keys, credentials or messages.
+and waits for the health check. It rolls back if anything fails. When a local video
+worker is installed under `~/.local/lib/smsbot/downloader/worker`, the deploy also
+updates its worker scripts and restarts `smsbot-downloader.service` without failing
+the server deploy if the worker update errors. Set up the host once by hand first,
+including pairing; the script never reads keys, credentials or messages.
 
 ## Backup and restore
 

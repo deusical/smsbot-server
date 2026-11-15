@@ -41,7 +41,7 @@ func textTemplateModule() module {
 			if err := strictSettings(raw, &t); err != nil {
 				return nil, err
 			}
-			if len(t.Template) > 12000 {
+			if textTooLong(t.Template) {
 				return nil, errors.New("text is too long")
 			}
 			return json.Marshal(t)
