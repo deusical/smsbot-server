@@ -324,3 +324,136 @@ class ProtocolV4Tests(unittest.TestCase):
             self.assertEqual(call("POST", "/jobs/" + job, self.request(task="test.nope"))[0], 502)
         finally:
             server.shutdown(); server.server_close(); thread.join(timeout=3)
+
+    def test_lease_constant_used_on_start_and_renew(self):
+        self.assertGreaterEqual(worker.LEASE_SECONDS, 300)
+        _, jobs = self.jobs()
+        job = "a"*64
+        req = self.request()
+        with mock.patch.object(worker.threading, "Thread"), \
+                mock.patch.object(worker.time, "monotonic", side_effect=[1000.0, 1050.0]):
+            self.assertEqual(jobs.poll(job, req), {"stage": "queued", "protocol": 4})
+            self.assertEqual(jobs.active[job], 1000.0 + worker.LEASE_SECONDS)
+            self.assertEqual(jobs.poll(job, req), {"stage": "queued", "protocol": 4})
+            self.assertEqual(jobs.active[job], 1050.0 + worker.LEASE_SECONDS)
+
+    def test_terminal_jobs_not_overwritten_to_expired_past_deadline(self):
+        _, jobs = self.jobs()
+        past_deadline = int(time.time()) - 2
+        for stage, extra in (("complete", {"outputs": {"echo": {"type": "file", "handle": "1"*64 + "/echo", "size": 2}}}),
+                             ("failed", {"code": "video_too_long"})):
+            job = ("1" if stage == "complete" else "2") * 64
+            req = self.request(deadline=past_deadline)
+            jobs.save(jobs.path(job), {**req, "stage": stage, **extra})
+            res = jobs.poll(job, req)
+            self.assertEqual(res["stage"], stage)
+            self.assertEqual(jobs.load(jobs.path(job))["stage"], stage)
+        queued_job = "3" * 64
+        req = self.request(deadline=past_deadline)
+        jobs.save(jobs.path(queued_job), {**req, "stage": "queued"})
+        res = jobs.poll(queued_job, req)
+        self.assertEqual(res, {"stage": "expired", "protocol": 4})
+        self.assertEqual(jobs.load(jobs.path(queued_job))["stage"], "expired")
+
+    def test_busy_returns_503(self):
+        root, _ = self.jobs()
+        token = "SYNTHETIC_TOKEN_FOR_OFFLINE_TEST_ONLY"
+        server = worker.create_server(root, token, 0, tasks=worker.load_tasks(root))
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        base = "http://127.0.0.1:%s/download" % server.server_port
+        try:
+            with mock.patch.object(worker.Jobs, "poll", side_effect=RuntimeError("busy")):
+                req = urllib.request.Request(
+                    base + "/jobs/" + "a"*64,
+                    method="POST",
+                    data=json.dumps(self.request()).encode(),
+                    headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"},
+                )
+                with self.assertRaises(urllib.error.HTTPError) as ctx:
+                    opener.open(req, timeout=5)
+                self.assertEqual(ctx.exception.code, 503)
+        finally:
+            server.shutdown(); server.server_close(); thread.join(timeout=3)
+
+    def test_compress_task_failed_code_survives(self):
+        root, jobs = self.jobs()
+        download, compress_job = "a"*64, "b"*64
+        path = jobs.path(download)
+        (path / "files").mkdir()
+        (path / "files" / "original").write_bytes(b"synthetic-video")
+        jobs.save(path, {
+            "protocol": 4, "task": "video.download", "version": 1, "scope": self.scope,
+            "inputs": {"url": {"type": "url", "text": "https://v.douyin.com/synthetic/"}},
+            "settings": {}, "deadline": int(time.time()) + 600, "stage": "complete",
+            "outputs": {"original": {"type": "video", "handle": download + "/original", "size": 15}},
+        })
+        req = {
+            "protocol": 4, "task": "video.compress", "version": 1, "scope": self.scope,
+            "inputs": {"source": {"handle": download + "/original"}},
+            "settings": {"max_bytes": 200000, "copy_if_fits": False}, "deadline": int(time.time()) + 600,
+        }
+        fake_probe = {"format": {"duration": "36000"}, "streams": [{"codec_type": "video"}]}
+        with mock.patch.object(worker, "probe", return_value=fake_probe):
+            failed = self.run_job(jobs, compress_job, req)
+        self.assertEqual(failed, {"stage": "failed", "protocol": 4, "code": "video_too_long"})
+
+    def test_download_source_receipt_code_becomes_job_code(self):
+        _, jobs = self.jobs()
+        request = {
+            "protocol": 4, "task": "video.download", "version": 1, "scope": self.scope,
+            "inputs": {"url": {"type": "url", "text": "https://v.douyin.com/synthetic/"}},
+            "deadline": int(time.time()) + 600,
+        }
+        for n, (payload, expected_code) in enumerate((
+            ({"code": "single_video_required"}, "single_video_required"),
+            ({"code": "unsupported_platform"}, "unsupported_platform"),
+            ({"code": "bad code https://example.com"}, "process_failed"),
+            (None, "process_failed"),
+        )):
+            def fake_run(args, deadline, **kwargs):
+                if payload is not None:
+                    receipt = Path(args[args.index("--receipt") + 1])
+                    receipt.write_text(json.dumps(payload), encoding="utf-8")
+                raise RuntimeError("process_failed")
+            with self.subTest(expected_code=expected_code), mock.patch.object(worker, "run", side_effect=fake_run):
+                failed = self.run_job(jobs, str(n + 1) * 64, request)
+            self.assertEqual(failed, {"stage": "failed", "protocol": 4, "code": expected_code})
+
+    def test_download_source_cli_writes_receipt_only_for_allowed_codes(self):
+        source_script = Path(__file__).with_name("download-source.py")
+        import subprocess
+        for exc_msg, expect_receipt in (
+            ("single_video_required", {"code": "single_video_required"}),
+            ("unsupported_platform", {"code": "unsupported_platform"}),
+            ("https://secret.example/do-not-leak", None),
+        ):
+            with self.subTest(exc_msg=exc_msg), tempfile.TemporaryDirectory() as tmp:
+                tmp_path = Path(tmp)
+                receipt = tmp_path / "receipt.json"
+                output = tmp_path / "originals"
+                output.mkdir()
+                runner = tmp_path / "run_cli.py"
+                runner.write_text(
+                    "import runpy, sys\n"
+                    "from unittest import mock\n"
+                    f"sys.argv = [{str(source_script)!r}, '--root', {str(tmp_path)!r}, '--output', {str(output)!r}, '--receipt', {str(receipt)!r}, 'https://v.douyin.com/synthetic/']\n"
+                    "with mock.patch.dict('sys.modules', {}):\n"
+                    "    import types\n"
+                    "    app = types.ModuleType('app')\n"
+                    "    dl = types.ModuleType('app.downloader'); dl.DownloaderConfig = object; dl.MediaDownloader = object\n"
+                    "    pl = types.ModuleType('app.platforms'); pl.identify_url = lambda u: (_ for _ in ()).throw(ValueError(" + repr(exc_msg) + "))\n"
+                    "    md = types.ModuleType('app.models'); md.Platform = object\n"
+                    "    pw = types.ModuleType('playwright'); pws = types.ModuleType('playwright.sync_api'); pws.BrowserType = object\n"
+                    "    sc = types.ModuleType('scripts'); dls = types.ModuleType('scripts.douyin_item_live_smoke'); dls.anonymous_browser_adapter = object\n"
+                    "    sys.modules.update({'app': app, 'app.downloader': dl, 'app.platforms': pl, 'app.models': md, 'playwright': pw, 'playwright.sync_api': pws, 'scripts': sc, 'scripts.douyin_item_live_smoke': dls})\n"
+                    f"    runpy.run_path({str(source_script)!r}, run_name='__main__')\n",
+                    encoding="utf-8",
+                )
+                res = subprocess.run([sys.executable, str(runner)], capture_output=True, text=True)
+                self.assertNotEqual(res.returncode, 0)
+                if expect_receipt is None:
+                    self.assertFalse(receipt.exists())
+                else:
+                    self.assertEqual(json.loads(receipt.read_text(encoding="utf-8")), expect_receipt)

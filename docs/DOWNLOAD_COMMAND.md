@@ -170,7 +170,7 @@ returns its outputs, and a failed one a short `code`:
 The bot fetches a file output with `GET /download/jobs/<job>/files/<name>`. A job's
 request is fixed once created; its state, inputs, settings and output files stay
 in the job's folder, so a restart resumes it on the next poll. Deadlines may be up
-to a day ahead, and polls keep renewing the 30-second lease. `--slots` (default 1)
+to a day ahead, and polls keep renewing the 300-second lease. `--slots` (default 1)
 sets how many jobs run at once.
 
 ### Writing a task
@@ -231,7 +231,7 @@ checkpoints are under the job ID directory. The token is outside source. Job
 folders written by older, encrypting workers (`*.enc` files) are no longer read;
 a poll for such a job starts it again, and the old folders can be deleted.
 
-Every poll renews a 30-second preparation lease. If the bot pauses, cancels, loses
+Every poll renews a 300-second preparation lease. If the bot pauses, cancels, loses
 consent, or stops polling, the lease expires and stops running preparation.
 Subprocesses are also stopped at the absolute deadline, or after 120 seconds
 without file growth or advancing encoder frames/media time. Stalled preparation

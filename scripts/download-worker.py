@@ -30,6 +30,8 @@ LIMIT = 20_000_000 - 1
 work = threading.local()
 # How long a download may show no new bytes before it counts as stuck.
 DOWNLOAD_STALL_SECONDS = 300
+# Lease must exceed the bot's longest blocking dispatch step (AI reply + upload).
+LEASE_SECONDS = 300
 
 
 DEFAULT_SETTINGS = {"preset": "medium", "passes": 2, "max_attempts": 3,
@@ -152,9 +154,9 @@ def compress(source, destination, limit, deadline, encoder=None, settings=None):
     info = probe(source, deadline)
     duration = float(info["format"]["duration"])
     if not math.isfinite(duration) or duration <= 0:
-        raise ValueError("invalid_duration")
+        raise TaskFailed("invalid_duration")
     if not any(s.get("codec_type") == "video" for s in info["streams"]):
-        raise ValueError("video_required")
+        raise TaskFailed("video_required")
     audio = any(s.get("codec_type") == "audio" for s in info["streams"])
     if settings["copy_if_fits"] and source.stat().st_size <= limit:
         shutil.copy2(source, destination)
@@ -163,7 +165,7 @@ def compress(source, destination, limit, deadline, encoder=None, settings=None):
         audio_rate = 128000 if audio else 0
         rate = int(target * 8 / duration - audio_rate - 12000)
         if rate < 32000:
-            raise ValueError("video_too_long")
+            raise TaskFailed("video_too_long")
         for _ in range(settings["max_attempts"]):
             base = ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
                  "-i", str(source), "-map", "0:v:0", "-map", "0:a:0?",
@@ -193,16 +195,16 @@ def compress(source, destination, limit, deadline, encoder=None, settings=None):
                 break
             rate = max(32000, int(rate * target / size * .98))
         else:
-            raise ValueError("size_limit")
+            raise TaskFailed("size_limit")
     if not 0 < destination.stat().st_size <= limit:
-        raise ValueError("size_limit")
+        raise TaskFailed("size_limit")
     if getattr(work, "stage", None):
         work.stage("verifying")
     result = probe(destination, deadline)
     if abs(float(result["format"]["duration"]) - duration) > .25:
-        raise ValueError("duration_changed")
+        raise TaskFailed("duration_changed")
     if audio and not any(s.get("codec_type") == "audio" for s in result["streams"]):
-        raise ValueError("audio_missing")
+        raise TaskFailed("audio_missing")
     run(["ffmpeg", "-nostdin", "-v", "error", "-xerror", "-i", str(destination),
          "-f", "null", "-"], deadline)
     return destination
@@ -221,11 +223,21 @@ def fetch_original(root, url, folder, deadline):
         run([str(python), str(Path(__file__).with_name("download-source.py")),
              "--root", str(root), url, "--output", str(originals),
              "--receipt", str(receipt), "--timeout", str(max(1, int(deadline-time.monotonic())))], deadline)
+    except RuntimeError as error:
+        if error.args == ("process_failed",) and receipt.is_file():
+            try:
+                data = json.loads(receipt.read_text(encoding="utf-8"))
+            except Exception:
+                data = None
+            code = data.get("code") if isinstance(data, dict) else None
+            if isinstance(code, str) and CODE.fullmatch(code):
+                raise TaskFailed(code) from error
+        raise
     finally:
         work.__dict__.pop("stall_seconds", None)
     files = [Path(f).resolve() for f in json.loads(receipt.read_text())["files"]]
     if len(files) != 1 or not files[0].is_relative_to(originals.resolve()) or files[0].suffix.lower() != ".mp4":
-        raise ValueError("single_video_required")
+        raise TaskFailed("single_video_required")
     return files[0]
 
 
@@ -387,7 +399,7 @@ def load_tasks(directory):
 class Jobs:
     """Plain-file checkpoints; a few job slots, short authenticated HTTP polls.
 
-    Polls renew a 30-second lease. Loss of bot consent stops work when the
+    Polls renew a 300-second lease. Loss of bot consent stops work when the
     lease expires; checkpoints survive. Only the bot can authorize sending.
     """
     def __init__(self, root, output_root=None, tasks=None, slots=1):
@@ -473,14 +485,14 @@ class Jobs:
             else:
                 state = {**request, "stage": "queued"}
                 self.save(path, state)
-            if time.time() >= state["deadline"]:
-                state["stage"] = "expired"
-                self.save(path, state)
-            elif state["stage"] not in ("complete", "failed", "expired"):
-                if job in self.active:
-                    self.active[job] = time.monotonic() + 30
+            if state["stage"] not in ("complete", "failed", "expired"):
+                if time.time() >= state["deadline"]:
+                    state["stage"] = "expired"
+                    self.save(path, state)
+                elif job in self.active:
+                    self.active[job] = time.monotonic() + LEASE_SECONDS
                 elif len(self.active) < 100:
-                    self.active[job] = time.monotonic() + 30
+                    self.active[job] = time.monotonic() + LEASE_SECONDS
                     threading.Thread(target=self.execute, args=(job,), daemon=True).start()
                 else:
                     raise RuntimeError("busy")
@@ -625,6 +637,11 @@ def create_server(root, token, port, output_root=None, bind="127.0.0.1", tasks=N
                     self.send_error(404)
             except (BrokenPipeError, ConnectionResetError):
                 pass
+            except RuntimeError as error:
+                if error.args == ("busy",):
+                    self.send_error(503, "busy")
+                else:
+                    self.send_error(502, "download_failed")
             except Exception:
                 self.send_error(502, "download_failed")
 
