@@ -659,6 +659,16 @@ def create_server(root, token, port, output_root=None, bind="127.0.0.1", tasks=N
         def job_request(self):
             self.connection.settimeout(10)
             if not hmac.compare_digest(self.headers.get("Authorization", "").encode(), ("Bearer " + token).encode()):
+                # Read a small unread body first: closing with it unread can
+                # reset the connection, so the caller sees a network error
+                # instead of 401. Larger bodies are not read for strangers.
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                except ValueError:
+                    length = 0
+                if 0 < length <= 1 << 16:
+                    self.rfile.read(length)
+                self.close_connection = True
                 self.send_error(401)
                 return
             try:
