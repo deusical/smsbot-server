@@ -457,3 +457,90 @@ class ProtocolV4Tests(unittest.TestCase):
                     self.assertFalse(receipt.exists())
                 else:
                     self.assertEqual(json.loads(receipt.read_text(encoding="utf-8")), expect_receipt)
+
+
+class CleanupTests(unittest.TestCase):
+    def make_job(self, jobs, job_id, stage, mtime, deadline, now):
+        path = jobs.path(job_id)
+        (path / "files").mkdir(exist_ok=True)
+        (path / "files" / "original").write_bytes(b"synthetic-video")
+        state = {
+            "protocol": 4,
+            "task": "video.download",
+            "version": 1,
+            "scope": "f" * 64,
+            "inputs": {"url": {"type": "url", "text": "https://v.douyin.com/synthetic/"}},
+            "settings": {},
+            "deadline": deadline,
+            "stage": stage,
+        }
+        jobs.save(path, state)
+        os.utime(path / "state.json", (mtime, mtime))
+        return path
+
+    def test_cleanup_disabled_by_default(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            jobs = worker.Jobs(root)
+            now = 2_000_000_000.0
+            old = self.make_job(jobs, "1" * 64, "complete", now - 100 * 86400, now - 100 * 86400, now)
+            self.assertEqual(jobs.cleanup_old_jobs(None, now=now), [])
+            self.assertTrue(old.exists())
+
+    def test_cleanup_old_terminal_and_past_deadline_jobs_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            jobs = worker.Jobs(root)
+            now = 2_000_000_000.0
+            day = 86400.0
+
+            # Eligible: terminal + old mtime
+            old_complete = self.make_job(jobs, "1" * 64, "complete", now - 8 * day, now + 600, now)
+            old_failed = self.make_job(jobs, "2" * 64, "failed", now - 8 * day, now + 600, now)
+            old_expired = self.make_job(jobs, "3" * 64, "expired", now - 8 * day, now - 8 * day, now)
+            # Eligible: terminal + recent mtime, but deadline passed > N days ago
+            old_deadline = self.make_job(jobs, "4" * 64, "complete", now - 1 * day, now - 8 * day, now)
+
+            # Preserved: terminal + within N days
+            fresh_complete = self.make_job(jobs, "5" * 64, "complete", now - 6 * day, now - 6 * day, now)
+            # Preserved: non-terminal even with old mtime or old deadline
+            non_terminal_queued = self.make_job(jobs, "6" * 64, "queued", now - 10 * day, now + 600, now)
+            non_terminal_dl = self.make_job(jobs, "7" * 64, "downloading", now - 10 * day, now - 10 * day, now)
+            # Preserved: active job even if terminal/old on disk
+            active_job = self.make_job(jobs, "8" * 64, "complete", now - 10 * day, now - 10 * day, now)
+            jobs.active[active_job.name] = time.monotonic() + 300
+
+            # Preserved: non-job dir, missing state.json, corrupt state.json, and .scratch
+            other_dir = jobs.directory / "not-a-job"
+            other_dir.mkdir()
+            no_state = jobs.path("9" * 64)
+            corrupt = jobs.path("a" * 64)
+            (corrupt / "state.json").write_text("{bad json", encoding="utf-8")
+            os.utime(corrupt / "state.json", (now - 10 * day, now - 10 * day))
+
+            deleted = jobs.cleanup_old_jobs(7, now=now)
+            self.assertEqual(set(deleted), {old_complete.name, old_failed.name, old_expired.name, old_deadline.name})
+            for gone in (old_complete, old_failed, old_expired, old_deadline):
+                self.assertFalse(gone.exists())
+            for kept in (fresh_complete, non_terminal_queued, non_terminal_dl, active_job, other_dir, no_state, corrupt, jobs.scratch):
+                self.assertTrue(kept.exists(), f"{kept} should have been kept")
+
+    def test_keep_days_validation_and_server_startup_cleanup(self):
+        self.assertEqual(worker.positive_days("7"), 7.0)
+        self.assertEqual(worker.positive_days("0.5"), 0.5)
+        for bad in ("0", "-3", "nan", "inf", "abc"):
+            with self.subTest(bad=bad), self.assertRaises(Exception):
+                worker.positive_days(bad)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            jobs = worker.Jobs(root)
+            old_ts = time.time() - 10 * 86400
+            old = self.make_job(jobs, "b" * 64, "complete", old_ts, old_ts, time.time())
+            fresh = self.make_job(jobs, "c" * 64, "complete", time.time(), time.time() + 600, time.time())
+            server = worker.create_server(root, "SYNTHETIC_TOKEN_FOR_OFFLINE_TEST_ONLY", 0, keep_days=7)
+            try:
+                self.assertFalse(old.exists())
+                self.assertTrue(fresh.exists())
+            finally:
+                server.server_close()

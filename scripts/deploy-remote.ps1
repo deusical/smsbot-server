@@ -58,9 +58,16 @@ $previous = (($installed -join ' ') -split '\s+')[0]
 if ($previous -notmatch '^[0-9a-f]{64}$') { throw 'Could not read the installed binary checksum.' }
 if ($previous -eq $expected) { throw "The host already runs this exact build ($stamp)." }
 
-Step 'Uploading the release and installer'
+Step 'Uploading the release, installer and worker scripts'
+$scriptsDir = Join-Path $SourceDir 'scripts'
+$workerFiles = @(
+    (Join-Path $scriptsDir 'download-worker.py'),
+    (Join-Path $scriptsDir 'download-source.py')
+) + @(Get-ChildItem -LiteralPath $scriptsDir -Filter 'task_*.py' -File | Sort-Object Name | ForEach-Object FullName)
 & scp @ssh $archive "${Target}:$remoteLib/smsbot-$stamp.gz"; Check 'scp release'
-& scp @ssh (Join-Path $PSScriptRoot 'remote-install.py') "${Target}:$remoteLib/remote-install.py"; Check 'scp installer'
+& scp @ssh (Join-Path $scriptsDir 'remote-install.py') "${Target}:$remoteLib/remote-install.py"; Check 'scp installer'
+& ssh @ssh $Target "rm -rf ~/$remoteLib/worker-staging-$stamp && mkdir -p ~/$remoteLib/worker-staging-$stamp"; Check 'prepare worker staging'
+& scp @ssh @workerFiles "${Target}:$remoteLib/worker-staging-$stamp/"; Check 'scp worker scripts'
 
 Step 'Installing (stop, back up state, swap binary, start, health check; rolls back on failure)'
 & ssh @ssh $Target "python3 ~/$remoteLib/remote-install.py '$stamp' $expected $previous '$OriginHost'"

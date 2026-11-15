@@ -32,6 +32,8 @@ work = threading.local()
 DOWNLOAD_STALL_SECONDS = 300
 # Lease must exceed the bot's longest blocking dispatch step (AI reply + upload).
 LEASE_SECONDS = 300
+TERMINAL_STAGES = frozenset(("complete", "failed", "expired"))
+CLEANUP_INTERVAL_SECONDS = 3600
 
 
 DEFAULT_SETTINGS = {"preset": "medium", "passes": 2, "max_attempts": 3,
@@ -562,6 +564,50 @@ class Jobs:
                 raise ValueError("result_unavailable")
             return f
 
+    def cleanup_old_jobs(self, keep_days, now=None):
+        """Delete terminal job folders whose state.json mtime or deadline is older than keep_days."""
+        if keep_days is None:
+            return []
+        if isinstance(keep_days, bool) or not isinstance(keep_days, (int, float)) or not math.isfinite(keep_days) or keep_days <= 0:
+            raise ValueError("invalid_keep_days")
+        now = time.time() if now is None else now
+        cutoff = now - keep_days * 86400
+        deleted = []
+        with self.lock:
+            try:
+                entries = list(self.directory.iterdir())
+            except OSError:
+                return deleted
+            for entry in entries:
+                if not JOB.fullmatch(entry.name) or entry.is_symlink() or not entry.is_dir():
+                    continue
+                if entry.name in self.active:
+                    continue
+                state_file = entry / "state.json"
+                if not state_file.is_file() or state_file.is_symlink():
+                    continue
+                try:
+                    mtime = state_file.stat().st_mtime
+                    state = json.loads(state_file.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    continue
+                if not isinstance(state, dict) or state.get("stage") not in TERMINAL_STAGES:
+                    continue
+                deadline = state.get("deadline")
+                deadline_expired = (
+                    isinstance(deadline, (int, float))
+                    and not isinstance(deadline, bool)
+                    and math.isfinite(deadline)
+                    and deadline < cutoff
+                )
+                if mtime < cutoff or deadline_expired:
+                    try:
+                        shutil.rmtree(entry)
+                        deleted.append(entry.name)
+                    except OSError:
+                        pass
+        return deleted
+
 
 TAILNET = ipaddress.ip_network("100.64.0.0/10")
 
@@ -581,8 +627,30 @@ def bind_address(value):
     return str(address)
 
 
-def create_server(root, token, port, output_root=None, bind="127.0.0.1", tasks=None, slots=1):
+def positive_days(value):
+    try:
+        days = float(value)
+    except (TypeError, ValueError):
+        raise argparse.ArgumentTypeError("keep-days must be a positive number")
+    if not math.isfinite(days) or days <= 0:
+        raise argparse.ArgumentTypeError("keep-days must be a positive number")
+    return days
+
+
+def create_server(root, token, port, output_root=None, bind="127.0.0.1", tasks=None, slots=1, keep_days=None):
     jobs = Jobs(root, output_root, tasks, slots)
+    stop_cleanup = threading.Event()
+    if keep_days is not None:
+        jobs.cleanup_old_jobs(keep_days)
+
+        def cleanup_loop():
+            while not stop_cleanup.wait(CLEANUP_INTERVAL_SECONDS):
+                try:
+                    jobs.cleanup_old_jobs(keep_days)
+                except Exception:
+                    pass
+
+        threading.Thread(target=cleanup_loop, daemon=True).start()
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):
@@ -654,7 +722,12 @@ def create_server(root, token, port, output_root=None, bind="127.0.0.1", tasks=N
             # Old synchronous helpers must be upgraded with the bot.
             self.send_error(410, "async_download_required")
 
-    return ThreadingHTTPServer((bind_address(bind), port), Handler)
+    class WorkerServer(ThreadingHTTPServer):
+        def server_close(self):
+            stop_cleanup.set()
+            super().server_close()
+
+    return WorkerServer((bind_address(bind), port), Handler)
 
 
 if __name__ == "__main__":
@@ -668,6 +741,8 @@ if __name__ == "__main__":
     parser.add_argument("--bind", default="127.0.0.1",
                         help="127.0.0.1 (default), or this machine's Tailscale 100.x address "
                              "to serve a SmsBot running on another machine")
+    parser.add_argument("--keep-days", type=positive_days, default=None,
+                        help="delete terminal job folders older than N days (default: off)")
     args = parser.parse_args()
     try:
         bind_address(args.bind)
@@ -688,4 +763,4 @@ if __name__ == "__main__":
     tasks = load_tasks(Path(__file__).parent)
     print("Tasks: " + ", ".join(f"{n}@{t['version']}" for n, t in sorted(tasks.items())), flush=True)
     create_server(args.root.resolve(), worker_token, args.port, output_root=args.output_root,
-                  bind=args.bind, tasks=tasks, slots=args.slots).serve_forever()
+                  bind=args.bind, tasks=tasks, slots=args.slots, keep_days=args.keep_days).serve_forever()
