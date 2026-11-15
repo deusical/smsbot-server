@@ -459,6 +459,7 @@ func (o *options) serve(s *store.Store, v *vault.Vault, sessionPath string) erro
 		defer func() { _ = t.(*transport.Google).Close() }()
 	}
 	service := app.New(s, t, filepath.Join(filepath.Dir(s.Path), "archive"))
+	var local *bot.HTTPDownloader
 	if o.downloadEndpoint != "" && !o.fixture {
 		u, err := url.Parse(o.downloadEndpoint)
 		if err != nil || u.Scheme != "http" || u.User != nil || (u.Hostname() != "127.0.0.1" && u.Hostname() != "localhost" && u.Hostname() != "::1") {
@@ -468,14 +469,11 @@ func (o *options) serve(s *store.Store, v *vault.Vault, sessionPath string) erro
 		if err != nil || len(strings.TrimSpace(string(token))) < 32 {
 			return errors.New("download token file unavailable or invalid")
 		}
-		service.Engine.Downloader = &bot.HTTPDownloader{Endpoint: o.downloadEndpoint, Token: strings.TrimSpace(string(token))}
+		local = &bot.HTTPDownloader{Endpoint: o.downloadEndpoint, Token: strings.TrimSpace(string(token))}
 	}
 	// Workers and their routing: workers.json beside the database, edited on
 	// the dashboard. In fixture mode the page works but steps use the fixture.
-	tasks := &bot.Tasks{Path: filepath.Join(filepath.Dir(s.Path), "workers.json"), Store: s}
-	if d, ok := service.Engine.Downloader.(*bot.HTTPDownloader); ok {
-		tasks.Local = d
-	}
+	tasks := &bot.Tasks{Path: filepath.Join(filepath.Dir(s.Path), "workers.json"), Store: s, Local: local}
 	if _, err := tasks.Config(); err != nil {
 		return err
 	}
@@ -485,7 +483,7 @@ func (o *options) serve(s *store.Store, v *vault.Vault, sessionPath string) erro
 	}
 	if o.fixture {
 		// Offline: video steps complete with a synthetic file, no worker.
-		service.Engine.Downloader = &bot.FixtureDownloader{}
+		service.Engine.Tasks = &bot.FixtureDownloader{}
 		service.Accelerate(o.fixtureSpeed)
 	}
 	// Push services require a contact for the sending server: its origin.
@@ -523,7 +521,6 @@ func (o *options) serve(s *store.Store, v *vault.Vault, sessionPath string) erro
 			google.Diagnostic, google.RequestLog, google.SendLog = previous.Diagnostic, previous.RequestLog, previous.SendLog
 			t = google
 			next := app.New(s, t, filepath.Join(filepath.Dir(s.Path), "archive"))
-			next.Engine.Downloader = service.Engine.Downloader
 			next.Engine.Tasks = service.Engine.Tasks
 			next.Notify.Subject = origin
 			service = next
