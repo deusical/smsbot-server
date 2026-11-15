@@ -14,10 +14,27 @@ import (
 // command routing or outbound submission methods.
 type HistoryHost struct{ svc *Service }
 
+// policySettings returns the in-memory consent snapshot when initialized,
+// falling back to reading encrypted settings under the control lock.
+// Persisting paths such as Commit still read Settings under the control lock.
+func (svc *Service) policySettings() (Settings, error) {
+	if c := svc.consent.Load(); c != nil {
+		return c.settings, nil
+	}
+	svc.mu.Lock()
+	defer svc.mu.Unlock()
+	return svc.Settings()
+}
+
+func policyFor(s Settings, c transport.Conversation) (history.Policy, error) {
+	if !s.Allows(c) {
+		return history.Policy{}, errors.New("archive_access_disabled")
+	}
+	return history.Policy{Revision: s.Revision, Retention: s.ArchiveRetentionDays}, nil
+}
+
 func (h HistoryHost) Discover(ctx context.Context) ([]transport.Conversation, error) {
-	h.svc.mu.Lock()
-	settings, err := h.svc.Settings()
-	h.svc.mu.Unlock()
+	settings, err := h.svc.policySettings()
 	if err != nil || !settings.Enabled {
 		return nil, err
 	}
@@ -40,40 +57,40 @@ func (h HistoryHost) Discover(ctx context.Context) ([]transport.Conversation, er
 	} else {
 		list, err = h.svc.Transport.Conversations(ctx)
 	}
-	existing, archiveErr := h.svc.Store.Archives()
-	if archiveErr != nil {
-		return nil, archiveErr
-	}
-	seen := map[string]bool{}
-	for _, c := range list {
-		seen[c.ID] = true
-	}
-	for _, a := range existing {
-		if !seen[a.Conversation.ID] {
-			list = append(list, a.Conversation)
-		}
-	}
-
 	return list, err
 }
+
+func (h HistoryHost) PolicySnapshot() (func(transport.Conversation) (history.Policy, error), error) {
+	s, err := h.svc.policySettings()
+	if err != nil {
+		return nil, err
+	}
+	return func(c transport.Conversation) (history.Policy, error) {
+		return policyFor(s, c)
+	}, nil
+}
+
 func (h HistoryHost) Policy(c transport.Conversation) (history.Policy, error) {
-	h.svc.mu.Lock()
-	defer h.svc.mu.Unlock()
-	s, err := h.svc.Settings()
+	s, err := h.svc.policySettings()
 	if err != nil {
 		return history.Policy{}, err
 	}
-	if !s.Allows(c) {
-		return history.Policy{}, errors.New("archive_access_disabled")
-	}
-	return history.Policy{Revision: s.Revision, Retention: s.ArchiveRetentionDays}, nil
+	return policyFor(s, c)
 }
+
 func (h HistoryHost) Fetch(ctx context.Context, c transport.Conversation, cursor string) (transport.HistoryPage, error) {
+	if !h.svc.Transport.Ready() {
+		return transport.HistoryPage{}, transport.ErrUnavailable
+	}
 	source, ok := h.svc.Transport.(transport.HistorySource)
 	if !ok {
 		return transport.HistoryPage{}, errors.New("history_unavailable")
 	}
-	return source.FetchHistory(ctx, c.ID, c.ParticipantID, cursor)
+	page, err := source.FetchHistory(ctx, c.ID, c.ParticipantID, cursor)
+	if err != nil && !h.svc.Transport.Ready() {
+		return transport.HistoryPage{}, transport.ErrUnavailable
+	}
+	return page, err
 }
 
 // Commit publishes one history step. Consent and the step's checkpoint version
@@ -312,12 +329,12 @@ func (h HistoryHost) Prune(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	h.svc.mu.Lock()
-	defer h.svc.mu.Unlock()
-	settings, err := h.svc.Settings()
+	settings, err := h.svc.policySettings()
 	if err != nil {
 		return err
 	}
+	h.svc.mu.Lock()
+	defer h.svc.mu.Unlock()
 	return h.svc.Store.ArchiveRetention(settings.ArchiveRetentionDays)
 }
 

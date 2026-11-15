@@ -28,6 +28,11 @@ type (
 	CatchUpSource interface {
 		MissedSince(token uint64) (since time.Time, next uint64, missed bool)
 	}
+	// PolicySnapshotter snapshots collection policy once so a turn can check
+	// conversations locally without re-reading settings for each one.
+	PolicySnapshotter interface {
+		PolicySnapshot() (func(transport.Conversation) (Policy, error), error)
+	}
 )
 
 // missedActivity reports whether the phone lists activity in c at or after

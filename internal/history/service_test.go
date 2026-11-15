@@ -62,6 +62,7 @@ type retryHost struct {
 	s     *store.Store
 	calls []string
 	fail  map[string]bool
+	err   error
 }
 type repairRetryHost struct {
 	*retryHost
@@ -96,6 +97,9 @@ func (h *retryHost) Policy(transport.Conversation) (Policy, error) { return Poli
 func (h *retryHost) Fetch(_ context.Context, _ transport.Conversation, cursor string) (transport.HistoryPage, error) {
 	h.calls = append(h.calls, cursor)
 	if h.fail[cursor] {
+		if h.err != nil {
+			return transport.HistoryPage{}, h.err
+		}
 		return transport.HistoryPage{}, errors.New("synthetic unavailable")
 	}
 	return transport.HistoryPage{}, nil
@@ -112,7 +116,8 @@ func TestIndependentRecentAndBackfillRetries(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.DB.Close()
-	h := &retryHost{s: s, fail: map[string]bool{"": true, "old": true}}
+	// When the transport itself is unready, recentStep stops the turn before backfill.
+	h := &retryHost{s: s, fail: map[string]bool{"": true, "old": true}, err: transport.ErrUnavailable}
 	worker := New(s, h)
 	a := store.Archive{Conversation: transport.Conversation{ID: "chat", ParticipantID: "peer", Writable: true}, State: "running", Cursor: "old", Generation: 1}
 	if err = s.SaveArchive(a, 0); err != nil {
@@ -120,12 +125,13 @@ func TestIndependentRecentAndBackfillRetries(t *testing.T) {
 	}
 	worker.Tick(context.Background())
 	if len(h.calls) != 1 || h.calls[0] != "" {
-		t.Fatalf("recent failure immediately triggered backfill: %v", h.calls)
+		t.Fatalf("unready recent failure triggered backfill: %v", h.calls)
 	}
 	a, _ = s.Archive("chat")
 	if a.RecentFailures != 1 || a.Failures != 0 || a.RecentRetryAt == "" {
 		t.Fatalf("recent failure state: %+v", a)
 	}
+	h.err = nil
 	// While recent reconciliation is backed off, deep work can run independently.
 	worker.Tick(context.Background())
 	a, _ = s.Archive("chat")
@@ -285,5 +291,257 @@ func TestServiceIdleBackoffAndWake(t *testing.T) {
 	case <-runDone:
 	case <-time.After(2 * time.Second):
 		t.Fatal("worker.Run did not stop on context cancellation")
+	}
+}
+
+func TestIneligibleConversationEndsWithoutShortRetryOrActiveInterval(t *testing.T) {
+	t.Parallel()
+	v, _ := vault.New(make([]byte, 32))
+	s, err := store.Open(filepath.Join(t.TempDir(), "state.db"), v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.DB.Close()
+	now := time.Now().UTC()
+	h := &retryHost{s: s, fail: map[string]bool{"": true, "recent-mid": true, "import-mid": true, "view-mid": true}, err: transport.ErrIneligibleConversation}
+	worker := newService(s, h, func() time.Time { return now })
+	worker.nextDiscovery = now.Add(idleInterval)
+	worker.nextFallback = now
+
+	a := store.Archive{
+		Conversation: transport.Conversation{ID: "stale-chat", ParticipantID: "old-phone-peer", Writable: true},
+		Generation:   1,
+		ImportCheckpoint: store.ImportCheckpoint{
+			State: "running", Cursor: "import-mid", Failures: 2,
+		},
+		RecentCheckpoint: store.RecentCheckpoint{
+			RecentStarted:  now.Add(-time.Minute).Format(time.RFC3339Nano),
+			RecentCursor:   "recent-mid",
+			RecentFailures: 3,
+		},
+		ViewCheckpoint: store.ViewCheckpoint{
+			RefreshState:    "running",
+			RefreshCursor:   "view-mid",
+			RefreshSince:    now.Add(-time.Hour).Format(time.RFC3339Nano),
+			RefreshFailures: 2,
+			ViewGeneration:  1,
+		},
+	}
+	if err := s.SaveArchive(a, 0); err != nil {
+		t.Fatal(err)
+	}
+
+	worker.Tick(context.Background())
+	got, err := s.Archive("stale-chat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Conversation.ParticipantID != "old-phone-peer" {
+		t.Fatalf("stored participant changed to %q", got.Conversation.ParticipantID)
+	}
+	if got.RecentStarted != "" || got.RecentCursor != "" || got.RecentRetryAt != "" || got.RecentFailures != 0 || got.RecentError != "ineligible" {
+		t.Fatalf("recent checkpoint still scheduled retry: %+v", got.RecentCheckpoint)
+	}
+	if got.State != "ineligible" || got.Cursor != "" || got.RetryAt != "" || got.Failures != 0 || got.Error != "ineligible" {
+		t.Fatalf("import checkpoint still scheduled retry: %+v", got.ImportCheckpoint)
+	}
+	if got.RefreshState != "ineligible" || got.RefreshCursor != "" || got.RefreshRetryAt != "" || got.RefreshFailures != 0 || got.RefreshError != "ineligible" {
+		t.Fatalf("view checkpoint still scheduled retry: %+v", got.ViewCheckpoint)
+	}
+	if d := worker.nextInterval(); d != idleInterval {
+		t.Fatalf("ineligible conversation drove interval %v, want %v", d, idleInterval)
+	}
+
+	// Advancing past activeInterval and past the old 320s cap must not trigger any retry.
+	callsBefore := len(h.calls)
+	now = now.Add(activeInterval)
+	worker.Tick(context.Background())
+	now = now.Add(6 * time.Minute)
+	worker.Tick(context.Background())
+	if len(h.calls) != callsBefore {
+		t.Fatalf("ineligible conversation retried before slow fallback sweep: %v", h.calls[callsBefore:])
+	}
+
+	// Only the slow 15-minute fallback rotation rechecks recent once.
+	now = worker.nextFallback
+	worker.nextDiscovery = now.Add(idleInterval)
+	worker.Tick(context.Background())
+	if len(h.calls) != callsBefore+1 || h.calls[len(h.calls)-1] != "" {
+		t.Fatalf("expected one fallback check on idle cadence, got %v", h.calls[callsBefore:])
+	}
+}
+
+func TestRealFetchFailureBacksOffBeyond320SecondsToDailyCap(t *testing.T) {
+	t.Parallel()
+	v, _ := vault.New(make([]byte, 32))
+	s, err := store.Open(filepath.Join(t.TempDir(), "state.db"), v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.DB.Close()
+	now := time.Now().UTC()
+	h := &retryHost{s: s, fail: map[string]bool{"": true}, err: transport.ErrLookupFailed}
+	worker := newService(s, h, func() time.Time { return now })
+	worker.nextDiscovery = now.Add(48 * time.Hour)
+	worker.nextFallback = now
+
+	a := store.Archive{
+		Conversation: transport.Conversation{ID: "chat", ParticipantID: "peer", Writable: true},
+		State:        "available_pages_exhausted",
+		Generation:   1,
+	}
+	if err := s.SaveArchive(a, 0); err != nil {
+		t.Fatal(err)
+	}
+
+	var prevDelay time.Duration
+	for attempt := 1; attempt <= 16; attempt++ {
+		worker.nextDiscovery = now.Add(48 * time.Hour)
+		worker.Tick(context.Background())
+		got, err := s.Archive("chat")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.RecentFailures != attempt {
+			t.Fatalf("attempt %d: RecentFailures=%d", attempt, got.RecentFailures)
+		}
+		retryAt := parseTime(got.RecentRetryAt)
+		delay := retryAt.Sub(now)
+		if attempt == 7 && delay <= 320*time.Second {
+			t.Fatalf("attempt 7 delay %v was still capped at 320s", delay)
+		}
+		if delay < prevDelay {
+			t.Fatalf("attempt %d delay %v shrank from %v", attempt, delay, prevDelay)
+		}
+		if delay > 24*time.Hour {
+			t.Fatalf("attempt %d delay %v exceeded 24h cap", attempt, delay)
+		}
+		prevDelay = delay
+		now = retryAt
+	}
+	if prevDelay < 23*time.Hour {
+		t.Fatalf("sustained failures only reached %v backoff, want ~24h", prevDelay)
+	}
+}
+
+type perConversationFailHost struct {
+	*retryHost
+	recentErr error
+}
+
+func (h *perConversationFailHost) Fetch(_ context.Context, c transport.Conversation, cursor string) (transport.HistoryPage, error) {
+	h.calls = append(h.calls, c.ID+":"+cursor)
+	if c.ID == "a-recent" {
+		return transport.HistoryPage{}, h.recentErr
+	}
+	return transport.HistoryPage{NextCursor: "older-2"}, nil
+}
+
+func TestRecentFailureDoesNotStarveImportWork(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"lookup_failure", transport.ErrLookupFailed},
+		{"ineligible", transport.ErrIneligibleConversation},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			v, _ := vault.New(make([]byte, 32))
+			s, err := store.Open(filepath.Join(t.TempDir(), "state.db"), v)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.DB.Close()
+			now := time.Now().UTC()
+			h := &perConversationFailHost{retryHost: &retryHost{s: s}, recentErr: tc.err}
+			worker := newService(s, h, func() time.Time { return now })
+			worker.nextDiscovery = now.Add(idleInterval)
+			worker.nextFallback = now
+
+			for _, a := range []store.Archive{
+				{Conversation: transport.Conversation{ID: "a-recent", ParticipantID: "peer-a", Writable: true}, State: "available_pages_exhausted", Generation: 1},
+				{Conversation: transport.Conversation{ID: "b-import", ParticipantID: "peer-b", Writable: true}, State: "running", Cursor: "older-1", RecentRetryAt: now.Add(time.Hour).Format(time.RFC3339Nano), Generation: 1},
+			} {
+				if err := s.SaveArchive(a, 0); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			worker.Tick(context.Background())
+			b, err := s.Archive("b-import")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(h.calls) != 2 || b.Pages != 1 || b.Cursor != "older-2" {
+				t.Fatalf("recent error (%v) starved background import: calls=%v archive=%+v", tc.err, h.calls, b.ImportCheckpoint)
+			}
+		})
+	}
+}
+
+type countingPolicyHost struct {
+	*retryHost
+	snapshots int
+	policies  int
+	deny      string
+}
+
+func (h *countingPolicyHost) PolicySnapshot() (func(transport.Conversation) (Policy, error), error) {
+	h.snapshots++
+	return func(c transport.Conversation) (Policy, error) {
+		if c.ID == h.deny {
+			return Policy{}, errors.New("archive_access_disabled")
+		}
+		return Policy{Revision: 1}, nil
+	}, nil
+}
+
+func (h *countingPolicyHost) Policy(c transport.Conversation) (Policy, error) {
+	h.policies++
+	if c.ID == h.deny {
+		return Policy{}, errors.New("archive_access_disabled")
+	}
+	return Policy{Revision: 1}, nil
+}
+
+func TestSettingsReadOncePerTick(t *testing.T) {
+	t.Parallel()
+	v, _ := vault.New(make([]byte, 32))
+	s, err := store.Open(filepath.Join(t.TempDir(), "state.db"), v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.DB.Close()
+	now := time.Now().UTC()
+	h := &countingPolicyHost{retryHost: &retryHost{s: s, fail: map[string]bool{}}, deny: "chat-denied"}
+	worker := newService(s, h, func() time.Time { return now })
+
+	for _, a := range []store.Archive{
+		{Conversation: transport.Conversation{ID: "chat-denied", ParticipantID: "p0", Writable: true}, State: "queued", Generation: 1},
+		{Conversation: transport.Conversation{ID: "chat-view", ParticipantID: "p1", Writable: true}, State: "available_pages_exhausted", Generation: 1, FocusAt: now.Format(time.RFC3339Nano), ViewCheckpoint: store.ViewCheckpoint{RefreshState: "queued", RefreshSince: now.Add(-time.Hour).Format(time.RFC3339Nano), ViewGeneration: 1}},
+		{Conversation: transport.Conversation{ID: "chat-owner", ParticipantID: "p2", Writable: true}, State: "queued", RequestSource: "owner", RequestedAt: now.Format(time.RFC3339Nano), Generation: 1},
+		{Conversation: transport.Conversation{ID: "chat-bg", ParticipantID: "p3", Writable: true}, State: "running", Cursor: "older", Generation: 1},
+		{Conversation: transport.Conversation{ID: "chat-idle-1", ParticipantID: "p4", Writable: true}, State: "available_pages_exhausted", Generation: 1},
+		{Conversation: transport.Conversation{ID: "chat-idle-2", ParticipantID: "p5", Writable: true}, State: "available_pages_exhausted", Generation: 1},
+	} {
+		if err := s.SaveArchive(a, 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// First turn includes Discovery, ViewWork, owner ImportWork, RecentWork,
+	// background ImportWork and nextInterval scheduling: still one settings read.
+	_ = worker.tick(context.Background(), true)
+	if h.snapshots != 1 || h.policies != 0 {
+		t.Fatalf("turn with discovery read settings %d times (per-conversation Policy %d), want 1 and 0", h.snapshots, h.policies)
+	}
+
+	// Subsequent active turn without Discovery also reads settings once.
+	h.snapshots = 0
+	worker.Tick(context.Background())
+	if h.snapshots != 1 || h.policies != 0 {
+		t.Fatalf("active tick read settings %d times (per-conversation Policy %d), want 1 and 0", h.snapshots, h.policies)
 	}
 }

@@ -103,6 +103,7 @@ type Transport interface {
 
 var ErrUnavailable = errors.New("phone connection unavailable")
 var ErrLookupFailed = errors.New("conversation lookup failed")
+var ErrIneligibleConversation = errors.New("ineligible_conversation")
 
 var ErrUnknown = errors.New("submission outcome unknown")
 var ErrNotSubmitted = errors.New("transport did not submit")

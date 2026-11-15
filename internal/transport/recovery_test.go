@@ -233,3 +233,76 @@ func TestNewTransientEventCannotHideProbeStorageFailure(t *testing.T) {
 		t.Fatal("stale probe hid session persistence failure")
 	}
 }
+
+func TestReconnectGraceIgnoresBriefBlipAndReportsSustainedDisconnect(t *testing.T) {
+	t.Parallel()
+	t.Run("brief_rollover_blip", func(t *testing.T) {
+		t.Parallel()
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		g := NewGoogle(nil, "")
+		g.ready.Store(true)
+		g.recoveryInterval = 5 * time.Millisecond
+		// Two separate blips of (disconnectGraceTicks - 1) consecutive !IsConnected
+		// checks separated by a connected check must reset the counter and never fail.
+		var checks atomic.Int32
+		g.connected = func() bool {
+			n := int(checks.Add(1))
+			switch {
+			case n <= disconnectGraceTicks-1:
+				return false
+			case n == disconnectGraceTicks:
+				return true
+			case n <= 2*disconnectGraceTicks-1:
+				return false
+			default:
+				cancel()
+				return true
+			}
+		}
+		var diagnostics []AuthDiagnostic
+		g.Diagnostic = func(d AuthDiagnostic) { diagnostics = append(diagnostics, d) }
+		interruptions, pauses := 0, 0
+		g.Run(ctx, func(Incoming) {}, func() { pauses++ }, func(string, string, string, string) {}, func() error { interruptions++; return nil })
+		if g.healthFailure.Load() || !g.ready.Load() || interruptions != 0 || pauses != 0 || len(diagnostics) != 0 {
+			t.Fatalf("brief stream rollover triggered failure: healthFailure=%v ready=%v interruptions=%d pauses=%d diagnostics=%+v",
+				g.healthFailure.Load(), g.ready.Load(), interruptions, pauses, diagnostics)
+		}
+	})
+
+	t.Run("sustained_disconnect", func(t *testing.T) {
+		t.Parallel()
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		g := NewGoogle(nil, "")
+		g.ready.Store(true)
+		g.recoveryInterval = 5 * time.Millisecond
+		var checks atomic.Int32
+		g.connected = func() bool {
+			checks.Add(1)
+			return false
+		}
+		var emitted AuthDiagnostic
+		interruptions, pauses := 0, 0
+		g.Diagnostic = func(d AuthDiagnostic) {
+			if d.Event == "stream_disconnected" {
+				emitted = d
+				cancel()
+			}
+		}
+		g.Run(ctx, func(Incoming) {}, func() { pauses++ }, func(string, string, string, string) {}, func() error { interruptions++; return nil })
+		if int(checks.Load()) < disconnectGraceTicks {
+			t.Fatalf("failed after %d checks, want at least %d", checks.Load(), disconnectGraceTicks)
+		}
+		if !g.healthFailure.Load() || g.ready.Load() || g.ConnectionStatus().State != "reconnecting" {
+			t.Fatalf("sustained disconnect did not enter reconnecting state: healthFailure=%v ready=%v status=%+v",
+				g.healthFailure.Load(), g.ready.Load(), g.ConnectionStatus())
+		}
+		if interruptions != 1 || pauses != 0 {
+			t.Fatalf("unexpected interruption handling: interruptions=%d pauses=%d", interruptions, pauses)
+		}
+		if emitted.Event != "stream_disconnected" || emitted.Success || emitted.HTTPStatus != 0 || emitted.Category != 0 {
+			t.Fatalf("unexpected diagnostic: %+v", emitted)
+		}
+	})
+}

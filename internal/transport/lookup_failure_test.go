@@ -89,3 +89,62 @@ func TestLookupErrorsDistinguishUnreadyTransportFromFailedRead(t *testing.T) {
 		t.Fatalf("unready lookup returned %v, want ErrUnavailable", err)
 	}
 }
+
+func TestFetchHistoryDistinguishesIneligibleConversationFromLookupFailure(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	unready := NewGoogle(nil, "")
+	if _, err := unready.FetchHistory(ctx, "c1", "peer", ""); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("unready FetchHistory returned %v, want ErrUnavailable", err)
+	}
+
+	g := NewGoogle(nil, "")
+	g.ready.Store(true)
+	g.connected = func() bool { return true }
+	noMessages := func(context.Context, string, int64, *gmproto.Cursor) (*gmproto.ListMessagesResponse, error) {
+		return &gmproto.ListMessagesResponse{}, nil
+	}
+
+	// Lookup error (network/phone timeout while transport is otherwise up) must
+	// return ErrLookupFailed and never ErrIneligibleConversation.
+	_, err := g.fetchHistory(ctx, "c1", "peer", "", func(context.Context, string) (*gmproto.Conversation, error) {
+		return nil, errors.New("phone rpc timeout")
+	}, noMessages)
+	if !errors.Is(err, ErrLookupFailed) || errors.Is(err, ErrIneligibleConversation) || errors.Is(err, ErrUnavailable) {
+		t.Fatalf("lookup error returned %v, want ErrLookupFailed", err)
+	}
+
+	// Phone answered, but conversation is deleted/empty, read-only, has no sending SIM,
+	// or belongs to a different participant: all return ErrIneligibleConversation.
+	readOnly := individual("c1")
+	readOnly.ReadOnly = true
+	noSIM := individual("c1")
+	noSIM.DefaultOutgoingID = ""
+	wrongPeer := individual("c1")
+	wrongPeer.Participants[0].ID.ParticipantID = "other-peer"
+	for _, tc := range []struct {
+		name string
+		conv *gmproto.Conversation
+	}{
+		{"deleted", nil},
+		{"read_only", readOnly},
+		{"no_sim", noSIM},
+		{"peer_mismatch", wrongPeer},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := g.fetchHistory(ctx, "c1", "peer", "", func(context.Context, string) (*gmproto.Conversation, error) {
+				return tc.conv, nil
+			}, noMessages)
+			if !errors.Is(err, ErrIneligibleConversation) {
+				t.Fatalf("%s returned %v, want ErrIneligibleConversation", tc.name, err)
+			}
+		})
+	}
+
+	// Eligible conversation succeeds.
+	if _, err := g.fetchHistory(ctx, "c1", "peer", "", func(context.Context, string) (*gmproto.Conversation, error) {
+		return individual("c1"), nil
+	}, noMessages); err != nil {
+		t.Fatalf("eligible conversation failed: %v", err)
+	}
+}
