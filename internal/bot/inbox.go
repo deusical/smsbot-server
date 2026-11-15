@@ -164,7 +164,7 @@ func (e *Engine) ComposeInboxTo(ctx context.Context, conv, roster, text, request
 		}
 		wireTarget = v.UpstreamID
 	}
-	_, err = e.Store.Enqueue(id, conv, "manual", store.Plan{ReplyTarget: replyTarget, ReplyWireTarget: wireTarget, Participant: c.ParticipantID, Roster: c.Roster, Reply: text, MaxChars: cfg.Settings.MaxChars, Manual: true, InboxOwnerOnly: true, Attachments: files})
+	_, err = e.Store.Enqueue(id, conv, "manual", store.Plan{ReplyTarget: replyTarget, ReplyWireTarget: wireTarget, Participant: c.ParticipantID, Roster: c.Roster, OutgoingID: c.OutgoingID, Reply: text, MaxChars: cfg.Settings.MaxChars, Manual: true, InboxOwnerOnly: true, Attachments: files})
 	return id, err
 }
 

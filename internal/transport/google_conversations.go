@@ -125,6 +125,7 @@ func conversationLabel(c *gmproto.Conversation) string {
 func listConversation(c *gmproto.Conversation) Conversation {
 	label := conversationLabel(c)
 	return withListState(Conversation{
+		OutgoingID:    c.GetDefaultOutgoingID(),
 		ID:            c.GetConversationID(),
 		ParticipantID: listedIdentity(c),
 		Members:       groupMembers(c),
@@ -151,7 +152,10 @@ func (g *Google) LookupConversation(ctx context.Context, id string) (Conversatio
 			}
 			g.diagnose("conversation_lookup", err)
 		}
-		return Conversation{}, ErrUnavailable
+		if !g.Ready() {
+			return Conversation{}, ErrUnavailable
+		}
+		return Conversation{}, ErrLookupFailed
 	}
 	if c.GetConversationID() != id {
 		return Conversation{}, errors.New("ineligible_conversation")
@@ -177,7 +181,7 @@ func (g *Google) CachedConversation(id string) (Conversation, bool) {
 
 func detailConversation(id string, c *gmproto.Conversation) Conversation {
 	label := conversationLabel(c)
-	return withListState(Conversation{ID: id, ParticipantID: listedIdentity(c), Members: groupMembers(c), Roster: roster(c), Label: label, Protocol: c.GetType().String(), Group: c.GetIsGroupChat(), Writable: readable(c)}, c)
+	return withListState(Conversation{OutgoingID: c.GetDefaultOutgoingID(), ID: id, ParticipantID: listedIdentity(c), Members: groupMembers(c), Roster: roster(c), Label: label, Protocol: c.GetType().String(), Group: c.GetIsGroupChat(), Writable: readable(c)}, c)
 }
 
 func (g *Google) Conversations(ctx context.Context) ([]Conversation, error) {

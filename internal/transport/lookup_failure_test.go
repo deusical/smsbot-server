@@ -78,3 +78,14 @@ func TestLookupFailureOnlyDropsThePhoneWhenTheConnectionIsAtFault(t *testing.T) 
 		})
 	}
 }
+
+func TestLookupErrorsDistinguishUnreadyTransportFromFailedRead(t *testing.T) {
+	t.Parallel()
+	if errors.Is(ErrLookupFailed, ErrUnavailable) || errors.Is(ErrUnavailable, ErrLookupFailed) {
+		t.Fatal("lookup failure while ready must not match ErrUnavailable")
+	}
+	g := NewGoogle(nil, "")
+	if _, err := g.LookupConversation(context.Background(), "c1"); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("unready lookup returned %v, want ErrUnavailable", err)
+	}
+}

@@ -139,6 +139,9 @@ func (a *Service) Start(ctx context.Context, events EventSource, dispatchFailed 
 	}
 	w.start(func() {
 		e.Run(ctx, func(err error) {
+			if errors.Is(err, transport.ErrLookupFailed) {
+				return
+			}
 			// A lost connection cancels unsent work without changing Live/Pause;
 			// any other dispatch failure pauses automation for the owner.
 			if errors.Is(err, transport.ErrUnavailable) && e.ConnectionInterrupted() == nil {
@@ -158,7 +161,7 @@ func (a *Service) Start(ctx context.Context, events EventSource, dispatchFailed 
 func (a *Service) ingest(ctx context.Context) func(transport.Incoming) {
 	e := a.Engine
 	return func(m transport.Incoming) {
-		if _, err := e.Ingest(ctx, m); err != nil {
+		if _, err := e.Ingest(ctx, m); err != nil && !errors.Is(err, transport.ErrLookupFailed) {
 			if !errors.Is(err, transport.ErrUnavailable) || e.ConnectionInterrupted() != nil {
 				_ = e.Pause(true)
 			}

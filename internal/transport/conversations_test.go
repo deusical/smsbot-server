@@ -1,6 +1,10 @@
 package transport
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
+	"strings"
 	"testing"
 
 	"go.mau.fi/mautrix-gmessages/pkg/libgm/gmproto"
@@ -54,5 +58,85 @@ func TestConversationEventKeepsSendBaselineOnIdentityChange(t *testing.T) {
 	renamed.Name = "Synthetic new label"
 	if g.rememberConversationEvent(renamed) || g.conversations["changed"] != renamed {
 		t.Fatal("ordinary update not applied")
+	}
+}
+
+func TestOutgoingIdentitySnapshottedWithoutJSONExposure(t *testing.T) {
+	t.Parallel()
+	c := individual("chat-1")
+	c.DefaultOutgoingID = "synthetic-secret-sim-1"
+	listed := listConversation(c)
+	detail := detailConversation("chat-1", c)
+	if listed.OutgoingID != "synthetic-secret-sim-1" || detail.OutgoingID != "synthetic-secret-sim-1" {
+		t.Fatalf("outgoing identity not projected: %q %q", listed.OutgoingID, detail.OutgoingID)
+	}
+	b, err := json.Marshal(listed)
+	if err != nil || strings.Contains(string(b), "synthetic-secret-sim-1") || strings.Contains(string(b), "outgoing") {
+		t.Fatalf("outgoing identity leaked in JSON: %s %v", string(b), err)
+	}
+}
+
+func TestVerifySendTargetChecksAcceptedOutgoingIdentityAndLegacyBaseline(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	g := NewGoogle(nil, "")
+	initial := individual("chat-1")
+	initial.DefaultOutgoingID = "synthetic-sim-1"
+	g.cacheDetail(initial)
+	accepted := detailConversation("chat-1", initial)
+
+	// Simulate Engine.check running LookupConversation right before send after
+	// the phone switched the conversation's sending SIM: cacheDetail overwrites
+	// g.conversations["chat-1"], yet the snapshot from acceptance still refuses.
+	switched := proto.Clone(initial).(*gmproto.Conversation)
+	switched.DefaultOutgoingID = "synthetic-sim-2"
+	g.cacheDetail(switched)
+
+	if got := verifySendTarget(WithOutgoingID(ctx, accepted.OutgoingID), switched, g.conversations["chat-1"]); got != "outgoing_identity_changed" {
+		t.Fatalf("switched outgoing identity allowed: %q", got)
+	}
+	if got := verifySendTarget(WithOutgoingID(ctx, accepted.OutgoingID), initial, initial); got != "" {
+		t.Fatalf("unchanged outgoing identity refused: %q", got)
+	}
+
+	// Plans accepted before snapshots existed have OutgoingID == "" and keep
+	// comparing against the cached baseline.
+	legacyCtx := WithOutgoingID(ctx, "")
+	if got := verifySendTarget(legacyCtx, switched, switched); got != "" {
+		t.Fatalf("legacy plan refused when baseline matched: %q", got)
+	}
+	if got := verifySendTarget(legacyCtx, switched, initial); got != "outgoing_identity_changed" {
+		t.Fatalf("legacy plan missed baseline mismatch: %q", got)
+	}
+
+	// Participant and group roster checks remain enforced even when OutgoingID matches.
+	otherPeer := proto.Clone(initial).(*gmproto.Conversation)
+	otherPeer.Participants[0].ID.ParticipantID = "other-peer"
+	if got := verifySendTarget(WithOutgoingID(ctx, accepted.OutgoingID), otherPeer, initial); got != "participant_changed" {
+		t.Fatalf("participant check changed: %q", got)
+	}
+	grp := group("g1", "a", "b")
+	movedGrp := group("g1", "a", "b", "c")
+	if got := verifySendTarget(WithOutgoingID(WithRoster(ctx, roster(movedGrp)), "self"), movedGrp, grp); got != "roster_changed" {
+		t.Fatalf("roster baseline check changed: %q", got)
+	}
+	if got := verifySendTarget(WithOutgoingID(WithRoster(ctx, roster(grp)), "self"), movedGrp, movedGrp); got != "roster_mismatch" {
+		t.Fatalf("expected roster check changed: %q", got)
+	}
+
+	// Offline Fixture mirrors the snapshot refusal and legacy fallback.
+	f := NewFixture()
+	convs, err := f.Conversations(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap := convs[0].OutgoingID
+	f.SetOutgoingID("synthetic-sim-2")
+	_, err = f.Send(WithOutgoingID(ctx, snap), "demo-chat", "txn-refused", "hello")
+	if !errors.Is(err, ErrNotSubmitted) || RefusalReason(err) != "outgoing_identity_changed" {
+		t.Fatalf("fixture send did not refuse changed outgoing identity: %v (%q)", err, RefusalReason(err))
+	}
+	if _, err := f.Send(WithOutgoingID(ctx, ""), "demo-chat", "txn-legacy", "hello"); err != nil {
+		t.Fatalf("fixture rejected legacy plan without snapshot: %v", err)
 	}
 }
