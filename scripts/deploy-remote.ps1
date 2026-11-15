@@ -31,7 +31,13 @@ Step "Building the dashboard and a stripped linux/amd64 binary ($stamp)"
 Push-Location (Join-Path $SourceDir 'web')
 try {
     if (-not (Test-Path node_modules)) { & npm.cmd ci; Check 'npm ci' }
-    & npm.cmd run build; Check 'web build'
+    # Vite prints warnings, such as a slow-build note, on stderr. Windows
+    # PowerShell turns any native stderr into an error under 'Stop', so judge
+    # the build by its exit code instead.
+    $ErrorActionPreference = 'Continue'
+    & npm.cmd run build 2>&1 | Out-Host
+    $ErrorActionPreference = 'Stop'
+    Check 'web build'
 } finally { Pop-Location }
 Push-Location $SourceDir
 $previousEnv = @{GOOS = $env:GOOS; GOARCH = $env:GOARCH; CGO_ENABLED = $env:CGO_ENABLED}
