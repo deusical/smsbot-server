@@ -148,7 +148,9 @@ never retried. On SMS, send a new `!ask` with everything in it.
 ## Activity
 
 Every request, filterable by state and searchable. A request in progress shows the
-step it's on (for example "Writing reply · Compress video / compressing"). Expand a
+step it's on (for example "Working · Compress video / compressing"; "Queued" means
+it is still waiting to start). The Reply step is ticked only once the reply has
+actually been sent. Expand a
 row to see each step, done or not, with each AI step's model, tokens and cost, the
 request's totals, and approve or cancel from here.
 
@@ -156,6 +158,10 @@ When a send fails because SmsBot refused it before anything reached your phone, 
 expanded row says why in words, for example that the phone has no SIM chosen for the
 conversation or that the people in a group changed. The same words appear under the
 message in the conversation. Nothing is retried for you.
+
+When a download or compression fails on a worker, the row says why in words, for
+example that the link is a photo gallery rather than one video, or that the video
+is too long to fit.
 
 ## Archive
 
@@ -183,10 +189,17 @@ commands.
 | Messages & privacy | Which conversations are archived, read receipts, attachment limits, retention, AI memory window |
 | Notifications | Per-device notifications |
 | Devices | Phone connection, the phone's SIMs (carrier and last four digits only), **Replace phone**, **Sign out everywhere** |
+| Workers | Machines that download and compress videos, whether each is online, and which worker runs which task |
 | Import & export | Share commands, profiles and settings as a file (never keys) |
 
 Changes collect in a save bar; **Save changes** (or Ctrl/Cmd+S) applies them and
 **Discard** undoes them. Imported settings arrive with every command disabled.
+
+Settings and Commands pages you've already opened show what they last loaded straight away and update in
+the background. A line at the top says when they were last updated, with a
+**Refresh** button; if an update fails, the page keeps showing what it had and says
+so. A page that is slow to load says so after a few seconds and keeps trying, and a
+failed load offers **Try again**.
 
 ### Replace phone
 
