@@ -89,6 +89,7 @@ function stepsKey(c: Command): string {
     c.model,
     c.profile_id,
     c.memory,
+    c.tools,
     c.generation,
     c.settings,
     c.execution_minutes,
@@ -340,12 +341,28 @@ export function CommandsPage({
                 )}
                 onChange={(values) => change(index, values)}
                 onBack={() => setMobileDetail(false)}
-                onDuplicate={() =>
+                onDuplicate={() => {
+                  const copy = structuredClone(command);
+                  const resolved = stepsOf(command);
                   addCommand({
-                    ...structuredClone(command),
+                    ...copy,
                     name: uniqueName((command.name || "command") + "_copy"),
-                  })
-                }
+                    ...(resolved
+                      ? {
+                          kind: "pipeline",
+                          type: "fixed",
+                          settings: undefined,
+                          instructions: "",
+                          model: "",
+                          profile_id: "",
+                          tools: undefined,
+                          generation: undefined,
+                          execution_minutes: resolved.execution_minutes,
+                          pipeline: structuredClone(resolved),
+                        }
+                      : {}),
+                  });
+                }}
                 onDelete={() => {
                   edit((c) => ({
                     ...c,
@@ -424,6 +441,7 @@ function CommandEditor({
       instructions: "",
       model: "",
       profile_id: "",
+      tools: undefined,
       generation: undefined,
       execution_minutes: pipeline.execution_minutes,
       pipeline,
@@ -485,7 +503,8 @@ function CommandEditor({
       </div>
       <Field label="Description">
         <input
-          placeholder="What it does, shown in !help"
+          maxLength={200}
+          placeholder="Optional — helps AI know when to use it"
           value={command.description}
           onChange={(e) => onChange({ description: e.target.value })}
         />
@@ -503,6 +522,7 @@ function CommandEditor({
             pipeline={steps}
             modules={modules}
             workspace={workspace}
+            commandName={command.name}
             onChange={setSteps}
           />
         ) : (
@@ -556,7 +576,11 @@ function CommandEditor({
           )}
         </div>
       </div>
-      <TryIt command={command} saved={!!savedCommand} unsaved={unsaved} />
+      <TryIt
+        command={command}
+        saved={!!savedCommand}
+        unsaved={unsaved || workspace.configDirty}
+      />
     </div>
   );
 }

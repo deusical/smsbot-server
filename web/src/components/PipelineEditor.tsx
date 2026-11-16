@@ -29,11 +29,13 @@ export function PipelineEditor({
   pipeline,
   modules,
   workspace,
+  commandName,
   onChange,
 }: {
   pipeline: Pipeline;
   modules: CommandModule[];
   workspace: Workspace;
+  commandName?: string;
   onChange: (pipeline: Pipeline) => void;
 }) {
   const issues = problems(pipeline, modules);
@@ -161,14 +163,16 @@ export function PipelineEditor({
           const stepIssues = issues[step.id] ?? [];
           const expanded = open.has(step.id) || stepIssues.length > 0;
           // What feeds this step, e.g. "from link · Link".
-          const summary = (module?.inputs ?? [])
+          const inputsSummary = (module?.inputs ?? [])
             .map((port) => step.inputs?.[port.name])
             .filter((b): b is string => !!b)
             .map(
               (b) =>
                 "from " + (available.find((s) => s.value === b)?.label ?? b),
-            )
-            .join(", ");
+            );
+          if (step.module === "ai.chat" && step.settings?.tools)
+            inputsSummary.unshift("tools on");
+          const summary = inputsSummary.join(", ");
           return (
             <li
               key={i}
@@ -339,12 +343,13 @@ export function PipelineEditor({
                         schema={module.settings}
                         values={step.settings ?? {}}
                         workspace={workspace}
-                        onChange={(key, value) =>
-                          update(i, {
-                            ...step,
-                            settings: { ...step.settings, [key]: value },
-                          })
-                        }
+                        excludeCommand={commandName}
+                        onChange={(key, value) => {
+                          const next = { ...step.settings };
+                          if (value === undefined) delete next[key];
+                          else next[key] = value;
+                          update(i, { ...step, settings: next });
+                        }}
                       />
                     </>
                   )}

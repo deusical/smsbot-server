@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"unicode/utf8"
 
 	"github.com/deusical/smsbot-server/internal/bot"
 )
@@ -204,7 +205,7 @@ func (s *Server) playground(w http.ResponseWriter, r *http.Request) {
 	if !s.decode(w, r, &in) {
 		return
 	}
-	if len(in.Input) > 12000 {
+	if len(in.Input) > 4*12000 || utf8.RuneCountInString(in.Input) > 12000 {
 		s.bad(w, 400, "input_too_long")
 		return
 	}

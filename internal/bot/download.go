@@ -70,12 +70,21 @@ func downloadURL(input string) string {
 // step's output and calls finishWorkerStep. Otherwise dispatch ends here:
 // the job was deferred until its next poll, or completed as failed.
 func (e *Engine) pollWorker(ctx context.Context, j store.Job, p *store.Plan, poll func(ctx context.Context, deadline time.Time) (string, error)) (complete bool, err error) {
+	complete, _, err = e.pollWorkerStep(ctx, j, p, false, poll)
+	return complete, err
+}
+
+func (e *Engine) pollWorkerStep(ctx context.Context, j store.Job, p *store.Plan, subTool bool, poll func(ctx context.Context, deadline time.Time) (string, error)) (complete bool, failCode string, err error) {
 	if e.Tasks == nil {
-		return false, e.Store.Complete(j.ID, "failed", "download_worker_unavailable")
+		if subTool {
+			_ = e.Store.DeferWork(j.ID, "", 0)
+			return false, "download_worker_unavailable", nil
+		}
+		return false, "", e.Store.Complete(j.ID, "failed", "download_worker_unavailable")
 	}
 	ok, err := e.Store.Transition(j.ID, "queued", "generating")
 	if err != nil || !ok {
-		return false, err
+		return false, "", err
 	}
 	deadline, parseerr := time.Parse(time.RFC3339Nano, p.ExecutionDeadline)
 	if parseerr != nil {
@@ -93,17 +102,17 @@ func (e *Engine) pollWorker(ctx context.Context, j store.Job, p *store.Plan, pol
 	delete(e.pending, j.ID)
 	current, loaderr := e.Store.Job(j.ID)
 	if current.State != "" && current.State != "generating" {
-		return false, nil
+		return false, "", nil
 	}
 	if loaderr != nil {
-		return false, loaderr
+		return false, "", loaderr
 	}
 	if workerr == nil && stage != "complete" {
 		if err := e.Store.DeferWork(j.ID, stage, time.Now().Add(e.workerPollDelay()).UnixMilli()); err != nil {
-			return false, err
+			return false, "", err
 		}
 		_, err := e.Store.Transition(j.ID, "generating", "queued")
-		return false, err
+		return false, "", err
 	}
 	if workerr != nil {
 		code := "download_failed"
@@ -111,9 +120,14 @@ func (e *Engine) pollWorker(ctx context.Context, j store.Job, p *store.Plan, pol
 		if errors.As(workerr, &failed) {
 			code = failed.code
 		}
-		return false, e.Store.Complete(j.ID, "failed", code)
+		if subTool {
+			_ = e.Store.DeferWork(j.ID, "", 0)
+			_, err := e.Store.Transition(j.ID, "generating", "queued")
+			return false, code, err
+		}
+		return false, "", e.Store.Complete(j.ID, "failed", code)
 	}
-	return true, nil
+	return true, "", nil
 }
 
 // finishWorkerStep saves the step's output and returns the job to the queue.
@@ -131,33 +145,52 @@ func (e *Engine) finishWorkerStep(j store.Job, p *store.Plan) (bool, error) {
 // sendableVideo turns the worker's verified MP4 into the reply's attachment,
 // after the job passes every check again.
 func (e *Engine) sendableVideo(ctx context.Context, j store.Job, p *store.Plan, data []byte, limit int64) (*media.File, bool, error) {
+	file, _, done, err := e.sendableVideoStep(ctx, j, p, false, data, limit)
+	return file, done, err
+}
+
+func (e *Engine) sendableVideoStep(ctx context.Context, j store.Job, p *store.Plan, subTool bool, data []byte, limit int64) (*media.File, string, bool, error) {
 	settings, err := e.Collection.Settings()
 	if err != nil {
-		return nil, true, err
+		return nil, "", true, err
+	}
+	subFail := func(code string) (*media.File, string, bool, error) {
+		_ = e.Store.DeferWork(j.ID, "", 0)
+		_, terr := e.Store.Transition(j.ID, "generating", "queued")
+		return nil, code, false, terr
 	}
 	if len(data) == 0 || int64(len(data)) > limit {
-		return nil, true, e.Store.Complete(j.ID, "failed", "download_failed")
+		if subTool {
+			return subFail("download_failed")
+		}
+		return nil, "", true, e.Store.Complete(j.ID, "failed", "download_failed")
 	}
 	files, err := media.PrepareWithLimits([]media.Upload{{Name: "video.mp4", MIME: "video/mp4", Data: data}}, settings.FileLimits())
 	if err != nil || len(files) != 1 {
-		return nil, true, e.Store.Complete(j.ID, "failed", "download_attachment_invalid")
+		if subTool {
+			return subFail("download_attachment_invalid")
+		}
+		return nil, "", true, e.Store.Complete(j.ID, "failed", "download_attachment_invalid")
 	}
 	_, code, err := e.check(ctx, j, *p, liveLookup)
 	if err != nil {
 		if errors.Is(err, transport.ErrLookupFailed) {
 			_ = e.Store.Complete(j.ID, "failed", "final_check_failed")
 		}
-		return nil, true, err
+		return nil, "", true, err
 	}
-	if code != "" {
+	if code != "" && (!subTool || code != "approval_required") {
 		// As before the split: a video that finished after its job stopped
 		// being sendable is cancelled with the reason code.
-		return nil, true, e.Store.Complete(j.ID, "cancelled", code)
+		return nil, "", true, e.Store.Complete(j.ID, "cancelled", code)
 	}
 	if err := inboxLimitsAllow(e, files); err != nil {
-		return nil, true, e.Store.Complete(j.ID, "cancelled", "attachment_limits_changed")
+		if subTool {
+			return subFail("attachment_limits_changed")
+		}
+		return nil, "", true, e.Store.Complete(j.ID, "cancelled", "attachment_limits_changed")
 	}
-	return &files[0], false, nil
+	return &files[0], "", false, nil
 }
 
 // inboxLimitsAllow checks prepared files against the current attachment limits.

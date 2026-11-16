@@ -55,10 +55,14 @@ func templatePipeline(c Command) Pipeline {
 				conversation = "context.thread"
 			}
 		}
+		tools := c.Tools
+		if tools == nil && c.Name == "ask" {
+			tools = boolPtr(true)
+		}
 		return Pipeline{Steps: []PipelineStep{
 			{ID: "question", Module: "message.question", Inputs: map[string]string{"text": "trigger.args", "message": "trigger.message"}, Settings: raw(questionSettings{RequireQuestion: c.Name == "ask"})},
 			{ID: "conversation", Module: conversation},
-			{ID: "answer", Module: "ai.chat", Inputs: map[string]string{"prompt": "question.prompt", "file": "question.file", "context": "conversation.context"}, Settings: raw(aiSettings{Model: c.Model, ProfileID: c.ProfileID, Instructions: c.Instructions, Generation: c.Generation})},
+			{ID: "answer", Module: "ai.chat", Inputs: map[string]string{"prompt": "question.prompt", "file": "question.file", "context": "conversation.context"}, Settings: raw(aiSettings{Model: c.Model, ProfileID: c.ProfileID, Instructions: c.Instructions, Generation: c.Generation, Tools: tools})},
 			{ID: "reply", Module: "reply", Inputs: map[string]string{"text": "answer.text", "continues": "answer.context"}},
 		}}
 	case "media.video":
@@ -109,12 +113,15 @@ func commandKind(c Command) string {
 // commandThreads reports whether a command continues AI reply threads.
 func commandThreads(c Command) bool { return commandPipeline(c).Has("context.thread") }
 
+func boolPtr(v bool) *bool { return &v }
+
 type commandSettings struct {
 	Instructions     string      `json:"instructions,omitempty"`
 	Model            string      `json:"model,omitempty"`
 	ProfileID        string      `json:"profile_id,omitempty"`
 	Memory           bool        `json:"memory,omitempty"`
 	Generation       *Generation `json:"generation,omitempty"`
+	Tools            *bool       `json:"tools,omitempty"`
 	ExecutionMinutes int         `json:"execution_minutes,omitempty"`
 	Preset           *string     `json:"preset,omitempty"`
 	Passes           *int        `json:"passes,omitempty"`
@@ -130,6 +137,9 @@ func normalizeCommand(c *Command) error {
 	if _, ok := kindRegistry[id]; !ok {
 		return errors.New("invalid command kind")
 	}
+	if c.AllowedConversations == nil {
+		c.AllowedConversations = []string{}
+	}
 	if id == "pipeline" {
 		trimmed := bytes.TrimSpace(c.Settings)
 		if c.Pipeline == nil || len(trimmed) > 0 && !bytes.Equal(trimmed, []byte("{}")) && !bytes.Equal(trimmed, []byte("null")) {
@@ -142,12 +152,12 @@ func normalizeCommand(c *Command) error {
 		// The flat fields describe what older servers understand: a fixed reply
 		// with no text, which they never send.
 		c.Kind, c.Type, c.Pipeline, c.Settings = id, "fixed", &pl, nil
-		c.Instructions, c.Model, c.ProfileID, c.Generation = "", "", "", nil
+		c.Instructions, c.Model, c.ProfileID, c.Generation, c.Tools = "", "", "", nil, nil
 		c.Memory = pl.Has("context.rolling") || pl.Has("context.thread")
 		c.ExecutionMinutes = pl.ExecutionMinutes
 		return nil
 	}
-	s := commandSettings{Instructions: c.Instructions, Model: c.Model, ProfileID: c.ProfileID, Memory: c.Memory, Generation: c.Generation, ExecutionMinutes: c.ExecutionMinutes}
+	s := commandSettings{Instructions: c.Instructions, Model: c.Model, ProfileID: c.ProfileID, Memory: c.Memory, Generation: c.Generation, Tools: c.Tools, ExecutionMinutes: c.ExecutionMinutes}
 	if len(c.Settings) > 0 {
 		if len(bytes.TrimSpace(c.Settings)) == 0 || bytes.TrimSpace(c.Settings)[0] != '{' {
 			return errors.New("invalid command settings")
@@ -196,6 +206,9 @@ func normalizeCommand(c *Command) error {
 	} else if s.Preset != nil || s.Passes != nil || s.MaxAttempts != nil || s.CopyIfFits != nil || s.MaxMB != nil {
 		return errors.New("invalid command settings")
 	}
+	if s.Tools != nil && id != "ai.generate" {
+		return errors.New("invalid command settings")
+	}
 	c.Kind = id
 	switch id {
 	case "fixed.reply":
@@ -205,7 +218,7 @@ func normalizeCommand(c *Command) error {
 	case "media.video":
 		c.Type = "download"
 	}
-	c.Instructions, c.Model, c.ProfileID, c.Memory, c.Generation, c.ExecutionMinutes = s.Instructions, s.Model, s.ProfileID, s.Memory, s.Generation, s.ExecutionMinutes
+	c.Instructions, c.Model, c.ProfileID, c.Memory, c.Generation, c.ExecutionMinutes, c.Tools = s.Instructions, s.Model, s.ProfileID, s.Memory, s.Generation, s.ExecutionMinutes, s.Tools
 	c.Settings, _ = json.Marshal(s)
 	// The kind's settings are authoritative; its steps are derived when run,
 	// so the configuration carries them once.
@@ -249,6 +262,7 @@ func kindSchema(id string) SettingsSchema {
 		fields["model"] = SettingsSchema{Type: "string", Title: "Model", UI: "model", Default: "", Maximum: bound(200)}
 		fields["profile_id"] = SettingsSchema{Type: "string", Title: "Profile", UI: "profile", Default: "", Maximum: bound(80)}
 		fields["memory"] = SettingsSchema{Type: "boolean", Title: "Remember the conversation", Default: false}
+		fields["tools"] = SettingsSchema{Type: "boolean", Title: "Use other commands as tools", UI: "tools", Default: false}
 		fields["generation"] = SettingsSchema{Type: "object", Title: "Generation", UI: "generation", Properties: map[string]SettingsSchema{
 			"reasoning":     {Type: "string", Title: "Reasoning", Default: "default", Enum: []string{"default", "off", "minimal", "low", "medium", "high", "xhigh", "max"}},
 			"answer_length": {Type: "string", Title: "Answer length", Default: "short", Enum: []string{"short", "standard", "detailed"}},

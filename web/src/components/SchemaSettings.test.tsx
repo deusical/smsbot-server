@@ -194,3 +194,62 @@ it("omits cleared optional number fields without defaults while keeping default 
   });
   expect(onChange).toHaveBeenCalledWith("tokens", 0);
 });
+
+it("lists callable commands for tools and notes when a model lacks tool support", () => {
+  const baseConfig = {
+    settings: { default_model: "m1", favorites: [] },
+    profiles: [],
+    commands: [
+      { name: "ask", enabled: true },
+      { name: "download", enabled: true },
+      { name: "disabled_cmd", enabled: false },
+    ],
+  };
+  const schema = {
+    type: "object",
+    properties: {
+      tools: {
+        type: "boolean",
+        title: "Use other commands as tools",
+        ui: "tools",
+        default: false,
+      },
+    },
+  };
+  const { rerender } = render(
+    <SchemaFields
+      schema={schema}
+      values={{ tools: true }}
+      workspace={
+        {
+          config: baseConfig,
+          models: [
+            { id: "m1", name: "Agent Model", parameters: ["tools", "temperature"] },
+          ],
+        } as unknown as Workspace
+      }
+      excludeCommand="ask"
+      onChange={vi.fn()}
+    />,
+  );
+  expect(screen.getByText("Can use !download.")).toBeVisible();
+
+  rerender(
+    <SchemaFields
+      schema={schema}
+      values={{ tools: true }}
+      workspace={
+        {
+          config: baseConfig,
+          models: [{ id: "m1", name: "Plain Model", parameters: ["temperature"] }],
+        } as unknown as Workspace
+      }
+      excludeCommand="ask"
+      onChange={vi.fn()}
+    />,
+  );
+  expect(
+    screen.getByText(/Plain Model doesn’t list tool support/),
+  ).toBeVisible();
+});
+

@@ -77,9 +77,9 @@ Reply). Each step runs one module:
 | Group | Modules |
 |---|---|
 | Text | **Text** (fixed text, `{input}` replaced by what's connected), **Find Douyin/Xiaohongshu link**, **Question** (the command text, its file and the messages it replies to) |
-| AI | **AI answer** (model, profile, instructions, generation settings) |
+| AI | **AI answer** (model, profile, instructions, tool use, generation settings) |
 | Memory | **No memory**, **Recent memory**, **Reply threads** |
-| Video | **Download Douyin/Xiaohongshu video** (the original stays encrypted on the server), **Compress video** (a copy under the size limit) |
+| Video | **Download Douyin/Xiaohongshu video** (the original stays on the worker), **Compress video** (a copy under the size limit) |
 | Send | **Reply**, always last: sends text and a file after the same checks as every reply |
 
 Each input connects to the command or to an earlier step's output; only outputs
@@ -101,7 +101,7 @@ own messages can run commands too.
 
 ### Asking AI with `!ask`
 
-- `!ask question` starts a new conversation with the AI.
+- `!ask question` (or `!a question`) starts a new conversation with the AI, and can call your other enabled commands as tools automatically.
 - **Continue it** by using your phone's Reply on the AI's answer; you don't need `!ask`
   again. Replying to an older answer continues from that point. This needs a **Reply
   threads** step in the command's steps (the AI assistant starting point has one); a
@@ -148,7 +148,7 @@ never retried. On SMS, send a new `!ask` with everything in it.
 ## Activity
 
 Every request, filterable by state and searchable. A request in progress shows the
-step it's on (for example "Writing reply · Compress video / compressing"). Expand a
+step it's on (for example "Writing reply · Compress video / compressing"), and a finished AI request that invoked tools shows which commands ran (such as "used !download"). Expand a
 row to see each step, done or not, with each AI step's model, tokens and cost, the
 request's totals, and approve or cancel from here.
 

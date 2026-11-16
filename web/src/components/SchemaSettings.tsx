@@ -10,6 +10,7 @@ export function commandValues(command: Command): Record<string, unknown> {
     model: command.model,
     profile_id: command.profile_id,
     memory: command.memory,
+    tools: command.tools,
     generation: command.generation,
     execution_minutes: command.execution_minutes,
     ...command.settings,
@@ -49,6 +50,7 @@ export function SchemaSettings({
         schema={definition.schema}
         values={values}
         workspace={workspace}
+        excludeCommand={command.name}
         onChange={change}
       />
     </>
@@ -86,11 +88,13 @@ export function SchemaFields({
   schema: root,
   values,
   workspace,
+  excludeCommand,
   onChange: change,
 }: {
   schema: KindSchema;
   values: Record<string, unknown>;
   workspace: Workspace;
+  excludeCommand?: string;
   onChange: (key: string, value: unknown) => void;
 }) {
   const config = workspace.config!;
@@ -159,6 +163,38 @@ export function SchemaFields({
           )}
         </div>
       );
+    if (schema.ui === "tools") {
+      const on = Boolean(value ?? schema.default);
+      const callable = (config.commands ?? []).filter(
+        (c) => c.enabled && c.name && c.name !== excludeCommand,
+      );
+      const available = callable.map((c) => `!${c.name}`);
+      const scoped = callable.some(
+        (c) => (c.allowed_conversations ?? []).length > 0,
+      );
+      const lacksTools =
+        on &&
+        (!model?.provider || model.provider === "openrouter") &&
+        !!model?.parameters?.length &&
+        !model.parameters.includes("tools");
+      return (
+        <Switch
+          key={key}
+          label={label}
+          hint={
+            !on
+              ? undefined
+              : lacksTools
+                ? `${model.name || model.id} doesn’t list tool support; it will answer normally without tools.`
+                : available.length
+                  ? `Can use ${available.join(", ")}${scoped ? " (where allowed)" : ""}.`
+                  : "Other enabled commands will be available automatically."
+          }
+          checked={on}
+          onChange={(next) => update(next ? true : undefined)}
+        />
+      );
+    }
     if (schema.type === "object")
       return (
         <fieldset key={key}>
@@ -273,6 +309,7 @@ export function settingsForKind(
     model: "",
     profile_id: "",
     memory: false,
+    tools: undefined,
     generation: undefined,
     execution_minutes: undefined,
   };

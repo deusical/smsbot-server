@@ -51,9 +51,9 @@ type sourceState struct {
 	Task TaskState `json:"task,omitempty"`
 }
 
-// video.download asks the server-local worker to download the linked video.
-// The original stays on the worker, encrypted; the step outputs a reference
-// to it that only this job's later steps can use.
+// video.download asks the configured worker to download the linked video.
+// The original stays on the worker; the step outputs a reference to it that
+// only this job's later steps can use.
 func videoDownloadModule() module {
 	return module{
 		Definition: ModuleDefinition{
@@ -127,7 +127,7 @@ func videoCompressModule() module {
 			return json.Marshal(v)
 		},
 		Accept: func(a *runCtx, s *cmdflow.Step) (cmdflow.Outcome, error) {
-			return cmdflow.Pending(), prepareCompressState(a.e, a.pipeline.ExecutionMinutes, s)
+			return cmdflow.Pending(), prepareCompressState(a, s)
 		},
 		Run: func(r *runCtx, s *cmdflow.Step) (cmdflow.Outcome, error) {
 			e := r.e
@@ -140,6 +140,9 @@ func videoCompressModule() module {
 				return cmdflow.Yield(), err
 			}
 			if st.MaxBytes > videoHostLimit(host.FileLimits()) {
+				if r.subTool {
+					return cmdflow.Fail("attachment_limits_changed"), nil
+				}
 				return yielded(true, e.Store.Complete(r.j.ID, "cancelled", "attachment_limits_changed"))
 			}
 			source, ok := s.In("source")
@@ -157,17 +160,21 @@ func videoCompressModule() module {
 
 // prepareCompressState fixes the step's effective settings: the configured
 // size ceiling, lowered to the server's attachment limits.
-func prepareCompressState(e *Engine, minutes int, s *cmdflow.Step) error {
+func prepareCompressState(a *runCtx, s *cmdflow.Step) error {
 	v := defaultVideoStep()
 	if err := s.Decode(&v); err != nil {
 		return err
 	}
-	st := compressState{Settings: v.full(minutes)}
-	host, err := e.Collection.Settings()
-	if err != nil {
-		return err
+	st := compressState{Settings: v.full(a.pipeline.ExecutionMinutes)}
+	hostLimit := a.subHostMaxBytes
+	if !a.subTool || hostLimit <= 0 {
+		host, err := a.e.Collection.Settings()
+		if err != nil {
+			return err
+		}
+		hostLimit = videoHostLimit(host.FileLimits())
 	}
-	st.MaxBytes = min(videoHostLimit(host.FileLimits()), int64(math.Round(v.MaxMB*1e6)))
+	st.MaxBytes = min(hostLimit, int64(math.Round(v.MaxMB*1e6)))
 	st.Settings.MaxMB = float64(st.MaxBytes) / 1e6
 	return s.Save(st)
 }
@@ -237,7 +244,7 @@ func combinedVideoStep(later []PipelineStep, s PipelineStep) bool {
 func taskDownload(r *runCtx, s *cmdflow.Step, st sourceState) (cmdflow.Outcome, error) {
 	e := r.e
 	var status TaskStatus
-	complete, err := e.pollWorker(r.ctx, r.j, r.p, func(ctx context.Context, deadline time.Time) (string, error) {
+	complete, failCode, err := e.pollWorkerStep(r.ctx, r.j, r.p, r.subTool, func(ctx context.Context, deadline time.Time) (string, error) {
 		var err error
 		status, err = e.Tasks.Poll(ctx, &st.Task, workerJob(r.j, s.ID), r.j.ID, deadline, TaskRequest{
 			Task: "video.download", Version: 1, Inputs: map[string]TaskValue{"url": {Type: "url", Text: st.URL}}, Settings: map[string]any{},
@@ -248,11 +255,17 @@ func taskDownload(r *runCtx, s *cmdflow.Step, st sourceState) (cmdflow.Outcome, 
 	if serr := s.Save(st); err == nil {
 		err = serr
 	}
+	if failCode != "" {
+		return cmdflow.Fail(failCode), err
+	}
 	if !complete || err != nil {
 		return cmdflow.Yield(), err
 	}
 	original := status.Outputs["original"]
 	if original.Handle == "" {
+		if r.subTool {
+			_, _ = e.Store.Transition(r.j.ID, "generating", "queued")
+		}
 		return cmdflow.Fail("download_failed"), nil
 	}
 	s.Out("source", cmdflow.Value{Type: typeStoredVideo, Handle: original.Handle})
@@ -269,7 +282,7 @@ func taskCompress(r *runCtx, s *cmdflow.Step, st compressState, source cmdflow.V
 	_ = json.Unmarshal(raw, &settings)
 	settings["max_bytes"] = st.MaxBytes
 	var data []byte
-	complete, err := e.pollWorker(r.ctx, r.j, r.p, func(ctx context.Context, deadline time.Time) (string, error) {
+	complete, failCode, err := e.pollWorkerStep(r.ctx, r.j, r.p, r.subTool, func(ctx context.Context, deadline time.Time) (string, error) {
 		status, err := e.Tasks.Poll(ctx, &st.Task, workerJob(r.j, s.ID), r.j.ID, deadline, TaskRequest{
 			Task: "video.compress", Version: 1, Inputs: map[string]TaskValue{"source": {Handle: source.Handle}}, Settings: settings,
 		})
@@ -288,10 +301,16 @@ func taskCompress(r *runCtx, s *cmdflow.Step, st compressState, source cmdflow.V
 	if serr := s.Save(st); err == nil {
 		err = serr
 	}
+	if failCode != "" {
+		return cmdflow.Fail(failCode), err
+	}
 	if !complete || err != nil {
 		return cmdflow.Yield(), err
 	}
-	file, done, err := e.sendableVideo(r.ctx, r.j, r.p, data, st.MaxBytes)
+	file, failCode, done, err := e.sendableVideoStep(r.ctx, r.j, r.p, r.subTool, data, st.MaxBytes)
+	if failCode != "" {
+		return cmdflow.Fail(failCode), err
+	}
 	if done || err != nil {
 		return cmdflow.Yield(), err
 	}

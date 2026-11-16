@@ -57,6 +57,7 @@ type Command struct {
 	Approval             bool            `json:"approval"`
 	AllowedConversations []string        `json:"allowed_conversations"`
 	Generation           *Generation     `json:"generation,omitempty"`
+	Tools                *bool           `json:"tools,omitempty"`
 	// Pipeline is the steps the command runs. For a template kind it is derived
 	// from the kind's settings; for kind "pipeline" it is the configuration.
 	Pipeline *Pipeline `json:"pipeline,omitempty"`
@@ -120,7 +121,7 @@ func (c Configuration) Validate() error {
 		if err := normalizeCommand(&cmd); err != nil {
 			return err
 		}
-		if cmd.ExecutionMinutes < 0 || cmd.ExecutionMinutes > 60 || !commandPattern.MatchString(cmd.Name) || strings.Contains("|ping|help|status|new|more|deepseek|", "|"+cmd.Name+"|") || names[cmd.Name] || len(cmd.Description) > 200 || textTooLong(cmd.Instructions) || commandKind(cmd) == "" || len(cmd.Model) > 200 || len(cmd.AllowedConversations) > 100 || cmd.ProfileID != "" && !profiles[cmd.ProfileID] {
+		if cmd.ExecutionMinutes < 0 || cmd.ExecutionMinutes > 60 || !commandPattern.MatchString(cmd.Name) || strings.Contains("|ping|help|status|new|more|deepseek|", "|"+cmd.Name+"|") || names[cmd.Name] || len(cmd.Description) > 4*200 || utf8.RuneCountInString(cmd.Description) > 200 || textTooLong(cmd.Instructions) || commandKind(cmd) == "" || len(cmd.Model) > 200 || len(cmd.AllowedConversations) > 100 || cmd.ProfileID != "" && !profiles[cmd.ProfileID] {
 			return errors.New("invalid command")
 		}
 		if cmd.Generation != nil {
@@ -188,6 +189,9 @@ func (e *Engine) SetConfiguration(c Configuration) error {
 			current := &c.Commands[i]
 			if legacyRepresentation && current.Kind == previous.Kind && sameSettings(current.Settings, previous.Settings) {
 				current.Settings = nil
+				if current.Tools == nil && current.Name == previous.Name {
+					current.Tools = previous.Tools
+				}
 				if current.Type != previous.Type {
 					current.Kind = ""
 				}
@@ -275,8 +279,13 @@ func resolve(c Configuration, name string) (Command, string, string, Generation,
 	if name == "deepseek" {
 		name = "ask"
 	}
+	defined := false
 	for _, cmd := range c.Commands {
-		if cmd.Name != name || !cmd.Enabled {
+		if cmd.Name != name {
+			continue
+		}
+		defined = true
+		if !cmd.Enabled {
 			continue
 		}
 		model := c.Settings.DefaultModel
@@ -300,6 +309,9 @@ func resolve(c Configuration, name string) (Command, string, string, Generation,
 			g = *cmd.Generation
 		}
 		return cmd, model, instructions, g, true
+	}
+	if !defined && name == "a" {
+		return resolve(c, "ask")
 	}
 	return Command{}, "", "", Generation{}, false
 }

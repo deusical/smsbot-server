@@ -168,7 +168,7 @@ the execution deadline.
 | `text.extract_url` | The one Douyin/Xiaohongshu link, or a usage reply |
 | `message.question` | Question from the command text, its file and the messages it replies to |
 | `context.none` / `context.rolling` / `context.thread` | Which AI conversation the request belongs to |
-| `ai.chat` | One provider request; with a conversation, reads it and outputs it to continue |
+| `ai.chat` | AI answer (with `tools` on, runs a bounded tool loop over snapshotted commands allowed in that conversation); with a conversation, reads it and outputs it to continue |
 | `video.download` | Server-local worker download; the original stays on the worker (`stored_video`) |
 | `video.compress` | Send copy of a stored original, within the size ceiling |
 | `reply` | The only sink: text and file to send, and the conversation it continues |

@@ -76,6 +76,7 @@ func init() {
 	}
 	commands.RegisterTrigger(cmdflow.Trigger{ID: "message", Title: "Command message", Outputs: triggerOutputs})
 	commands.RegisterUpgrade(upgradeVideoSteps)
+	commands.RegisterUpgrade(upgradeAIChatSteps)
 }
 
 func registerModule(m module) { commands.Register(m) }
@@ -215,7 +216,10 @@ type runCtx struct {
 	pipeline Pipeline
 	parent   *store.AIParent
 	// Dispatch.
-	j store.Job
+	j               store.Job
+	subTool         bool
+	subHostMaxBytes int64
+	subUsage        func(ChatResponse)
 	// Preview.
 	sim *simState
 }

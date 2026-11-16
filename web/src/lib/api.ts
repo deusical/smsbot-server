@@ -72,6 +72,7 @@ export type Job = {
   reasoning_tokens?: number;
   cost?: number;
   requested_reasoning?: string;
+  used_tools?: string[];
   /** Why a failed request was not sent: a fixed code such as "sim_missing". */
   reason?: string;
   /** The command's steps and their progress, with each AI step's usage. */
@@ -234,6 +235,7 @@ export type Command = {
   approval: boolean;
   allowed_conversations: string[];
   generation?: Generation;
+  tools?: boolean;
   /** The steps of a kind "pipeline" command. */
   pipeline?: Pipeline;
 };

@@ -43,6 +43,12 @@ const matches = (j: Job, id: Filter) =>
   (id === "complete" && completedStates.includes(j.state)) ||
   (id === "attention" && stateTone(j.state) === "bad");
 
+function shortUsedTools(tools?: string[]): string {
+  if (!tools?.length) return "";
+  if (tools.length <= 2) return tools.join(", ");
+  return `${tools.slice(0, 2).join(", ")} +${tools.length - 2}`;
+}
+
 export function ActivityFeed({
   jobs,
   conversations,
@@ -91,11 +97,18 @@ export function ActivityFeed({
                 </time>
                 <span className="status">
                   {jobState(j)}
-                  {current(j)
+                  {current(j) && j.state !== "awaiting_approval"
                     ? ` · ${moduleTitle(modules, current(j)!.module)}`
                     : ""}
-                  {pendingStates.includes(j.state) && j.preparation_stage
+                  {j.state === "queued" &&
+                  j.preparation_stage &&
+                  j.preparation_stage !== "complete"
                     ? ` / ${j.preparation_stage.replaceAll("_", " ")}`
+                    : ""}
+                  {(j.state === "awaiting_approval" ||
+                    !pendingStates.includes(j.state)) &&
+                  j.used_tools?.length
+                    ? ` · used ${shortUsedTools(j.used_tools)}`
                     : ""}
                 </span>
               </button>
@@ -158,6 +171,12 @@ export function ActivityFeed({
                           <dd>{j.requested_reasoning.replaceAll("_", " ")}</dd>
                         </>
                       )}
+                      {!!j.used_tools?.length && (
+                        <>
+                          <dt>Tools</dt>
+                          <dd>{j.used_tools.join(", ")}</dd>
+                        </>
+                      )}
                       <dt>Usage</dt>
                       <dd>
                         {(
@@ -172,6 +191,12 @@ export function ActivityFeed({
                           ? "Cost unavailable"
                           : "$" + j.cost.toFixed(6)}
                       </dd>
+                    </>
+                  )}
+                  {!j.model && !!j.used_tools?.length && (
+                    <>
+                      <dt>Tools</dt>
+                      <dd>{j.used_tools.join(", ")}</dd>
                     </>
                   )}
                   {!!j.steps?.length && (
@@ -269,7 +294,7 @@ export function ActivityPage({
   const shown = jobs.filter(
     (j) =>
       matches(j, filter) &&
-      `${j.command} ${label(j.conversation_id)} ${stateLabel(j.state)} ${j.code ?? ""}`
+      `${j.command} ${label(j.conversation_id)} ${stateLabel(j.state)} ${j.code ?? ""} ${(j.used_tools ?? []).join(" ")} ${jobResult(j)}`
         .toLowerCase()
         .includes(search.toLowerCase()),
   );
