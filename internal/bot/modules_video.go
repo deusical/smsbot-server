@@ -257,7 +257,7 @@ func taskDownload(r *runCtx, s *cmdflow.Step, st sourceState) (cmdflow.Outcome, 
 	}
 	s.Out("source", cmdflow.Value{Type: typeStoredVideo, Handle: original.Handle})
 	s.Status = cmdflow.StatusDone
-	return yielded(e.finishWorkerStep(r.j, r.p))
+	return yielded(e.finishWorkerStep(r.j))
 }
 
 // taskCompress runs video.compress as the "video.compress@1" task on the
@@ -295,7 +295,7 @@ func taskCompress(r *runCtx, s *cmdflow.Step, st compressState, source cmdflow.V
 	if done || err != nil {
 		return cmdflow.Yield(), err
 	}
-	s.Out("video", mediaValue(file))
+	s.Out("video", cmdflow.Value{Type: typeVideo, Handle: r.p.StageFile(s.ID, *file)})
 	s.Status = cmdflow.StatusDone
-	return yielded(e.finishWorkerStep(r.j, r.p))
+	return yielded(e.finishWorkerStep(r.j))
 }

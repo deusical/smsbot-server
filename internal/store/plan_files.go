@@ -31,11 +31,34 @@ type planFile struct {
 	SHA256 string `json:"sha256"`
 }
 
-// storedPlan is a plan as sealed in jobs.plan: attachments without their bytes,
-// and where those bytes are.
+// storedPlan is a plan as sealed in jobs.plan: attachments and staged files
+// without their bytes, and where those bytes are.
 type storedPlan struct {
 	Plan
 	Files []planFile `json:"stored_files,omitempty"`
+}
+
+// StageFile puts f on the plan under handle so SavePlan seals its bytes in
+// job_files instead of the pipeline run.
+func (p *Plan) StageFile(handle string, f media.File) string {
+	for i := range p.Staged {
+		if p.Staged[i].Handle == handle {
+			p.Staged[i].File = f
+			return handle
+		}
+	}
+	p.Staged = append(p.Staged, StagedFile{Handle: handle, File: f})
+	return handle
+}
+
+// StagedFile returns the staged file for handle, if present.
+func (p Plan) StagedFile(handle string) (media.File, bool) {
+	for _, s := range p.Staged {
+		if s.Handle == handle {
+			return s.File, true
+		}
+	}
+	return media.File{}, false
 }
 
 type planFileWrite struct {
@@ -56,23 +79,32 @@ func planFileScope(job string, index int) string {
 func (s *Store) sealPlan(id string, p Plan, previous []planFile) (string, []planFile, []planFileWrite, error) {
 	stored := storedPlan{Plan: p}
 	stored.Attachments = append([]media.File(nil), p.Attachments...)
+	stored.Staged = append([]StagedFile(nil), p.Staged...)
 	kept := make(map[planFile]bool, len(previous))
 	for _, f := range previous {
 		kept[f] = true
 	}
 	var writes []planFileWrite
-	for i := range stored.Attachments {
-		data := stored.Attachments[i].Data
-		if len(data) == 0 {
-			continue
-		}
+	seal := func(index int, data []byte) {
 		sum := sha256.Sum256(data)
-		ref := planFile{Index: i, SHA256: hex.EncodeToString(sum[:])}
+		ref := planFile{Index: index, SHA256: hex.EncodeToString(sum[:])}
 		stored.Files = append(stored.Files, ref)
 		if !kept[ref] {
-			writes = append(writes, planFileWrite{i, data})
+			writes = append(writes, planFileWrite{index, data})
 		}
-		stored.Attachments[i].Data = nil
+	}
+	for i := range stored.Attachments {
+		if data := stored.Attachments[i].Data; len(data) > 0 {
+			seal(i, data)
+			stored.Attachments[i].Data = nil
+		}
+	}
+	base := len(stored.Attachments)
+	for i := range stored.Staged {
+		if data := stored.Staged[i].File.Data; len(data) > 0 {
+			seal(base+i, data)
+			stored.Staged[i].File.Data = nil
+		}
 	}
 	b, err := json.Marshal(stored)
 	if err != nil {
@@ -118,8 +150,9 @@ func (s *Store) openPlan(q rowQuerier, id, enc string, files bool) (Plan, []plan
 	if !files {
 		return stored.Plan, stored.Files, nil
 	}
+	total := len(stored.Attachments) + len(stored.Staged)
 	for _, ref := range stored.Files {
-		if ref.Index < 0 || ref.Index >= len(stored.Attachments) {
+		if ref.Index < 0 || ref.Index >= total {
 			return Plan{}, nil, errors.New("plan file out of range")
 		}
 		var sealed []byte
@@ -133,7 +166,11 @@ func (s *Store) openPlan(q rowQuerier, id, enc string, files bool) (Plan, []plan
 		if sum := sha256.Sum256(data); hex.EncodeToString(sum[:]) != ref.SHA256 {
 			return Plan{}, nil, errors.New("plan file does not match its plan")
 		}
-		stored.Attachments[ref.Index].Data = data
+		if ref.Index < len(stored.Attachments) {
+			stored.Attachments[ref.Index].Data = data
+		} else {
+			stored.Staged[ref.Index-len(stored.Attachments)].File.Data = data
+		}
 	}
 	return stored.Plan, stored.Files, nil
 }

@@ -217,3 +217,75 @@ func TestEndedJobPlanIsNotWrittenBack(t *testing.T) {
 		t.Fatal("an in-progress job lost its plan", err)
 	}
 }
+
+// A file staged by a pipeline step is sealed in job_files out of jobs.plan,
+// bound to its job and position, promoted into Attachments without rewriting
+// its bytes, and removed when the plan is cleared.
+func TestStagedPlanFilesAreSealedBoundAndPromotedWithoutRewrite(t *testing.T) {
+	t.Parallel()
+	s := inboxStore(t)
+	video := syntheticFile("v", "synthetic-staged-video", 256<<10)
+	var p Plan
+	handle := p.StageFile("video", video)
+	if ok, err := s.Enqueue("staged-a", "fixture-chat", "!download", p); err != nil || !ok {
+		t.Fatal(ok, err)
+	}
+	var other Plan
+	other.StageFile("video", syntheticFile("v2", "synthetic-staged-other", 256<<10))
+	if ok, err := s.Enqueue("staged-b", "fixture-chat", "!download", other); err != nil || !ok {
+		t.Fatal(ok, err)
+	}
+
+	var enc string
+	if err := s.DB.QueryRow("SELECT plan FROM jobs WHERE id='staged-a'").Scan(&enc); err != nil {
+		t.Fatal(err)
+	}
+	if len(enc) > 4096 {
+		t.Fatalf("sealed plan carried file bytes (%d bytes)", len(enc))
+	}
+	plain, err := s.Vault.Open("plan:staged-a", enc)
+	if err != nil || bytes.Contains(plain, []byte("synthetic-staged-video")) {
+		t.Fatal("staged video bytes present in saved plan", err)
+	}
+	if _, err := s.DB.Exec("PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range []string{s.Path, s.Path + "-wal"} {
+		if b, _ := os.ReadFile(file); bytes.Contains(b, []byte("synthetic-staged-")) {
+			t.Fatal("staged file bytes stored in plaintext in", file)
+		}
+	}
+
+	// Another job's staged file row is rejected.
+	if _, err := s.DB.Exec("UPDATE job_files SET data=(SELECT data FROM job_files WHERE job='staged-a') WHERE job='staged-b'"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.JobPlan("staged-b"); err == nil {
+		t.Fatal("another job's staged file accepted")
+	}
+
+	_, loaded, err := s.JobPlan("staged-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok := loaded.StagedFile(handle)
+	if !ok || !bytes.Equal(got.Data, video.Data) {
+		t.Fatal("staged file did not round-trip intact")
+	}
+
+	// Promoting the staged file into Attachments reuses the job_files slot.
+	loaded.Attachments = []media.File{got}
+	loaded.Staged = nil
+	if grew := walGrowth(t, s, func() { err = s.SavePlan("staged-a", loaded) }); err != nil || grew > 32<<10 {
+		t.Fatalf("promoting staged file wrote %d bytes: %v", grew, err)
+	}
+	if _, after, err := s.JobPlan("staged-a"); err != nil || len(after.Attachments) != 1 || !bytes.Equal(after.Attachments[0].Data, video.Data) || len(after.Staged) != 0 {
+		t.Fatal("promoted attachment lost", err)
+	}
+	if err := s.Cancel("staged-a"); err != nil {
+		t.Fatal(err)
+	}
+	if n := planFileRows(t, s, "staged-a"); n != 0 {
+		t.Fatalf("%d rows left after cancel", n)
+	}
+}

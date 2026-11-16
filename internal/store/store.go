@@ -69,6 +69,7 @@ type Plan struct {
 	ReplyWireTarget string          `json:"reply_wire_target,omitempty"`
 	Mutation        *MutationIntent `json:"mutation,omitempty"`
 	Attachments     []media.File    `json:"attachments,omitempty"`
+	Staged          []StagedFile    `json:"staged_files,omitempty"`
 	Reply           string          `json:"reply"`
 	Participant     string          `json:"participant"`
 	Input           string          `json:"input,omitempty"`
@@ -86,6 +87,13 @@ type Plan struct {
 	InboxOwnerOnly  bool            `json:"inbox_owner_only,omitempty"`
 	// Owner marks a command the owner sent from their own phone.
 	Owner bool `json:"owner,omitempty"`
+}
+
+// StagedFile is a file a pipeline step prepared for a later step, sealed in
+// job_files apart from the run until the reply takes it into Attachments.
+type StagedFile struct {
+	Handle string     `json:"handle"`
+	File   media.File `json:"file"`
 }
 
 // FileRef names one archived attachment by local message and attachment ID.
@@ -143,7 +151,7 @@ func (s *Store) migrate() error {
 	if err := s.ensureGroupEnrollment(); err != nil {
 		return err
 	}
-	_, err := s.DB.Exec(`CREATE TABLE IF NOT EXISTS job_work(job TEXT PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE,stage TEXT NOT NULL,next_poll INTEGER NOT NULL);` + jobFilesSchema + messageMetaChange)
+	_, err := s.DB.Exec(`CREATE TABLE IF NOT EXISTS job_work(job TEXT PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE,stage TEXT NOT NULL,next_poll INTEGER NOT NULL);` + jobFilesSchema + jobStepsTrigger + messageMetaChange)
 	return err
 }
 

@@ -1048,19 +1048,13 @@ func (e *Engine) generateReply(ctx context.Context, j store.Job, p *store.Plan, 
 		if code == "approval_required" {
 			p.Approval = true
 			p.Approved = false
-			if err = e.Store.SavePlan(j.ID, *p); err != nil {
-				return true, err
-			}
 			_, err = e.Store.Transition(j.ID, "generating", "awaiting_approval")
 		} else {
 			err = e.Store.Complete(j.ID, "cancelled", code)
 		}
 		return true, err
 	}
-	if err = e.Store.SavePlan(j.ID, *p); err != nil {
-		return true, err
-	}
-	if _, err = e.Store.Transition(j.ID, "generating", "queued"); err != nil {
+	if ok, err = e.Store.Transition(j.ID, "generating", "queued"); err != nil || !ok {
 		return true, err
 	}
 

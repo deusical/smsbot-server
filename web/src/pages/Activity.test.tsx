@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { Job } from "../lib/api";
 import { ActivityFeed } from "./Activity";
@@ -30,5 +30,51 @@ describe("Activity request status", () => {
     expect(status(job({}))).toMatch(/^Queued/);
     expect(status(job({ preparation_stage: "waiting_worker" }))).toMatch(/^Queued/);
     expect(screen.queryByText(/^Working/)).toBeNull();
+  });
+  it("shows the reply step as current before send, not-run on refusal, and done once sent", () => {
+    const baseSteps = [
+      { id: "text", module: "text.template", done: true },
+      { id: "reply", module: "reply", done: false },
+    ];
+    const { container, unmount } = render(
+      <ActivityFeed
+        jobs={[job({ state: "awaiting_approval", steps: baseSteps })]}
+        conversations={[]}
+      />,
+    );
+    expect(container.querySelector(".status")!.textContent).toContain("· reply");
+    fireEvent.click(container.querySelector(".feed-main")!);
+    expect(container.querySelector("li.done")?.textContent).toContain("text");
+    expect(container.querySelector("li.current")?.textContent).toContain("reply");
+    unmount();
+
+    const refused = render(
+      <ActivityFeed
+        jobs={[job({ state: "failed", code: "not_submitted", steps: baseSteps })]}
+        conversations={[]}
+      />,
+    );
+    fireEvent.click(refused.container.querySelector(".feed-main")!);
+    expect(refused.container.querySelector("li.not-run")?.textContent).toContain(
+      "reply",
+    );
+    refused.unmount();
+
+    const sent = render(
+      <ActivityFeed
+        jobs={[
+          job({
+            state: "submitted",
+            steps: [
+              { id: "text", module: "text.template", done: true },
+              { id: "reply", module: "reply", done: true },
+            ],
+          }),
+        ]}
+        conversations={[]}
+      />,
+    );
+    fireEvent.click(sent.container.querySelector(".feed-main")!);
+    expect(sent.container.querySelectorAll("li.done")).toHaveLength(2);
   });
 });

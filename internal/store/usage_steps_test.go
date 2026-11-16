@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/deusical/cmdflow"
 )
 
 func TestStepUsageTotalsEachJob(t *testing.T) {
@@ -104,5 +106,84 @@ func TestRestoreRefusesLeftoverJobSteps(t *testing.T) {
 	}
 	if err = s.RestoreBackup(backup); err == nil || !strings.Contains(err.Error(), "fresh") {
 		t.Fatal("restore over leftover job steps", err)
+	}
+}
+
+func TestReplyStepStaysNotDoneUntilSentStates(t *testing.T) {
+	t.Parallel()
+	s := inboxStore(t)
+	makePlan := func(replyStatus cmdflow.Status) Plan {
+		return Plan{Pipeline: &cmdflow.Run{
+			Format:   cmdflow.FormatVersion,
+			Accepted: true,
+			Steps: []cmdflow.StepRun{
+				{ID: cmdflow.TriggerStep, Module: cmdflow.TriggerStep, Version: 1, Status: cmdflow.StatusDone},
+				{ID: "text", Module: "text.template", Version: 1, Status: cmdflow.StatusDone},
+				{ID: "reply", Module: "reply", Version: 1, Status: replyStatus},
+			},
+		}}
+	}
+	stepsOf := func(id string) []JobStep {
+		t.Helper()
+		jobs, err := s.Jobs()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, j := range jobs {
+			if j.ID == id {
+				return j.Steps
+			}
+		}
+		t.Fatalf("missing job %s", id)
+		return nil
+	}
+
+	// Enqueue with StatusIntent and SavePlan with StatusDone both leave reply not done.
+	p := makePlan(cmdflow.StatusIntent)
+	p.Approval = true
+	if _, err := s.Enqueue("job-sent", "synthetic-chat", "!echo", p); err != nil {
+		t.Fatal(err)
+	}
+	if st := stepsOf("job-sent"); !st[0].Done || st[1].Done {
+		t.Fatalf("at approval: %+v", st)
+	}
+	if err := s.SavePlan("job-sent", makePlan(cmdflow.StatusDone)); err != nil {
+		t.Fatal(err)
+	}
+	if st := stepsOf("job-sent"); !st[0].Done || st[1].Done {
+		t.Fatalf("before send: %+v", st)
+	}
+
+	// Terminal non-sent states keep reply not done; reconciling to submitted/delivered/read marks it done.
+	for _, tc := range []struct {
+		id    string
+		state string
+		want  bool
+	}{
+		{"job-refused", "failed", false},
+		{"job-cancelled", "cancelled", false},
+		{"job-expired", "expired", false},
+		{"job-uncertain", "unknown_submission", false},
+		{"job-submitted", "submitted", true},
+		{"job-delivered", "delivered", true},
+		{"job-read", "read", true},
+	} {
+		if _, err := s.Enqueue(tc.id, "synthetic-chat", "!echo", makePlan(cmdflow.StatusDone)); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Complete(tc.id, tc.state, "synthetic"); err != nil {
+			t.Fatal(err)
+		}
+		if st := stepsOf(tc.id); !st[0].Done || st[1].Done != tc.want {
+			t.Fatalf("%s (%s): got steps %+v, want reply.Done=%t", tc.id, tc.state, st, tc.want)
+		}
+	}
+
+	// Reconciling an uncertain send to submitted marks reply done even after the plan was cleared.
+	if err := s.Complete("job-uncertain", "submitted", ""); err != nil {
+		t.Fatal(err)
+	}
+	if st := stepsOf("job-uncertain"); !st[1].Done {
+		t.Fatalf("reconciled uncertain job reply not marked done: %+v", st)
 	}
 }
