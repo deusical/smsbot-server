@@ -260,7 +260,8 @@ a poll for such a job starts it again, and the old folders can be deleted.
 Every poll renews a 300-second preparation lease. If the bot pauses, cancels, loses
 consent, or stops polling, the lease expires and stops running preparation.
 Subprocesses are also stopped at the absolute deadline, or after 120 seconds
-without file growth or advancing encoder frames/media time. Stalled preparation
+without file growth or advancing encoder frames/media time (300 seconds for a
+download, which writes nothing while the page opens and the video is found). Stalled preparation
 fails; only lost leases leave resumable work. There is no promise that an upstream
 site's own network timeout or failure will disappear.
 
@@ -272,6 +273,13 @@ Uncertain sends are never retried automatically.
 
 `download_worker_unavailable` means the helper is not configured;
 `download_failed` means preparation failed or returned an invalid/oversized file.
+A failed task keeps its specific code, which Activity shows in words:
+`single_video_required` (the link is not one video, for example a photo
+gallery), `unsupported_platform`, `video_too_long`, `size_limit`,
+`audio_missing`, `video_required`, `invalid_duration`, `duration_changed`,
+`progress_stalled` (no data for too long) and `process_failed` (the download or
+encoder program failed). A worker that is full answers 503 so the bot waits; a
+wrong token answers 401.
 Worker responses never contain raw upstream errors, file titles or credentials.
 
 ## Helper protocol
