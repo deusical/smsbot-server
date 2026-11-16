@@ -16,6 +16,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/deusical/smsbot-server/internal/store"
@@ -525,6 +526,8 @@ func (t *Tasks) Poll(ctx context.Context, st *TaskState, id, scope string, deadl
 		return status, nil
 	case "failed":
 		return status, taskFailed{status.Code}
+	case "cancelled":
+		return status, taskFailed{"task_cancelled"}
 	}
 	st.Waiting = 0
 	for name, v := range status.Outputs {
@@ -660,4 +663,66 @@ func (d *HTTPDownloader) fetchFile(ctx context.Context, path string, limit int64
 		return nil, "", taskFailed{"task_output_too_large"}
 	}
 	return data, "complete", nil
+}
+
+const cancelScopeTimeout = 3 * time.Second
+
+// CancelScope asks every configured worker to cancel active work for bot job
+// scope. It returns true when every configured worker accepted the cancel (200)
+// or is an older worker without the cancel endpoint (404 or 410).
+func (t *Tasks) CancelScope(ctx context.Context, scope string) bool {
+	if t == nil {
+		return false
+	}
+	_, workers, err := t.current()
+	if err != nil {
+		return false
+	}
+	if len(workers) == 0 {
+		return true
+	}
+	list := make([]*HTTPDownloader, 0, len(workers))
+	for _, d := range workers {
+		if d != nil {
+			list = append(list, d)
+		}
+	}
+	var (
+		wg sync.WaitGroup
+		ok atomic.Bool
+	)
+	ok.Store(true)
+	for _, d := range list {
+		wg.Add(1)
+		go func(d *HTTPDownloader) {
+			defer wg.Done()
+			if !d.cancelScope(ctx, scope) {
+				ok.Store(false)
+			}
+		}(d)
+	}
+	wg.Wait()
+	return ok.Load()
+}
+
+func (d *HTTPDownloader) cancelScope(ctx context.Context, scope string) bool {
+	ctx, cancel := context.WithTimeout(ctx, cancelScopeTimeout)
+	defer cancel()
+	request, err := http.NewRequestWithContext(ctx, "POST", strings.TrimRight(d.Endpoint, "/")+"/scopes/"+url.PathEscape(scope)+"/cancel", nil)
+	if err != nil {
+		return false
+	}
+	request.Header.Set("Authorization", "Bearer "+d.Token)
+	response, err := d.client().Do(request)
+	if err != nil {
+		return false
+	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4096))
+	response.Body.Close()
+	switch response.StatusCode {
+	case http.StatusOK, http.StatusNotFound, http.StatusGone:
+		return true
+	default:
+		return false
+	}
 }

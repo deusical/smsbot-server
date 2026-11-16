@@ -548,14 +548,6 @@ func deterministicZeroCostError(err error) bool {
 	return strings.HasPrefix(code, "provider_http_4") || code == "provider_request_invalid"
 }
 
-func toolStageName(name string) string {
-	clean := "running_" + strings.ReplaceAll(name, "-", "_")
-	if len(clean) > 48 {
-		clean = clean[:48]
-	}
-	return clean
-}
-
 func agentInProgress(p store.Plan) bool {
 	if p.Pipeline == nil {
 		return false
@@ -626,6 +618,7 @@ func (e *Engine) runSubToolAI(r *runCtx, st aiState, commit func(string)) (cmdfl
 	}
 	genctx, cancel := context.WithTimeout(r.ctx, 95*time.Second)
 	e.pending[r.j.ID] = cancel
+	e.videoChecked = ""
 	e.mu.Unlock()
 
 	request := *r.p
@@ -805,7 +798,6 @@ func (e *Engine) runAgentStep(ctx context.Context, j store.Job, p *store.Plan, c
 				if longRunning(matched.Pipeline) || matched.Pipeline.Has("ai.chat") {
 					e.ensureAgentDeadline(j, p, matched.ExecutionMinutes)
 				}
-				_ = e.Store.DeferWork(j.ID, toolStageName(matched.Name), 0)
 				ag.ActiveCall = &tc
 				ag.ActiveTool = matched.Name
 				ag.SubRun = subRun
@@ -845,7 +837,6 @@ func (e *Engine) runAgentStep(ctx context.Context, j store.Job, p *store.Plan, c
 		}
 
 		if ag.Round >= maxAgentRounds {
-			_ = e.Store.DeferWork(j.ID, "", 0)
 			return true, e.Store.Complete(j.ID, "failed", "provider_empty_answer")
 		}
 		if ag.Round > 0 {
@@ -879,7 +870,6 @@ func (e *Engine) runAgentStep(ctx context.Context, j store.Job, p *store.Plan, c
 			return true, e.Store.Complete(j.ID, "failed", "budget_exceeded_or_unknown")
 		}
 
-		_ = e.Store.DeferWork(j.ID, "", 0)
 		ok, err := e.Store.Transition(j.ID, "queued", "generating")
 		if err != nil || !ok {
 			return true, err
@@ -895,6 +885,7 @@ func (e *Engine) runAgentStep(ctx context.Context, j store.Job, p *store.Plan, c
 
 		genctx, cancel := context.WithTimeout(ctx, 95*time.Second)
 		e.pending[j.ID] = cancel
+		e.videoChecked = ""
 		e.mu.Unlock()
 
 		var resp ChatResponse
@@ -1057,6 +1048,11 @@ func (e *Engine) runAgentStep(ctx context.Context, j store.Job, p *store.Plan, c
 		checked, code, err := e.check(ctx, j, *p, liveLookup)
 		*cfg = checked
 		if err != nil {
+			if len(p.Attachments) > 0 && errors.Is(err, transport.ErrLookupFailed) {
+				e.backoffPreflight(j.ID)
+				_, _ = e.Store.Transition(j.ID, "generating", "queued")
+				return true, err
+			}
 			_ = e.Store.Complete(j.ID, "failed", "final_check_failed")
 			return true, err
 		}
@@ -1065,9 +1061,6 @@ func (e *Engine) runAgentStep(ctx context.Context, j store.Job, p *store.Plan, c
 				p.Approval = true
 				p.Approved = false
 				p.ApprovalDeadline = e.approvalWindow(*p)
-				if err = e.Store.SavePlan(j.ID, *p); err != nil {
-					return true, err
-				}
 				_, err = e.Store.Transition(j.ID, "generating", "awaiting_approval")
 			} else {
 				state := "cancelled"
@@ -1078,10 +1071,8 @@ func (e *Engine) runAgentStep(ctx context.Context, j store.Job, p *store.Plan, c
 			}
 			return true, err
 		}
-		if err = e.Store.SavePlan(j.ID, *p); err != nil {
-			return true, err
-		}
-		if _, err = e.Store.Transition(j.ID, "generating", "queued"); err != nil {
+		e.workerUnlocked = false
+		if ok, err = e.Store.Transition(j.ID, "generating", "queued"); err != nil || !ok {
 			return true, err
 		}
 		return false, nil

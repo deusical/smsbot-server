@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"github.com/deusical/smsbot-server/internal/store"
 	"github.com/deusical/smsbot-server/internal/transport"
 	"github.com/deusical/smsbot-server/internal/vault"
@@ -170,5 +171,150 @@ func TestReadyLookupFailureDoesNotCancelJobsOrPauseService(t *testing.T) {
 	jobs, err := s.Jobs()
 	if err != nil || len(jobs) != 2 || jobs[0].State != "queued" || jobs[1].State != "queued" {
 		t.Fatalf("ready lookup failure cancelled queued jobs: %+v %v", jobs, err)
+	}
+}
+
+type rolloverFixture struct {
+	*transport.Fixture
+	sessionUp         atomic.Bool
+	streamUp          atomic.Bool
+	dropOnUse         atomic.Bool
+	watchDispatch     atomic.Bool
+	rolloverAttempted chan struct{}
+	postRolloverTick  chan struct{}
+	dropAttempted     chan struct{}
+}
+
+func (f *rolloverFixture) Ready() bool {
+	up := f.sessionUp.Load() && f.streamUp.Load()
+	if !up && f.watchDispatch.Load() {
+		select {
+		case f.postRolloverTick <- struct{}{}:
+		default:
+		}
+	}
+	return up
+}
+
+func (f *rolloverFixture) SessionUp() bool {
+	return f.sessionUp.Load()
+}
+
+func (f *rolloverFixture) LookupConversation(_ context.Context, _ string) (transport.Conversation, error) {
+	// Flip streamUp false during the lookup to simulate a rollover gap; when
+	// dropOnUse is set, simulate the session itself going down.
+	f.streamUp.Store(false)
+	if f.dropOnUse.Load() {
+		f.sessionUp.Store(false)
+		select {
+		case f.dropAttempted <- struct{}{}:
+		default:
+		}
+		return transport.Conversation{}, transport.ErrUnavailable
+	}
+	if f.watchDispatch.Load() {
+		select {
+		case f.rolloverAttempted <- struct{}{}:
+		default:
+		}
+	}
+	return transport.Conversation{}, errors.New("synthetic rollover lookup failure")
+}
+
+func TestStreamRolloverBlipPreservesUnsentJobsUntilRealSessionDrop(t *testing.T) {
+	t.Parallel()
+	s := openStore(t)
+	tr := &rolloverFixture{
+		Fixture:           transport.NewFixture(),
+		rolloverAttempted: make(chan struct{}, 1),
+		postRolloverTick:  make(chan struct{}, 1),
+		dropAttempted:     make(chan struct{}, 1),
+	}
+	tr.sessionUp.Store(true)
+	tr.streamUp.Store(true)
+	svc := New(s, tr, filepath.Join(filepath.Dir(s.Path), "archive"))
+	if err := svc.Init(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Enroll("demo-chat", "demo-peer"); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Engine.Pause(false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Enqueue("job-1", "demo-chat", "!ping", store.Plan{Participant: "demo-peer", Reply: "pong"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Enqueue("job-2", "demo-chat", "!ping", store.Plan{Participant: "demo-peer", Reply: "pong-2"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// An ingest lookup failing mid-rollover (Ready false, SessionUp true) must not
+	// cancel unsent jobs or pause automation.
+	svc.ingest(context.Background())(transport.Incoming{
+		ID: "ingest-rollover", ConversationID: "demo-chat", ParticipantID: "demo-peer", Text: "!ping", At: time.Now(),
+	})
+	if paused, err := s.Paused(); err != nil || paused {
+		t.Fatalf("rollover ingest paused service: paused=%t err=%v", paused, err)
+	}
+	jobs, err := s.Jobs()
+	if err != nil || len(jobs) != 2 || jobs[0].State != "queued" || jobs[1].State != "queued" {
+		t.Fatalf("rollover ingest cancelled queued jobs: %+v %v", jobs, err)
+	}
+
+	// Dispatch lookup failing mid-rollover also preserves queued jobs.
+	tr.streamUp.Store(true)
+	tr.watchDispatch.Store(true)
+	var failed atomic.Bool
+	workers := svc.Start(context.Background(), nil, func() { failed.Store(true) })
+	defer workers.Stop()
+
+	select {
+	case <-tr.rolloverAttempted:
+	case <-time.After(10 * time.Second):
+		t.Fatal("dispatch did not attempt rollover lookup")
+	}
+	select {
+	case <-tr.postRolloverTick:
+	case <-time.After(10 * time.Second):
+		t.Fatal("dispatch loop did not advance past rollover tick")
+	}
+	if failed.Load() {
+		t.Fatal("rollover lookup failure triggered dispatchFailed")
+	}
+	if paused, err := s.Paused(); err != nil || paused {
+		t.Fatalf("rollover lookup failure paused service: paused=%t err=%v", paused, err)
+	}
+	jobs, err = s.Jobs()
+	if err != nil || len(jobs) != 2 || jobs[0].State != "queued" || jobs[1].State != "queued" {
+		t.Fatalf("rollover lookup failure cancelled queued jobs: %+v %v", jobs, err)
+	}
+
+	// A real session drop (SessionUp false) yields ErrUnavailable and cancels unsent work
+	// without flipping Live/Pause.
+	tr.watchDispatch.Store(false)
+	tr.dropOnUse.Store(true)
+	tr.streamUp.Store(true)
+	select {
+	case <-tr.dropAttempted:
+	case <-time.After(15 * time.Second):
+		t.Fatal("dispatch did not retry after backoff for session drop")
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		jobs, err = s.Jobs()
+		if err == nil && len(jobs) == 2 && jobs[0].State == "cancelled" && jobs[1].State == "cancelled" {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if len(jobs) != 2 || jobs[0].State != "cancelled" || jobs[0].Code != "connection_interrupted" || jobs[1].State != "cancelled" || jobs[1].Code != "connection_interrupted" {
+		t.Fatalf("real session drop did not cancel unsent jobs: %+v", jobs)
+	}
+	if failed.Load() {
+		t.Fatal("connection drop triggered dispatchFailed instead of ConnectionInterrupted")
+	}
+	if paused, err := s.Paused(); err != nil || paused {
+		t.Fatalf("connection drop changed Live/Pause state: paused=%t err=%v", paused, err)
 	}
 }

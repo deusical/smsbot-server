@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -19,13 +20,15 @@ import (
 // taskWorker emulates a protocol-4 worker: each job is queued on its first
 // poll and complete on the next, with a file output named after the task.
 type taskWorker struct {
-	t     *testing.T
-	tasks map[string]int
-	down  atomic.Bool
-	mu    sync.Mutex
-	caps  int
-	posts map[string][]map[string]any
-	order []string
+	t            *testing.T
+	tasks        map[string]int
+	down         atomic.Bool
+	cancelStatus atomic.Int32
+	mu           sync.Mutex
+	caps         int
+	posts        map[string][]map[string]any
+	order        []string
+	cancels      []string
 }
 
 func (w *taskWorker) serve(t *testing.T, tasks map[string]int) *httptest.Server {
@@ -48,6 +51,13 @@ func (w *taskWorker) serve(t *testing.T, tasks map[string]int) *httptest.Server 
 		case strings.HasSuffix(r.URL.Path, "/capabilities"):
 			w.caps++
 			json.NewEncoder(rw).Encode(map[string]any{"protocol": 4, "protocols": []int{4}, "tasks": w.tasks})
+		case r.Method == "POST" && len(parts) == 5 && parts[2] == "scopes" && parts[4] == "cancel":
+			w.cancels = append(w.cancels, parts[3])
+			if code := int(w.cancelStatus.Load()); code != 0 {
+				rw.WriteHeader(code)
+				return
+			}
+			json.NewEncoder(rw).Encode(map[string]any{"protocol": 4, "cancelled": 1})
 		case r.Method == "GET" && len(parts) == 6 && parts[4] == "files":
 			rw.Write([]byte("bytes-of-" + parts[5]))
 		case r.Method == "POST":
@@ -95,6 +105,12 @@ func (w *taskWorker) setTasks(tasks map[string]int) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.tasks = tasks
+}
+
+func (w *taskWorker) cancelledScopes() []string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return append([]string(nil), w.cancels...)
 }
 
 func (w *taskWorker) first(job string) map[string]any {
@@ -450,5 +466,168 @@ func TestWorkerStatusCacheRefreshAndInvalidation(t *testing.T) {
 	afterSave, err := tasks.Status(ctx)
 	if err != nil || afterSave[1].Tasks["video.download"] != 4 || laptop.capabilitiesCount() != 4 {
 		t.Fatalf("status after save: %+v probes=%d err=%v", afterSave, laptop.capabilitiesCount(), err)
+	}
+}
+
+func TestWorkerCancelSweepDeliversRetriesAndIgnoresNonWorkerStages(t *testing.T) {
+	t.Parallel()
+	video := map[string]int{"video.download": 1, "video.compress": 1}
+	tasks, laptop, local := taskRouter(t, video, video)
+	e, _ := setup(t)
+	arm(t, e)
+	c := DefaultConfiguration()
+	c.Commands = []Command{{Name: "download", Kind: "media.video", Enabled: true, Settings: json.RawMessage(`{"preset":"fast","passes":1,"execution_minutes":10}`)}}
+	if err := e.SetConfiguration(c); err != nil {
+		t.Fatal(err)
+	}
+	e.Tasks = tasks
+	e.WorkerCancelInterval = 15 * time.Millisecond
+
+	// Accept two download jobs and dispatch each once so both have live worker stage ("queued").
+	m1 := incoming()
+	m1.ID = "msg-cancel"
+	m1.Text = "!download https://v.douyin.com/synthetic/"
+	if ok, err := e.Accept(context.Background(), m1); !ok || err != nil {
+		t.Fatal(ok, err)
+	}
+	cancelledID := store.Hash(m1.ConversationID + "\x00" + m1.ID)
+	if err := e.Dispatch(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	m2 := incoming()
+	m2.ID = "msg-pause"
+	m2.Text = "!download https://xhslink.com/synthetic"
+	if ok, err := e.Accept(context.Background(), m2); !ok || err != nil {
+		t.Fatal(ok, err)
+	}
+	pausedID := store.Hash(m2.ConversationID + "\x00" + m2.ID)
+	if err := e.Dispatch(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := e.Cancel(cancelledID); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Pause(true); err != nil {
+		t.Fatal(err)
+	}
+
+	// Seed active jobs and ended bot-side-stage jobs that must NOT be sent to workers.
+	seed := func(id, state, stage string) {
+		if _, err := e.Store.Enqueue(id, "demo-chat", "!download", store.Plan{Participant: "demo-peer"}); err != nil {
+			t.Fatal(err)
+		}
+		if err := e.Store.DeferWork(id, stage, time.Now().Add(time.Minute).UnixMilli()); err != nil {
+			t.Fatal(err)
+		}
+		if state != "queued" {
+			if err := e.Store.Complete(id, state, "paused"); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	activeID := store.Hash("active-worker-job")
+	seed(activeID, "queued", "downloading")
+	for _, stage := range []string{"complete", "receiving", "waiting_upload", "uploading", "ready"} {
+		seed(store.Hash("bot-stage-"+stage), "cancelled", stage)
+	}
+
+	// Simulate local worker down initially; start Engine.Run so the sweep runs.
+	local.down.Store(true)
+	ctx, stop := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		e.Run(ctx, func(err error) { t.Errorf("unexpected engine error: %v", err) })
+	}()
+	defer func() {
+		stop()
+		<-done
+	}()
+
+	// Laptop receives cancels immediately, while local is unreachable so cancel_sent remains 0.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		got := laptop.cancelledScopes()
+		if slices.Contains(got, cancelledID) && slices.Contains(got, pausedID) {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if got := laptop.cancelledScopes(); !slices.Contains(got, cancelledID) || !slices.Contains(got, pausedID) {
+		t.Fatalf("laptop cancels=%v, want %s and %s", got, cancelledID, pausedID)
+	}
+	var sentCount int
+	if err := e.Store.DB.QueryRow("SELECT count(*) FROM job_work WHERE job IN (?,?) AND cancel_sent=1", cancelledID, pausedID).Scan(&sentCount); err != nil || sentCount != 0 {
+		t.Fatalf("marked delivered while local worker was down: count=%d err=%v", sentCount, err)
+	}
+
+	// Bring local worker back online as an older 404 worker for one sweep, or 200: test 404 compatibility!
+	local.cancelStatus.Store(http.StatusNotFound)
+	local.down.Store(false)
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if err := e.Store.DB.QueryRow("SELECT count(*) FROM job_work WHERE job IN (?,?) AND cancel_sent=1", cancelledID, pausedID).Scan(&sentCount); err == nil && sentCount == 2 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if sentCount != 2 {
+		t.Fatalf("sweep did not retry and mark delivered once local recovered: count=%d local=%v", sentCount, local.cancelledScopes())
+	}
+
+	// Active and bot-side-stage jobs were never sent to either worker.
+	for _, seen := range append(laptop.cancelledScopes(), local.cancelledScopes()...) {
+		if seen != cancelledID && seen != pausedID {
+			t.Fatalf("unexpected scope cancelled: %s", seen)
+		}
+	}
+
+	// No further retries happen after delivery is recorded.
+	laptopCount, localCount := len(laptop.cancelledScopes()), len(local.cancelledScopes())
+	time.Sleep(50 * time.Millisecond)
+	if len(laptop.cancelledScopes()) != laptopCount || len(local.cancelledScopes()) != localCount {
+		t.Fatalf("delivered cancels were sent again: laptop %d->%d local %d->%d", laptopCount, len(laptop.cancelledScopes()), localCount, len(local.cancelledScopes()))
+	}
+
+	// Live Cancel while Engine.Run is running nudges the sweep immediately; also check 410 older worker response.
+	local.cancelStatus.Store(http.StatusGone)
+	liveCancelID := store.Hash("live-cancel-job")
+	seed(liveCancelID, "queued", "compressing")
+	if err := e.Cancel(liveCancelID); err != nil {
+		t.Fatal(err)
+	}
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		var delivered int
+		if err := e.Store.DB.QueryRow("SELECT cancel_sent FROM job_work WHERE job=?", liveCancelID).Scan(&delivered); err == nil && delivered == 1 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !slices.Contains(laptop.cancelledScopes(), liveCancelID) || !slices.Contains(local.cancelledScopes(), liveCancelID) {
+		t.Fatalf("live cancel not delivered to both workers: laptop=%v local=%v", laptop.cancelledScopes(), local.cancelledScopes())
+	}
+}
+
+func TestTasksPollHandlesCancelledStageWithoutPanicking(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/capabilities") {
+			json.NewEncoder(rw).Encode(map[string]any{"protocol": 4, "protocols": []int{4}, "tasks": map[string]int{"video.download": 1}})
+			return
+		}
+		json.NewEncoder(rw).Encode(map[string]any{"stage": "cancelled", "protocol": 4})
+	}))
+	t.Cleanup(server.Close)
+	e, _ := setup(t)
+	tasks := &Tasks{Path: filepath.Join(t.TempDir(), "workers.json"), Store: e.Store,
+		Local: &HTTPDownloader{Endpoint: server.URL + "/download", Token: token}}
+	st := TaskState{}
+	status, err := tasks.Poll(context.Background(), &st, strings.Repeat("a", 64), strings.Repeat("b", 64), time.Now().Add(time.Minute), TaskRequest{Task: "video.download", Version: 1})
+	var failed taskFailed
+	if status.Stage != "cancelled" || !errorsAs(err, &failed) || failed.code != "task_cancelled" {
+		t.Fatalf("status=%+v err=%v", status, err)
 	}
 }

@@ -53,10 +53,11 @@ type Service struct {
 	Now      func() time.Time
 	Interval time.Duration
 
-	keyMu   sync.Mutex
-	started bool
-	cursor  int64
-	jobs    map[string]string
+	keyMu       sync.Mutex
+	started     bool
+	alertsReady bool
+	cursor      int64
+	jobs        map[string]string
 	// notified remembers messages already announced while they are fresh, so
 	// a later edit or reaction to one does not announce it again.
 	notified  map[string]time.Time
@@ -194,8 +195,18 @@ func (n *Service) Tick(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	first := !n.started
-	if first {
+	if len(subs) == 0 {
+		if n.cursor, err = n.Store.LatestMessageChange(); err != nil {
+			return err
+		}
+		n.started = true
+		n.alertsReady = false
+		clear(n.jobs)
+		clear(n.notified)
+		n.connection(ctx, nil)
+		return nil
+	}
+	if !n.started {
 		if n.cursor, err = n.Store.LatestMessageChange(); err != nil {
 			return err
 		}
@@ -204,9 +215,10 @@ func (n *Service) Tick(ctx context.Context) error {
 	if err = n.messages(ctx, subs); err != nil {
 		return err
 	}
-	if err = n.alerts(ctx, subs, first); err != nil {
+	if err = n.alerts(ctx, subs, !n.alertsReady); err != nil {
 		return err
 	}
+	n.alertsReady = true
 	n.connection(ctx, subs)
 	return nil
 }

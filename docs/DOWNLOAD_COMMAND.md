@@ -37,10 +37,13 @@ hand, listening only on its Tailscale address:
 ```
 
 `-Root` holds `research\rednote_downloader` and `research\.oss-venv`; `ffmpeg` and
-`ffprobe` with `h264_nvenc` must be on PATH. The script finds the PC's Tailscale
-address, creates a token file under `%LOCALAPPDATA%\SmsBot` (never printed) and
-keeps files under `Downloads\smsbot`. The worker refuses any address that isn't
-loopback or Tailscale.
+`ffprobe` with `h264_nvenc` must be on PATH. The script waits up to 30 seconds for
+the PC's Tailscale address to be assigned to an active local interface, creates a
+token file under `%LOCALAPPDATA%\SmsBot` (never printed) and keeps files under
+`Downloads\smsbot`. The worker refuses any address that isn't `127.0.0.1` or a
+Tailscale `100.64.0.0/10` address, and binds exclusively before touching `.scratch`
+so a second instance on the same address and port fails fast without disturbing a
+running worker.
 
 To start the Windows worker automatically when you sign in, without admin rights:
 
@@ -49,21 +52,29 @@ To start the Windows worker automatically when you sign in, without admin rights
 ```
 
 `-Install` registers and starts a per-user Scheduled Task named `SmsBot worker`
-that runs hidden at your logon, restarts a few times on failure, and has no
-execution time limit. Any `-Root`, `-OutputRoot`, `-TokenFile`, `-Bind`, `-Port`,
-`-Slots`, or `-KeepDays` flags are saved on the task; omitting `-Bind` keeps
-resolving the PC's Tailscale address at each start rather than baking an old
-address in. To stop and remove the task:
+that runs hidden at your logon with `-WaitForTailscale`, waiting with backoff until
+Wi-Fi and Tailscale are ready (and waiting again if the address isn't available
+yet), ignoring overlapping task launches, and running with no execution time limit.
+If the worker exits after running for at least a minute, the task restarts it with
+the same backoff; a worker that fails right away (a bad token file, a port already
+in use) stops the task so the problem shows. Task Scheduler's own restart setting
+is not used: it never fires when a script exits with an error.
+Any `-Root`, `-OutputRoot`, `-TokenFile`, `-Bind`, `-Port`, `-Slots`, or `-KeepDays`
+flags are saved on the task; omitting `-Bind` keeps resolving the PC's Tailscale
+address at each start rather than baking an old address in. Re-running `-Install`
+or running `-Uninstall` stops both the scheduled task and the worker process it
+started:
 
 ```powershell
 .\scripts\start-worker.ps1 -Uninstall
 ```
 
 Pass `-KeepDays N` (or `--keep-days N` directly to `download-worker.py`) to
-delete terminal job folders (`complete`, `failed`, or `expired`) under the
-output root whose `state.json` was modified or whose deadline passed more than
-`N` days ago. Cleanup runs at startup and hourly, and never touches active or
-non-terminal jobs. It is off by default so originals stay until you opt in.
+delete terminal job folders (`complete`, `failed`, `expired`, or `cancelled`) and
+past-deadline orphaned folders under the output root whose `state.json` was
+modified or whose deadline passed more than `N` days ago. Cleanup runs at startup
+and hourly, and never touches active jobs or non-terminal jobs whose deadline has
+not passed. It is off by default so originals stay until you opt in.
 
 To use it, open **Settings > Workers** on the dashboard, add the worker with its
 Tailscale address (`http://<100.x address>:8767/download`) and paste the contents of
@@ -186,8 +197,8 @@ of an earlier job of the same bot job (`scope`) on the same worker:
 ```
 
 Polls answer the stage (`queued`, a task's own progress stage such as
-`compressing`, then `complete`, `failed` or `expired`). A complete job also
-returns its outputs, and a failed one a short `code`:
+`compressing`, then `complete`, `failed`, `expired`, or `cancelled`). A complete
+job also returns its outputs, and a failed one a short `code`:
 
 ```json
 {"stage":"complete","protocol":4,"outputs":{"video":{"type":"video","handle":"<job>/video","size":18734211}}}
@@ -257,11 +268,16 @@ checkpoints are under the job ID directory. The token is outside source. Job
 folders written by older, encrypting workers (`*.enc` files) are no longer read;
 a poll for such a job starts it again, and the old folders can be deleted.
 
-Every poll renews a 300-second preparation lease. If the bot pauses, cancels, loses
-consent, or stops polling, the lease expires and stops running preparation.
+Every poll renews a 300-second preparation lease. When a bot job ends before
+worker preparation finishes (cancelled, paused, unenrolled, expired, or failed a
+check), SmsBot sends `POST /download/scopes/<scope>/cancel` to configured workers
+so active preparation stops within a second, marks the task `cancelled`, and frees
+the worker slot; if a worker is unreachable or the bot disappears, the 300-second
+lease expires and stops running preparation.
 Subprocesses are also stopped at the absolute deadline, or after 120 seconds
-without file growth or advancing encoder frames/media time. Stalled preparation
-fails; only lost leases leave resumable work. There is no promise that an upstream
+without file growth or advancing encoder frames/media time (300 seconds for a
+download, which writes nothing while the page opens and the video is found). Stalled preparation
+fails; only lost leases on uncancelled scopes leave resumable work. There is no promise that an upstream
 site's own network timeout or failure will disappear.
 
 **SmsBot restart still starts paused and cancels unsent jobs.** Retained worker
@@ -272,6 +288,13 @@ Uncertain sends are never retried automatically.
 
 `download_worker_unavailable` means the helper is not configured;
 `download_failed` means preparation failed or returned an invalid/oversized file.
+A failed task keeps its specific code, which Activity shows in words:
+`single_video_required` (the link is not one video, for example a photo
+gallery), `unsupported_platform`, `video_too_long`, `size_limit`,
+`audio_missing`, `video_required`, `invalid_duration`, `duration_changed`,
+`progress_stalled` (no data for too long) and `process_failed` (the download or
+encoder program failed). A worker that is full answers 503 so the bot waits; a
+wrong token answers 401.
 Worker responses never contain raw upstream errors, file titles or credentials.
 
 ## Helper protocol
@@ -279,7 +302,8 @@ Worker responses never contain raw upstream errors, file titles or credentials.
 Upgrade the bot and the worker together. The worker accepts protocol 4 only.
 Anything else, including the old synchronous `POST /download`, is refused.
 Keep the bot endpoint flag ending in `/download`; the client appends
-`/jobs/<task job ID>` and `/jobs/<task job ID>/files/<name>`.
+`/jobs/<task job ID>`, `/jobs/<task job ID>/files/<name>`, and
+`/scopes/<bot job ID>/cancel`.
 
 Responses use `Cache-Control: no-store`. Authentication failures return 401;
 invalid input and preparation failures use sanitized responses. Temporary

@@ -88,6 +88,8 @@ func (e *Engine) pollWorkerStep(ctx context.Context, j store.Job, p *store.Plan,
 	}
 	workctx, cancel := context.WithTimeout(ctx, max(time.Duration(0), deadline.Sub(e.now())))
 	e.pending[j.ID] = cancel
+	e.videoChecked = ""
+	e.workerUnlocked = true
 	e.mu.Unlock()
 	requestctx, requestcancel := context.WithTimeout(workctx, 10*time.Second)
 	stage, workerr := poll(requestctx, deadline)
@@ -97,6 +99,8 @@ func (e *Engine) pollWorkerStep(ctx context.Context, j store.Job, p *store.Plan,
 	delete(e.pending, j.ID)
 	current, loaderr := e.Store.Job(j.ID)
 	if current.State != "" && current.State != "generating" {
+		_ = e.Store.RecordInterruptedWorkerPoll(j.ID)
+		e.nudgeWorkerCancel()
 		return false, "", nil
 	}
 	if loaderr != nil {
@@ -135,14 +139,14 @@ func (e *Engine) finishWorkerStep(j store.Job) (bool, error) {
 }
 
 // sendableVideoStep turns the worker's verified MP4 into the reply's attachment,
-// after the job passes every check again.
+// after checking limits and live sendability. A transient lookup failure lets
+// the step save its output; prepareDownloadUpload gates the upload on a live check.
 func (e *Engine) sendableVideoStep(ctx context.Context, j store.Job, p *store.Plan, subTool bool, data []byte, limit int64) (*media.File, string, bool, error) {
 	settings, err := e.Collection.Settings()
 	if err != nil {
 		return nil, "", true, err
 	}
 	subFail := func(code string) (*media.File, string, bool, error) {
-		_ = e.Store.DeferWork(j.ID, "", 0)
 		_, terr := e.Store.Transition(j.ID, "generating", "queued")
 		return nil, code, false, terr
 	}
@@ -159,14 +163,12 @@ func (e *Engine) sendableVideoStep(ctx context.Context, j store.Job, p *store.Pl
 		}
 		return nil, "", true, e.Store.Complete(j.ID, "failed", "download_attachment_invalid")
 	}
+	e.videoChecked = ""
 	_, code, err := e.check(ctx, j, *p, liveLookup)
-	if err != nil {
-		if errors.Is(err, transport.ErrLookupFailed) {
-			_ = e.Store.Complete(j.ID, "failed", "final_check_failed")
-		}
+	if err != nil && !errors.Is(err, transport.ErrLookupFailed) {
 		return nil, "", true, err
 	}
-	if code != "" && (!subTool || code != "approval_required") {
+	if err == nil && code != "" && (!subTool || code != "approval_required") {
 		// As before the split: a video that finished after its job stopped
 		// being sendable is cancelled with the reason code.
 		return nil, "", true, e.Store.Complete(j.ID, "cancelled", code)
@@ -176,6 +178,10 @@ func (e *Engine) sendableVideoStep(ctx context.Context, j store.Job, p *store.Pl
 			return subFail("attachment_limits_changed")
 		}
 		return nil, "", true, e.Store.Complete(j.ID, "cancelled", "attachment_limits_changed")
+	}
+	if err == nil {
+		e.videoChecked = j.ID
+		e.workerUnlocked = false
 	}
 	return &files[0], "", false, nil
 }
@@ -211,6 +217,23 @@ func (e *Engine) prepareDownloadUpload(ctx context.Context, j store.Job, p *stor
 	if len(e.downloadUploads) > 0 {
 		return true, e.Store.DeferWork(j.ID, "waiting_upload", time.Now().Add(e.workerPollDelay()).UnixMilli())
 	}
+	if e.videoChecked != j.ID {
+		_, code, err := e.check(ctx, j, *p, liveLookup)
+		if err != nil {
+			if errors.Is(err, transport.ErrLookupFailed) {
+				e.backoffPreflight(j.ID)
+			}
+			return true, err
+		}
+		if code != "" {
+			state := "cancelled"
+			if code == "stale" || code == "execution_expired" {
+				state = "expired"
+			}
+			return true, e.Store.Complete(j.ID, state, code)
+		}
+	}
+	e.videoChecked = ""
 	preparer, ok := e.Transport.(transport.FilePreparer)
 	if !ok {
 		return true, e.Store.Complete(j.ID, "failed", "attachments_unavailable")
@@ -244,6 +267,7 @@ func (e *Engine) prepareDownloadUpload(ctx context.Context, j store.Job, p *stor
 // Caller holds the control lock. A cancelled job's result is discarded; no
 // background goroutine can submit a message or change an immutable plan.
 func (e *Engine) collectDownloadUploads(ctx context.Context) error {
+	var lookupErr error
 	for id, upload := range e.downloadUploads {
 		select {
 		case result := <-upload.result:
@@ -263,16 +287,13 @@ func (e *Engine) collectDownloadUploads(ctx context.Context) error {
 				}
 				continue
 			}
-			_, code, err := e.check(ctx, j, p, liveLookup)
-			if err != nil {
-				if errors.Is(err, transport.ErrLookupFailed) {
-					_ = e.Store.Complete(id, "cancelled", "attachment_final_check_failed")
-				}
-				return err
+			_, code, checkErr := e.check(ctx, j, p, liveLookup)
+			if checkErr != nil && !errors.Is(checkErr, transport.ErrLookupFailed) {
+				return checkErr
 			}
-			if code != "" {
+			if checkErr == nil && code != "" {
 				state := "cancelled"
-				if code == "execution_expired" {
+				if code == "stale" || code == "execution_expired" {
 					state = "expired"
 				}
 				if err = e.Store.Complete(id, state, code); err != nil {
@@ -291,8 +312,72 @@ func (e *Engine) collectDownloadUploads(ctx context.Context) error {
 			if _, err = e.Store.Transition(id, "generating", "queued"); err != nil {
 				return err
 			}
+			if checkErr != nil {
+				e.backoffPreflight(id)
+				lookupErr = checkErr
+			}
 		default:
 		}
 	}
-	return nil
+	return lookupErr
+}
+
+type scopeCanceller interface {
+	CancelScope(ctx context.Context, scope string) bool
+}
+
+func (e *Engine) workerCancelInterval() time.Duration {
+	if e.WorkerCancelInterval > 0 {
+		return e.WorkerCancelInterval
+	}
+	if e.WorkerPollDelay > 0 && e.WorkerPollDelay < time.Second {
+		return 3 * e.WorkerPollDelay
+	}
+	return 3 * time.Second
+}
+
+func (e *Engine) nudgeWorkerCancel() {
+	select {
+	case e.cancelNudge <- struct{}{}:
+	default:
+	}
+}
+
+func (e *Engine) runWorkerCancelSweep(ctx context.Context) {
+	e.sweepWorkerCancels(ctx)
+	ticker := time.NewTicker(e.workerCancelInterval())
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			e.sweepWorkerCancels(ctx)
+		case <-e.cancelNudge:
+			e.sweepWorkerCancels(ctx)
+		}
+	}
+}
+
+func (e *Engine) sweepWorkerCancels(ctx context.Context) {
+	canceller, ok := e.Tasks.(scopeCanceller)
+	if !ok || canceller == nil {
+		return
+	}
+	now := time.Now()
+	if e.now != nil {
+		now = e.now()
+	}
+	ids, err := e.Store.PendingWorkerCancels(now)
+	if err != nil || len(ids) == 0 {
+		return
+	}
+	for _, id := range ids {
+		if ctx.Err() != nil {
+			return
+		}
+		if canceller.CancelScope(ctx, id) {
+			_ = e.Store.MarkWorkerCancelSent(id)
+		}
+	}
 }

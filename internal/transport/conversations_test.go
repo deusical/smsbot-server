@@ -140,3 +140,33 @@ func TestVerifySendTargetChecksAcceptedOutgoingIdentityAndLegacyBaseline(t *test
 		t.Fatalf("fixture rejected legacy plan without snapshot: %v", err)
 	}
 }
+
+func TestLookupConversationIDMismatchReturnsTypedIneligibleError(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name string
+		conv *gmproto.Conversation
+	}{
+		{"different_id", individual("other-chat")},
+		{"empty_id", individual("")},
+		{"nil_record", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			g := NewGoogle(nil, "")
+			g.ready.Store(true)
+			g.connected = func() bool { return true }
+			g.getConversation = func(context.Context, string) (*gmproto.Conversation, error) {
+				return tc.conv, nil
+			}
+			_, err := g.LookupConversation(ctx, "chat-1")
+			if !errors.Is(err, ErrIneligibleConversation) || errors.Is(err, ErrLookupFailed) || errors.Is(err, ErrUnavailable) {
+				t.Fatalf("%s returned %v, want ErrIneligibleConversation", tc.name, err)
+			}
+			if len(g.conversations) != 0 {
+				t.Fatalf("%s cached mismatched conversation baseline: %+v", tc.name, g.conversations)
+			}
+		})
+	}
+}

@@ -48,9 +48,13 @@ func New(s *store.Store, t transport.Transport, archiveRoot string) *Service {
 	e := bot.New(s, t, c, control)
 	c.History = history.New(s, c.HistoryHost())
 	c.Archive = archive.New(s, archiveRoot, c.FileHost())
-	// A finished connection outage wakes history at once to catch up.
+	// A finished connection outage clears file-authorization cooldowns and wakes
+	// history at once to catch up.
 	if g, ok := t.(*transport.Google); ok {
-		g.Reconnected = c.History.Wake
+		g.Reconnected = func() {
+			c.Reconnected()
+			c.History.Wake()
+		}
 	}
 	// Cross-service reactions are explicit here rather than discovered.
 	c.SettingsSaved = e.CollectionSettingsSaved
@@ -75,6 +79,7 @@ func (a *Service) Accelerate(factor int) {
 	a.Collection.GapRecheck = 3 * time.Second / f
 	a.Notify.Interval /= f
 	a.Engine.WorkerPollDelay = time.Second / f
+	a.Engine.WorkerCancelInterval = 3 * time.Second / f
 }
 
 // Init runs one-time startup work in order: collection publishes consent and

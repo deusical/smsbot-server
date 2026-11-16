@@ -48,6 +48,10 @@ type FileRepairer interface {
 	Repair(context.Context, transport.Conversation, string, media.File) (bool, error)
 }
 type Service struct {
+	focusMu     sync.Mutex
+	focusedConv string
+	focusedAt   time.Time
+	focusSeeded bool
 	focusKey    string
 	focusCursor string
 	focusRound  int
@@ -61,7 +65,9 @@ type Service struct {
 	cursor      string
 	// Interval spaces background ticks; zero means every 3 seconds.
 	Interval     time.Duration
+	Now          func() time.Time
 	lastGC       time.Time
+	gcDeletions  uint64
 	nextScan     time.Time
 	idleSequence int64
 	scanPolicy   Policy
@@ -123,15 +129,26 @@ func (s *Service) Run(ctx context.Context) {
 		}
 	}
 }
+func (s *Service) now() time.Time {
+	if s.Now != nil {
+		return s.Now()
+	}
+	return time.Now()
+}
+
 func (s *Service) Tick(ctx context.Context) {
 	s.tick.Lock()
 	defer s.tick.Unlock()
 	if ctx.Err() != nil {
 		return
 	}
-	if time.Since(s.lastGC) > time.Minute {
-		_ = s.Collect(ctx)
-		s.lastGC = time.Now()
+	now := s.now()
+	deletions := s.Store.MessageDeletionSequence()
+	if s.lastGC.IsZero() || now.Sub(s.lastGC) >= time.Hour || deletions != s.gcDeletions {
+		if s.Collect(ctx) == nil {
+			s.gcDeletions = deletions
+		}
+		s.lastGC = s.now()
 	}
 	policy, err := s.Policy()
 	if err != nil || !policy.Enabled || s.Host == nil {
@@ -152,7 +169,7 @@ func (s *Service) Tick(ctx context.Context) {
 		focused[r.Message] = true
 	}
 	records := focus
-	if !(time.Now().Before(s.nextScan) && policy == s.scanPolicy && sequence == s.idleSequence) {
+	if !(s.now().Before(s.nextScan) && policy == s.scanPolicy && sequence == s.idleSequence) {
 		s.scanPolicy = policy
 		batch, err := s.Store.AttachmentBatch(ctx, s.cursor, 20)
 		if err != nil {
@@ -161,7 +178,7 @@ func (s *Service) Tick(ctx context.Context) {
 		if len(batch) == 0 {
 			s.cursor = ""
 			s.idleSequence = sequence
-			s.nextScan = time.Now().Add(time.Minute)
+			s.nextScan = s.now().Add(time.Minute)
 		} else {
 			s.nextScan = time.Time{}
 		}
@@ -191,7 +208,7 @@ func (s *Service) Tick(ctx context.Context) {
 			}
 			// Repair can authorize or refresh against the phone, so local
 			// eligibility comes first.
-			allowed, err := s.phoneWorkAllowed(file, time.Now(), policy, &used)
+			allowed, err := s.phoneWorkAllowed(file, s.now(), policy, &used)
 			if err != nil {
 				return
 			}
@@ -220,24 +237,56 @@ func (s *Service) Tick(ctx context.Context) {
 	}
 }
 
+// NoteFocus records in memory that conv was focused at at, so idle ticks skip
+// decrypting every conversation archive when nothing was viewed recently.
+func (s *Service) NoteFocus(conv string, at time.Time) {
+	if conv == "" || at.IsZero() {
+		return
+	}
+	s.focusMu.Lock()
+	if at.After(s.focusedAt) {
+		s.focusedConv = conv
+		s.focusedAt = at
+	}
+	s.focusMu.Unlock()
+}
+
+func (s *Service) hasRecentFocus(now time.Time) bool {
+	s.focusMu.Lock()
+	at := s.focusedAt
+	s.focusMu.Unlock()
+	if storeAt := s.Store.LastArchiveFocus(); storeAt.After(at) {
+		at = storeAt
+	}
+	return !at.IsZero() && now.Sub(at) < 2*time.Minute
+}
+
 func (s *Service) focusBatch(ctx context.Context) ([]store.AttachmentRecord, error) {
 	s.focusRound++
 	// Reserve every third turn for the background sweep.
 	if s.focusRound%3 == 0 {
 		return nil, nil
 	}
+	now := s.now()
+	if s.focusSeeded && !s.hasRecentFocus(now) {
+		return nil, nil
+	}
 	archives, err := s.Store.Archives()
 	if err != nil {
 		return nil, err
 	}
+	s.focusSeeded = true
 	var focus store.Archive
 	var focusedAt time.Time
 	for _, a := range archives {
 		at, err := time.Parse(time.RFC3339Nano, a.FocusAt)
-		if err == nil && time.Since(at) < 2*time.Minute && a.RefreshSince != "" && a.RefreshUntil != "" && at.After(focusedAt) {
+		if err == nil && now.Sub(at) < 2*time.Minute && a.RefreshSince != "" && a.RefreshUntil != "" && at.After(focusedAt) {
 			focus = a
 			focusedAt = at
 		}
+	}
+	if !focusedAt.IsZero() {
+		s.NoteFocus(focus.Conversation.ID, focusedAt)
 	}
 	if focus.Conversation.ID == "" {
 		return nil, nil

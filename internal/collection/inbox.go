@@ -73,6 +73,7 @@ func (svc *Service) SetSettings(ctx context.Context, s Settings) error {
 		svc.SettingsSaved(s)
 	}
 	svc.publishConsent(s)
+	svc.fileAuth.clear()
 	if s.Enabled && svc.History != nil {
 		if collectsMore(current, s) {
 			// Find the newly chosen conversations now rather than at the next

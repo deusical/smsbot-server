@@ -5,6 +5,7 @@ package transport
 // lookup; sends, captures and history reads still verify identity live.
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"sort"
@@ -137,31 +138,47 @@ func listConversation(c *gmproto.Conversation) Conversation {
 	}, c)
 }
 
+// LookupConversation asks the phone for one conversation whenever the paired
+// session is up, even during a brief message-stream rollover: GetConversation
+// is an independent HTTP RPC and fetchConversation already retries once after
+// lookupRetryPause, while Google.Run owns sustained stream-drop detection.
 func (g *Google) LookupConversation(ctx context.Context, id string) (Conversation, error) {
-	if !g.Ready() {
+	if !g.SessionUp() {
 		return Conversation{}, ErrUnavailable
 	}
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	g.countPhone(ctx, phoneLookup)
-	c, err := fetchConversation(ctx, id, lookupRetryPause, g.client.GetConversation)
+	c, err := fetchConversation(ctx, id, cmp.Or(g.lookupPause, lookupRetryPause), g.conversationGetter())
 	if err != nil {
 		if !errors.Is(err, context.Canceled) {
-			if reason, hard, offline := lookupFailure(err, g.client.IsConnected()); offline {
+			if reason, hard, offline := lookupFailure(err); offline {
 				g.noteFailure(reason, hard)
 			}
 			g.diagnose("conversation_lookup", err)
 		}
-		if !g.Ready() {
+		if !g.SessionUp() {
 			return Conversation{}, ErrUnavailable
 		}
 		return Conversation{}, ErrLookupFailed
 	}
-	if c.GetConversationID() != id {
-		return Conversation{}, errors.New("ineligible_conversation")
+	if c == nil || c.GetConversationID() != id {
+		return Conversation{}, ErrIneligibleConversation
 	}
 	g.cacheDetail(c)
 	return detailConversation(id, c), nil
+}
+
+func (g *Google) conversationGetter() func(context.Context, string) (*gmproto.Conversation, error) {
+	if g.getConversation != nil {
+		return g.getConversation
+	}
+	if g.client == nil {
+		return func(context.Context, string) (*gmproto.Conversation, error) {
+			return nil, errors.New("client_uninitialized")
+		}
+	}
+	return g.client.GetConversation
 }
 
 // CachedConversation projects the last phone record seen for id, from a

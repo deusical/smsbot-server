@@ -624,3 +624,764 @@ func TestOutgoingIdentityChangedAfterAcceptanceRefusedAtSend(t *testing.T) {
 		}
 	})
 }
+
+type videoLookupTransport struct {
+	*cachedConversationTransport
+	failChatLive  atomic.Bool
+	failRemaining atomic.Int32
+	failAtCall    atomic.Int32
+	chatCalls     atomic.Int32
+	uploads       atomic.Int32
+	onTransient   func()
+	uploadFn      func(context.Context, []media.File) ([]media.File, error)
+}
+
+func (v *videoLookupTransport) LookupConversation(ctx context.Context, id string) (transport.Conversation, error) {
+	if id == "demo-chat" {
+		call := v.chatCalls.Add(1)
+		if target := v.failAtCall.Load(); target > 0 && call >= target {
+			v.liveLookups.Add(1)
+			return transport.Conversation{}, transport.ErrLookupFailed
+		}
+		if rem := v.failRemaining.Load(); rem > 0 && v.failRemaining.CompareAndSwap(rem, rem-1) {
+			v.liveLookups.Add(1)
+			if v.onTransient != nil {
+				v.onTransient()
+			}
+			return transport.Conversation{}, transport.ErrLookupFailed
+		}
+		if v.failChatLive.Load() {
+			v.liveLookups.Add(1)
+			return transport.Conversation{}, transport.ErrLookupFailed
+		}
+	}
+	return v.cachedConversationTransport.LookupConversation(ctx, id)
+}
+
+func (v *videoLookupTransport) PrepareFiles(ctx context.Context, files []media.File) ([]media.File, error) {
+	v.uploads.Add(1)
+	if v.uploadFn != nil {
+		return v.uploadFn(ctx, files)
+	}
+	return v.Fixture.PrepareFiles(ctx, files)
+}
+
+func jobRecord(t *testing.T, e *Engine, id string) store.Job {
+	t.Helper()
+	jobs, err := e.Store.Jobs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, j := range jobs {
+		if j.ID == id {
+			return j
+		}
+	}
+	t.Fatalf("job %s not found", id)
+	return store.Job{}
+}
+
+func setupVideoLookupTest(t *testing.T) (*Engine, *transport.Fixture, *videoLookupTransport, *multiHoldTasks, func(time.Duration)) {
+	t.Helper()
+	e, f := setup(t)
+	arm(t, e)
+	tr := &videoLookupTransport{cachedConversationTransport: &cachedConversationTransport{Fixture: f, cache: map[string]transport.Conversation{}}}
+	useTransport(e, tr)
+	cfg := DefaultConfiguration()
+	cfg.Commands = []Command{{Name: "download", Type: "download", Enabled: true}}
+	if err := e.SetConfiguration(cfg); err != nil {
+		t.Fatal(err)
+	}
+	tasks := &multiHoldTasks{holdsRemaining: 1}
+	e.Tasks = tasks
+	var clockMu sync.Mutex
+	now := time.Now()
+	e.now = func() time.Time { clockMu.Lock(); defer clockMu.Unlock(); return now }
+	advance := func(d time.Duration) { clockMu.Lock(); now = now.Add(d); clockMu.Unlock() }
+	t.Cleanup(func() { _ = e.Pause(true); e.downloadWG.Wait() })
+	return e, f, tr, tasks, advance
+}
+
+func TestVideoTransientLookupFailuresRetryWithoutLosingWork(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	t.Run("healthy_sendable_video_avoids_duplicate_pre_upload_lookup", func(t *testing.T) {
+		e, f, tr, tasks, _ := setupVideoLookupTest(t)
+		m := incoming()
+		m.Text = "!download https://v.douyin.com/synthetic/"
+		m.At = e.now()
+		if ok, err := e.Accept(ctx, m); !ok || err != nil {
+			t.Fatal("accept", ok, err)
+		}
+		id := store.Hash(m.ConversationID + "\x00" + m.ID)
+		if err := e.Dispatch(ctx); err != nil || tasks.polls != 1 {
+			t.Fatalf("first poll: err=%v polls=%d", err, tasks.polls)
+		}
+		if _, err := e.Store.DB.Exec("UPDATE job_work SET next_poll=0"); err != nil {
+			t.Fatal(err)
+		}
+		before := tr.liveLookups.Load()
+		if err := e.Dispatch(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if got := tr.liveLookups.Load() - before; got != 1 {
+			t.Fatalf("live lookups across sendableVideo+prepareDownloadUpload = %d, want 1", got)
+		}
+		finishDownloadUploads(t, e)
+		if stateOf(t, e, id) != "submitted" || len(f.Sent) != 1 || tr.uploads.Load() != 1 {
+			t.Fatalf("state=%s sent=%d uploads=%d", stateOf(t, e, id), len(f.Sent), tr.uploads.Load())
+		}
+	})
+
+	t.Run("sendable_video_and_pre_upload_fail_then_recover", func(t *testing.T) {
+		e, f, tr, tasks, advance := setupVideoLookupTest(t)
+		m := incoming()
+		m.Text = "!download https://v.douyin.com/synthetic/"
+		m.At = e.now()
+		if ok, err := e.Accept(ctx, m); !ok || err != nil {
+			t.Fatal("accept", ok, err)
+		}
+		id := store.Hash(m.ConversationID + "\x00" + m.ID)
+		if err := e.Dispatch(ctx); err != nil || tasks.polls != 1 {
+			t.Fatalf("first poll: err=%v polls=%d", err, tasks.polls)
+		}
+		if _, err := e.Store.DB.Exec("UPDATE job_work SET next_poll=0"); err != nil {
+			t.Fatal(err)
+		}
+
+		// Fail live lookups when compress finishes: sendableVideo saves the step
+		// output and prepareDownloadUpload gates the upload with backoff.
+		tr.failChatLive.Store(true)
+		err := e.Dispatch(ctx)
+		if !errors.Is(err, transport.ErrLookupFailed) {
+			t.Fatalf("dispatch err = %v, want ErrLookupFailed", err)
+		}
+		if got := stateOf(t, e, id); got != "queued" {
+			t.Fatalf("state = %s, want queued", got)
+		}
+		if tr.uploads.Load() != 0 || len(e.downloadUploads) != 0 || len(f.Sent) != 0 {
+			t.Fatalf("upload or send started while lookup failing: uploads=%d active=%d sent=%d", tr.uploads.Load(), len(e.downloadUploads), len(f.Sent))
+		}
+		_, savedPlan, err := e.Store.JobPlan(id)
+		if err != nil || len(savedPlan.Attachments) != 1 || pollsWorker(savedPlan) || savedPlan.FilesUploaded {
+			t.Fatalf("plan not saved coherently: err=%v attachments=%d pollsWorker=%t uploaded=%t", err, len(savedPlan.Attachments), pollsWorker(savedPlan), savedPlan.FilesUploaded)
+		}
+
+		// Backoff stops hot-looping before 1s elapses.
+		beforeBackoff := tr.liveLookups.Load()
+		for range 10 {
+			if derr := e.Dispatch(ctx); derr != nil {
+				t.Fatalf("expected quiet backoff, got %v", derr)
+			}
+		}
+		if tr.liveLookups.Load() != beforeBackoff || tr.uploads.Load() != 0 {
+			t.Fatalf("hot-looped during backoff: lookups=%d->%d uploads=%d", beforeBackoff, tr.liveLookups.Load(), tr.uploads.Load())
+		}
+
+		// Still failing after 1s: still no upload, job stays queued.
+		advance(time.Second)
+		if derr := e.Dispatch(ctx); !errors.Is(derr, transport.ErrLookupFailed) || tr.uploads.Load() != 0 || stateOf(t, e, id) != "queued" {
+			t.Fatalf("retry while still failing: err=%v uploads=%d state=%s", derr, tr.uploads.Load(), stateOf(t, e, id))
+		}
+
+		// Recover lookup: upload starts without re-running worker compression, then sends.
+		tr.failChatLive.Store(false)
+		advance(5 * time.Second)
+		if err := e.Dispatch(ctx); err != nil {
+			t.Fatal(err)
+		}
+		finishDownloadUploads(t, e)
+		if tasks.polls != 2 || tr.uploads.Load() != 1 {
+			t.Fatalf("worker re-polled or upload missing: polls=%d uploads=%d", tasks.polls, tr.uploads.Load())
+		}
+		if stateOf(t, e, id) != "submitted" || len(f.Sent) != 1 {
+			t.Fatalf("did not recover to submitted: state=%s sent=%d", stateOf(t, e, id), len(f.Sent))
+		}
+	})
+
+	t.Run("sendable_video_single_blip_recovers_at_pre_upload", func(t *testing.T) {
+		e, f, tr, tasks, _ := setupVideoLookupTest(t)
+		m := incoming()
+		m.Text = "!download https://v.douyin.com/synthetic/"
+		m.At = e.now()
+		if ok, err := e.Accept(ctx, m); !ok || err != nil {
+			t.Fatal("accept", ok, err)
+		}
+		id := store.Hash(m.ConversationID + "\x00" + m.ID)
+		if err := e.Dispatch(ctx); err != nil || tasks.polls != 1 {
+			t.Fatalf("first poll: err=%v polls=%d", err, tasks.polls)
+		}
+		if _, err := e.Store.DB.Exec("UPDATE job_work SET next_poll=0"); err != nil {
+			t.Fatal(err)
+		}
+		// Fail only sendableVideo's single lookup; prepareDownloadUpload's live check passes.
+		tr.failRemaining.Store(1)
+		if err := e.Dispatch(ctx); err != nil {
+			t.Fatalf("single blip failed dispatch: %v", err)
+		}
+		finishDownloadUploads(t, e)
+		if stateOf(t, e, id) != "submitted" || len(f.Sent) != 1 || tr.uploads.Load() != 1 {
+			t.Fatalf("state=%s sent=%d uploads=%d", stateOf(t, e, id), len(f.Sent), tr.uploads.Load())
+		}
+	})
+
+	t.Run("pre_upload_check_after_waiting_upload_backs_off_then_recovers", func(t *testing.T) {
+		e, f, tr, _, advance := setupVideoLookupTest(t)
+		if err := e.Store.Enroll("demo-sms", "demo-sms-peer"); err != nil {
+			t.Fatal(err)
+		}
+		e.Tasks = &scriptTasks{fn: func(context.Context, string, int64) ([]byte, error) { return []byte("synthetic-video"), nil }}
+		enteredFirst, releaseFirst := make(chan struct{}), make(chan struct{})
+		var smsUploads, chatUploads atomic.Int32
+		tr.uploadFn = func(ctx context.Context, files []media.File) ([]media.File, error) {
+			if smsUploads.Add(1) == 1 {
+				close(enteredFirst)
+				<-releaseFirst
+				return f.PrepareFiles(ctx, files)
+			}
+			chatUploads.Add(1)
+			return f.PrepareFiles(ctx, files)
+		}
+
+		// Job 1 in demo-sms occupies the single upload lane.
+		m1 := transport.Incoming{ID: "dl-sms", ConversationID: "demo-sms", ParticipantID: "demo-sms-peer", Text: "!download https://v.douyin.com/synthetic/", At: e.now()}
+		if ok, err := e.Accept(ctx, m1); !ok || err != nil {
+			t.Fatal("accept m1", ok, err)
+		}
+		if err := e.Dispatch(ctx); err != nil {
+			t.Fatal(err)
+		}
+		<-enteredFirst
+
+		// Job 2 in demo-chat finishes sendableVideo cleanly and defers as waiting_upload.
+		m2 := incoming()
+		m2.ID, m2.Text, m2.At = "dl-chat", "!download https://v.douyin.com/synthetic/", e.now()
+		if ok, err := e.Accept(ctx, m2); !ok || err != nil {
+			t.Fatal("accept m2", ok, err)
+		}
+		id2 := store.Hash(m2.ConversationID + "\x00" + m2.ID)
+		if err := e.Dispatch(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if stateOf(t, e, id2) != "queued" || chatUploads.Load() != 0 {
+			t.Fatalf("m2 not waiting_upload: state=%s chatUploads=%d", stateOf(t, e, id2), chatUploads.Load())
+		}
+
+		// Finish Job 1 so the upload lane is free.
+		close(releaseFirst)
+		finishDownloadUploads(t, e)
+		if len(f.Sent) != 1 {
+			t.Fatalf("m1 not sent: %d", len(f.Sent))
+		}
+		if _, err := e.Store.DB.Exec("UPDATE job_work SET next_poll=0"); err != nil {
+			t.Fatal(err)
+		}
+
+		// On Job 2's next Dispatch, let nextReady pass its live lookup and fail
+		// specifically at prepareDownloadUpload's live check (and subsequent checks).
+		tr.failAtCall.Store(tr.chatCalls.Load() + 2)
+		err := e.Dispatch(ctx)
+		if !errors.Is(err, transport.ErrLookupFailed) {
+			t.Fatalf("pre-upload check err = %v, want ErrLookupFailed", err)
+		}
+		if stateOf(t, e, id2) != "queued" || chatUploads.Load() != 0 || len(e.downloadUploads) != 0 {
+			t.Fatalf("upload started despite failing pre-upload check: state=%s chatUploads=%d active=%d", stateOf(t, e, id2), chatUploads.Load(), len(e.downloadUploads))
+		}
+
+		// Backoff blocks immediate retry without new lookups.
+		callsBefore := tr.chatCalls.Load()
+		if derr := e.Dispatch(ctx); derr != nil || tr.chatCalls.Load() != callsBefore {
+			t.Fatalf("pre-upload backoff failed: err=%v calls=%d->%d", derr, callsBefore, tr.chatCalls.Load())
+		}
+
+		// Recover lookup and advance past backoff: Job 2 uploads and sends.
+		tr.failAtCall.Store(0)
+		advance(2 * time.Second)
+		if err := e.Dispatch(ctx); err != nil {
+			t.Fatal(err)
+		}
+		finishDownloadUploads(t, e)
+		if stateOf(t, e, id2) != "submitted" || chatUploads.Load() != 1 || len(f.Sent) != 2 {
+			t.Fatalf("m2 did not recover: state=%s chatUploads=%d sent=%d", stateOf(t, e, id2), chatUploads.Load(), len(f.Sent))
+		}
+	})
+
+	t.Run("post_upload_collect_fails_then_recovers_without_reuploading", func(t *testing.T) {
+		e, f, tr, tasks, advance := setupVideoLookupTest(t)
+		tasks.holdsRemaining = 0
+		entered, release := make(chan struct{}), make(chan struct{})
+		tr.uploadFn = func(ctx context.Context, files []media.File) ([]media.File, error) {
+			close(entered)
+			<-release
+			return f.PrepareFiles(ctx, files)
+		}
+		m := incoming()
+		m.Text = "!download https://v.douyin.com/synthetic/"
+		m.At = e.now()
+		if ok, err := e.Accept(ctx, m); !ok || err != nil {
+			t.Fatal("accept", ok, err)
+		}
+		id := store.Hash(m.ConversationID + "\x00" + m.ID)
+		if err := e.Dispatch(ctx); err != nil {
+			t.Fatal(err)
+		}
+		<-entered
+		tr.failChatLive.Store(true)
+		close(release)
+
+		// Wait until the upload goroutine writes to its buffered result channel.
+		e.downloadWG.Wait()
+
+		err := e.Dispatch(ctx)
+		if !errors.Is(err, transport.ErrLookupFailed) {
+			t.Fatalf("collect err = %v, want ErrLookupFailed", err)
+		}
+		if stateOf(t, e, id) != "queued" || len(f.Sent) != 0 || tr.uploads.Load() != 1 {
+			t.Fatalf("post-upload collect lost or sent job: state=%s sent=%d uploads=%d", stateOf(t, e, id), len(f.Sent), tr.uploads.Load())
+		}
+		_, savedPlan, err := e.Store.JobPlan(id)
+		if err != nil || !savedPlan.FilesUploaded || len(savedPlan.Attachments) != 1 || pollsWorker(savedPlan) {
+			t.Fatalf("uploaded files not preserved on plan: err=%v uploaded=%t attachments=%d pollsWorker=%t", err, savedPlan.FilesUploaded, len(savedPlan.Attachments), pollsWorker(savedPlan))
+		}
+
+		// Backoff stops hot-looping before 1s.
+		beforeBackoff := tr.liveLookups.Load()
+		for range 10 {
+			if derr := e.Dispatch(ctx); derr != nil {
+				t.Fatalf("expected quiet backoff, got %v", derr)
+			}
+		}
+		if tr.liveLookups.Load() != beforeBackoff || len(f.Sent) != 0 {
+			t.Fatalf("hot-looped after collect: lookups=%d->%d sent=%d", beforeBackoff, tr.liveLookups.Load(), len(f.Sent))
+		}
+
+		// Recover lookup: next Dispatch checks live in nextReady and submits without re-uploading.
+		tr.failChatLive.Store(false)
+		advance(2 * time.Second)
+		if err := e.Dispatch(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if stateOf(t, e, id) != "submitted" || len(f.Sent) != 1 || tr.uploads.Load() != 1 {
+			t.Fatalf("did not submit without re-upload: state=%s sent=%d uploads=%d", stateOf(t, e, id), len(f.Sent), tr.uploads.Load())
+		}
+	})
+
+	t.Run("worker_pipeline_without_attachment_backs_off_then_recovers", func(t *testing.T) {
+		e, f, tr, _, advance := setupVideoLookupTest(t)
+		cfg := DefaultConfiguration()
+		cfg.Commands = []Command{customCommand("fetchonly", Pipeline{Steps: []PipelineStep{
+			step("link", "text.extract_url", map[string]string{"text": "trigger.args"}, ""),
+			step("source", "video.download", map[string]string{"url": "link.url"}, ""),
+			step("done", "text.template", nil, `{"template":"archived original"}`),
+			reply(map[string]string{"text": "done.text"}),
+		}})}
+		if err := e.SetConfiguration(cfg); err != nil {
+			t.Fatal(err)
+		}
+		m := incoming()
+		m.Text = "!fetchonly https://v.douyin.com/synthetic/"
+		m.At = e.now()
+		if ok, err := e.Accept(ctx, m); !ok || err != nil {
+			t.Fatal("accept", ok, err)
+		}
+		id := store.Hash(m.ConversationID + "\x00" + m.ID)
+
+		tr.failChatLive.Store(true)
+		err := e.Dispatch(ctx)
+		if !errors.Is(err, transport.ErrLookupFailed) {
+			t.Fatalf("dispatch err = %v, want ErrLookupFailed", err)
+		}
+		if stateOf(t, e, id) != "queued" || len(f.Sent) != 0 {
+			t.Fatalf("job ended or sent early: state=%s sent=%d", stateOf(t, e, id), len(f.Sent))
+		}
+		before := tr.liveLookups.Load()
+		if derr := e.Dispatch(ctx); derr != nil || tr.liveLookups.Load() != before {
+			t.Fatalf("expected backoff, got err=%v lookups=%d->%d", derr, before, tr.liveLookups.Load())
+		}
+
+		tr.failChatLive.Store(false)
+		advance(2 * time.Second)
+		if err := e.Dispatch(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if stateOf(t, e, id) != "submitted" || len(f.Sent) != 1 {
+			t.Fatalf("state=%s sent=%d", stateOf(t, e, id), len(f.Sent))
+		}
+	})
+}
+
+func TestVideoSafetyCodesAndDeadlinesStillCancelOrExpire(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	for _, mode := range []string{
+		"identity_changed_at_pre_upload_check",
+		"deadline_expired_at_pre_upload_check",
+		"identity_changed_after_pre_upload_blip",
+		"unenrolled_after_pre_upload_blip",
+		"paused_after_pre_upload_blip",
+		"deadline_expired_after_pre_upload_blip",
+		"identity_changed_at_collect",
+		"identity_changed_after_collect_blip",
+		"deadline_expired_after_collect_blip",
+	} {
+		t.Run(mode, func(t *testing.T) {
+			e, f, tr, tasks, advance := setupVideoLookupTest(t)
+			tasks.holdsRemaining = 0
+			directPreUpload := mode == "identity_changed_at_pre_upload_check" || mode == "deadline_expired_at_pre_upload_check"
+			afterCollect := mode == "identity_changed_at_collect" || mode == "identity_changed_after_collect_blip" || mode == "deadline_expired_after_collect_blip"
+			entered, release := make(chan struct{}), make(chan struct{})
+			if afterCollect {
+				tr.uploadFn = func(ctx context.Context, files []media.File) ([]media.File, error) {
+					close(entered)
+					<-release
+					return f.PrepareFiles(ctx, files)
+				}
+			}
+
+			m := incoming()
+			m.Text = "!download https://v.douyin.com/synthetic/"
+			m.At = e.now()
+			if ok, err := e.Accept(ctx, m); !ok || err != nil {
+				t.Fatal("accept", ok, err)
+			}
+			id := store.Hash(m.ConversationID + "\x00" + m.ID)
+
+			if directPreUpload {
+				tr.onTransient = func() {
+					if mode == "identity_changed_at_pre_upload_check" {
+						tr.mu.Lock()
+						tr.livePeer = "changed-peer"
+						tr.mu.Unlock()
+					} else {
+						advance(16 * time.Minute)
+					}
+				}
+				tr.failRemaining.Store(1)
+				if err := e.Dispatch(ctx); err != nil {
+					t.Fatal(err)
+				}
+			} else if !afterCollect {
+				tr.failChatLive.Store(true)
+				if err := e.Dispatch(ctx); !errors.Is(err, transport.ErrLookupFailed) {
+					t.Fatalf("expected ErrLookupFailed, got %v", err)
+				}
+				if tr.uploads.Load() != 0 {
+					t.Fatalf("upload started during failed lookup: %d", tr.uploads.Load())
+				}
+				tr.failChatLive.Store(false)
+				switch mode {
+				case "identity_changed_after_pre_upload_blip":
+					tr.mu.Lock()
+					tr.livePeer = "changed-peer"
+					tr.mu.Unlock()
+				case "unenrolled_after_pre_upload_blip":
+					if err := e.Unenroll("demo-chat"); err != nil {
+						t.Fatal(err)
+					}
+				case "paused_after_pre_upload_blip":
+					if err := e.Pause(true); err != nil {
+						t.Fatal(err)
+					}
+				case "deadline_expired_after_pre_upload_blip":
+					advance(16 * time.Minute)
+				}
+				advance(2 * time.Second)
+				if err := e.Dispatch(ctx); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				if err := e.Dispatch(ctx); err != nil {
+					t.Fatal(err)
+				}
+				<-entered
+				if mode == "identity_changed_at_collect" {
+					tr.mu.Lock()
+					tr.livePeer = "changed-peer"
+					tr.mu.Unlock()
+					close(release)
+					e.downloadWG.Wait()
+					if err := e.Dispatch(ctx); err != nil {
+						t.Fatal(err)
+					}
+				} else {
+					tr.failChatLive.Store(true)
+					close(release)
+					e.downloadWG.Wait()
+					if err := e.Dispatch(ctx); !errors.Is(err, transport.ErrLookupFailed) {
+						t.Fatalf("expected ErrLookupFailed on collect, got %v", err)
+					}
+					tr.failChatLive.Store(false)
+					if mode == "identity_changed_after_collect_blip" {
+						tr.mu.Lock()
+						tr.livePeer = "changed-peer"
+						tr.mu.Unlock()
+					} else {
+						advance(16 * time.Minute)
+					}
+					advance(2 * time.Second)
+					if err := e.Dispatch(ctx); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+
+			j := jobRecord(t, e, id)
+			wantState, wantCode := "cancelled", ""
+			switch mode {
+			case "identity_changed_at_pre_upload_check", "identity_changed_after_pre_upload_blip", "identity_changed_at_collect", "identity_changed_after_collect_blip":
+				wantCode = "identity_changed"
+			case "unenrolled_after_pre_upload_blip":
+				wantCode = "unenrolled"
+			case "paused_after_pre_upload_blip":
+				wantCode = "paused"
+			case "deadline_expired_at_pre_upload_check", "deadline_expired_after_pre_upload_blip", "deadline_expired_after_collect_blip":
+				wantState, wantCode = "expired", "execution_expired"
+			}
+			if j.State != wantState || j.Code != wantCode || len(f.Sent) != 0 {
+				t.Fatalf("got state=%s code=%s sent=%d, want state=%s code=%s sent=0", j.State, j.Code, len(f.Sent), wantState, wantCode)
+			}
+			if !afterCollect && tr.uploads.Load() != 0 {
+				t.Fatalf("upload ran despite %s: uploads=%d", mode, tr.uploads.Load())
+			}
+		})
+	}
+}
+
+type sessionRolloverTransport struct {
+	*transport.Fixture
+	readyFn   func() bool
+	sessionFn func() bool
+	lookupFn  func(context.Context, string) (transport.Conversation, error)
+}
+
+func (s *sessionRolloverTransport) Ready() bool {
+	if s.readyFn != nil {
+		return s.readyFn()
+	}
+	return s.Fixture.Ready()
+}
+
+func (s *sessionRolloverTransport) SessionUp() bool {
+	if s.sessionFn != nil {
+		return s.sessionFn()
+	}
+	return true
+}
+
+func (s *sessionRolloverTransport) LookupConversation(ctx context.Context, id string) (transport.Conversation, error) {
+	if s.lookupFn != nil {
+		return s.lookupFn(ctx, id)
+	}
+	return fixtureConversation(ctx, id)
+}
+
+func TestStreamRolloverGapBacksOffWithoutCancellingUnsentWork(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	t.Run("check_rollover_gap_retries_and_never_sends_while_unready", func(t *testing.T) {
+		t.Parallel()
+		e, f := setup(t)
+		arm(t, e)
+		if err := e.Store.Enroll("demo-sms", "demo-sms-peer"); err != nil {
+			t.Fatal(err)
+		}
+		now := time.Now()
+		e.now = func() time.Time { return now }
+
+		m1 := incoming()
+		m1.ID, m1.At = "rollover-1", now
+		if ok, err := e.Accept(ctx, m1); !ok || err != nil {
+			t.Fatal("accept m1", ok, err)
+		}
+		id1 := store.Hash(m1.ConversationID + "\x00" + m1.ID)
+
+		m2 := transport.Incoming{ID: "rollover-2", ConversationID: "demo-sms", ParticipantID: "demo-sms-peer", Text: "!ping", At: now}
+		if ok, err := e.Accept(ctx, m2); !ok || err != nil {
+			t.Fatal("accept m2", ok, err)
+		}
+		id2 := store.Hash(m2.ConversationID + "\x00" + m2.ID)
+
+		// Simulate the stream rolling over right after nextReady's initial Ready()
+		// check, so Engine.check observes !Ready() while SessionUp() is still true.
+		var readyCalls atomic.Int32
+		var streamConnected atomic.Bool
+		tr := &sessionRolloverTransport{
+			Fixture: f,
+			readyFn: func() bool {
+				if streamConnected.Load() {
+					return true
+				}
+				return readyCalls.Add(1) == 1
+			},
+			sessionFn: func() bool { return true },
+		}
+		useTransport(e, tr)
+
+		err := e.Dispatch(ctx)
+		if !errors.Is(err, transport.ErrLookupFailed) || errors.Is(err, transport.ErrUnavailable) {
+			t.Fatalf("check rollover gap returned %v, want ErrLookupFailed", err)
+		}
+		if stateOf(t, e, id1) != "queued" || stateOf(t, e, id2) != "queued" || len(f.Sent) != 0 {
+			t.Fatalf("check rollover gap cancelled or sent jobs: j1=%s j2=%s sent=%d", stateOf(t, e, id1), stateOf(t, e, id2), len(f.Sent))
+		}
+		// Immediate retry during backoff is skipped cleanly.
+		readyCalls.Store(0)
+		if err := e.Dispatch(ctx); err != nil || len(f.Sent) != 0 {
+			t.Fatalf("preflight backoff did not hold: err=%v sent=%d", err, len(f.Sent))
+		}
+
+		// Once stream reconnects and backoff expires, both jobs send.
+		streamConnected.Store(true)
+		f.Online = true
+		now = now.Add(2 * time.Second)
+		if err := e.Dispatch(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if err := e.Dispatch(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if stateOf(t, e, id1) != "submitted" || stateOf(t, e, id2) != "submitted" || len(f.Sent) != 2 {
+			t.Fatalf("jobs did not send after rollover ended: j1=%s j2=%s sent=%d", stateOf(t, e, id1), stateOf(t, e, id2), len(f.Sent))
+		}
+	})
+
+	t.Run("lookup_error_during_rollover_gap_maps_to_lookup_failed", func(t *testing.T) {
+		t.Parallel()
+		e, f := setup(t)
+		arm(t, e)
+		now := time.Now()
+		e.now = func() time.Time { return now }
+
+		m := incoming()
+		m.ID, m.At = "lookup-rollover-1", now
+		if ok, err := e.Accept(ctx, m); !ok || err != nil {
+			t.Fatal("accept", ok, err)
+		}
+		id := store.Hash(m.ConversationID + "\x00" + m.ID)
+
+		var streamConnected atomic.Bool
+		streamConnected.Store(true)
+		var sessionUp atomic.Bool
+		sessionUp.Store(true)
+		tr := &sessionRolloverTransport{
+			Fixture:   f,
+			readyFn:   func() bool { return streamConnected.Load() },
+			sessionFn: func() bool { return sessionUp.Load() },
+			lookupFn: func(context.Context, string) (transport.Conversation, error) {
+				// Stream drops briefly mid-lookup while session stays up.
+				streamConnected.Store(false)
+				return transport.Conversation{}, transport.ErrLookupFailed
+			},
+		}
+		useTransport(e, tr)
+
+		err := e.Dispatch(ctx)
+		if !errors.Is(err, transport.ErrLookupFailed) || errors.Is(err, transport.ErrUnavailable) {
+			t.Fatalf("dispatch lookup during rollover returned %v, want ErrLookupFailed", err)
+		}
+		if stateOf(t, e, id) != "queued" || len(f.Sent) != 0 {
+			t.Fatalf("job state after rollover lookup = %s, sent=%d", stateOf(t, e, id), len(f.Sent))
+		}
+
+		// Ingest lookup failing mid-rollover also maps to ErrLookupFailed, not ErrUnavailable.
+		streamConnected.Store(true)
+		m2 := incoming()
+		m2.ID, m2.At = "lookup-rollover-ingest", now
+		_, ingestErr := e.Ingest(ctx, m2)
+		if !errors.Is(ingestErr, transport.ErrLookupFailed) || errors.Is(ingestErr, transport.ErrUnavailable) {
+			t.Fatalf("ingest lookup during rollover returned %v, want ErrLookupFailed", ingestErr)
+		}
+
+		// When the session itself drops, the same lookup error maps to ErrUnavailable.
+		now = now.Add(5 * time.Second)
+		streamConnected.Store(true)
+		tr.lookupFn = func(context.Context, string) (transport.Conversation, error) {
+			streamConnected.Store(false)
+			sessionUp.Store(false)
+			return transport.Conversation{}, transport.ErrUnavailable
+		}
+		if err := e.Dispatch(ctx); !errors.Is(err, transport.ErrUnavailable) {
+			t.Fatalf("dispatch lookup with session down returned %v, want ErrUnavailable", err)
+		}
+	})
+
+	t.Run("check_with_session_down_cancels_as_transport_unavailable", func(t *testing.T) {
+		t.Parallel()
+		e, f := setup(t)
+		arm(t, e)
+		m := incoming()
+		if ok, err := e.Accept(ctx, m); !ok || err != nil {
+			t.Fatal("accept", ok, err)
+		}
+		id := store.Hash(m.ConversationID + "\x00" + m.ID)
+
+		var calls atomic.Int32
+		var sessionUp atomic.Bool
+		sessionUp.Store(true)
+		tr := &sessionRolloverTransport{
+			Fixture: f,
+			readyFn: func() bool {
+				if calls.Add(1) == 1 {
+					return true
+				}
+				sessionUp.Store(false)
+				return false
+			},
+			sessionFn: func() bool { return sessionUp.Load() },
+		}
+		useTransport(e, tr)
+		if err := e.Dispatch(ctx); err != nil {
+			t.Fatalf("check with session down returned %v, want nil after cancelling job", err)
+		}
+		jobs, err := e.Store.Jobs()
+		if err != nil || len(jobs) != 1 || jobs[0].ID != id || jobs[0].State != "cancelled" || jobs[0].Code != "transport_unavailable" {
+			t.Fatalf("expected cancelled/transport_unavailable, got %+v %v", jobs, err)
+		}
+	})
+}
+
+func TestLookupIDMismatchCancelsAsIdentityChangedWithoutRetry(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e, f := setup(t)
+	arm(t, e)
+	m := incoming()
+	if ok, err := e.Accept(ctx, m); !ok || err != nil {
+		t.Fatal("accept", ok, err)
+	}
+	id := store.Hash(m.ConversationID + "\x00" + m.ID)
+
+	var lookups atomic.Int32
+	useTransport(e, &lookupTransport{
+		Fixture: f,
+		lookup: func(context.Context, string) (transport.Conversation, error) {
+			lookups.Add(1)
+			return transport.Conversation{}, transport.ErrIneligibleConversation
+		},
+	})
+
+	if err := e.Dispatch(ctx); err != nil {
+		t.Fatalf("ineligible lookup returned %v, want nil", err)
+	}
+	if lookups.Load() != 1 {
+		t.Fatalf("lookups = %d, want 1", lookups.Load())
+	}
+	jobs, err := e.Store.Jobs()
+	if err != nil || len(jobs) != 1 || jobs[0].ID != id || jobs[0].State != "cancelled" || jobs[0].Code != "identity_changed" || len(f.Sent) != 0 {
+		t.Fatalf("expected cancelled/identity_changed, got %+v sent=%d err=%v", jobs, len(f.Sent), err)
+	}
+
+	// Incoming commands in an ID-mismatched conversation are declined cleanly without error or pause.
+	m2 := incoming()
+	m2.ID = "ineligible-incoming"
+	accepted, err := e.Ingest(ctx, m2)
+	if err != nil || accepted {
+		t.Fatalf("ingest on ineligible conversation: accepted=%v err=%v", accepted, err)
+	}
+	if paused, err := e.Store.Paused(); err != nil || paused {
+		t.Fatalf("ineligible conversation paused engine: paused=%v err=%v", paused, err)
+	}
+}

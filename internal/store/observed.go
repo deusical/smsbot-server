@@ -93,6 +93,7 @@ func (s *Store) saveObserved(conv, upstream, txn, direction, text, origin, statu
 	}
 	// Repair old imports only with an explicit send-transaction match. Equal text
 	// and nearby timestamps are never enough: separate identical sends stay apart.
+	deletedDuplicate := false
 	if matchedSend {
 		for _, duplicate := range []string{alias, previous} {
 			if duplicate == "" || duplicate == id {
@@ -133,8 +134,12 @@ func (s *Store) saveObserved(conv, upstream, txn, direction, text, origin, statu
 			if _, err = tx.Exec("UPDATE interaction_intents SET target=? WHERE target=?", Hash(conv+"\x00"+id), Hash(conv+"\x00"+duplicate)); err != nil {
 				return err
 			}
-			if _, err = tx.Exec("DELETE FROM messages WHERE id=? AND conversation=? AND direction='outgoing'", duplicate, conv); err != nil {
+			res, err := tx.Exec("DELETE FROM messages WHERE id=? AND conversation=? AND direction='outgoing'", duplicate, conv)
+			if err != nil {
 				return err
+			}
+			if dn, err := res.RowsAffected(); err == nil && dn > 0 {
+				deletedDuplicate = true
 			}
 		}
 	}
@@ -146,7 +151,13 @@ func (s *Store) saveObserved(conv, upstream, txn, direction, text, origin, statu
 			return err
 		}
 	}
-	return tx.Commit()
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+	if deletedDuplicate {
+		s.noteMessageDeletion()
+	}
+	return nil
 }
 
 func (s *Store) PublishCommandMessage(id string) error {

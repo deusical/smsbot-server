@@ -126,7 +126,11 @@ func (s *Store) UpdateArchive(conv string, retention int, fn func(a *Archive, ex
 	if err = s.saveArchive(tx, a, retention); err != nil {
 		return a, err
 	}
-	return a, tx.Commit()
+	if err = tx.Commit(); err != nil {
+		return a, err
+	}
+	s.noteArchiveFocus(a)
+	return a, nil
 }
 
 func (s *Store) Archive(conv string) (Archive, error) {
@@ -151,7 +155,38 @@ func (s *Store) SaveArchive(a Archive, retention int) error {
 	if err = s.saveArchive(tx, a, retention); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+	s.noteArchiveFocus(a)
+	return nil
+}
+
+// LastArchiveFocus returns the newest FocusAt written in memory by SaveArchive
+// or UpdateArchive, or zero if none has been recorded in this process.
+func (s *Store) LastArchiveFocus() time.Time {
+	ns := s.lastFocusNano.Load()
+	if ns <= 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, ns).UTC()
+}
+
+func (s *Store) noteArchiveFocus(a Archive) {
+	if a.FocusAt == "" || a.RefreshSince == "" || a.RefreshUntil == "" {
+		return
+	}
+	at, err := time.Parse(time.RFC3339Nano, a.FocusAt)
+	if err != nil {
+		return
+	}
+	ns := at.UnixNano()
+	for {
+		cur := s.lastFocusNano.Load()
+		if ns <= cur || s.lastFocusNano.CompareAndSwap(cur, ns) {
+			return
+		}
+	}
 }
 func (s *Store) saveArchive(tx *sql.Tx, a Archive, retention int) error {
 	b, err := json.Marshal(a)
@@ -219,18 +254,29 @@ func (s *Store) ArchiveRetention(pendingDays ...int) error {
 	if err != nil {
 		return err
 	}
+	var deleted int64
 	for _, p := range policies {
 		cutoff := time.Now().UTC().AddDate(0, 0, -p.days).Format("2006-01-02T15:04:05.000000000Z")
-		if _, err = s.DB.Exec("DELETE FROM messages WHERE conversation=? AND at<?", p.conv, cutoff); err != nil {
+		res, err := s.DB.Exec("DELETE FROM messages WHERE conversation=? AND at<?", p.conv, cutoff)
+		if err != nil {
 			return err
+		}
+		if n, err := res.RowsAffected(); err == nil {
+			deleted += n
 		}
 	}
 	if len(pendingDays) > 0 && pendingDays[0] > 0 {
 		cutoff := time.Now().UTC().AddDate(0, 0, -pendingDays[0]).Format("2006-01-02T15:04:05.000000000Z")
-		_, err = s.DB.Exec("DELETE FROM messages WHERE conversation IN (SELECT conversation FROM archive_pending) AND at<?", cutoff)
+		res, err := s.DB.Exec("DELETE FROM messages WHERE conversation IN (SELECT conversation FROM archive_pending) AND at<?", cutoff)
 		if err != nil {
 			return err
 		}
+		if n, err := res.RowsAffected(); err == nil {
+			deleted += n
+		}
+	}
+	if deleted > 0 {
+		s.noteMessageDeletion()
 	}
 	return nil
 }

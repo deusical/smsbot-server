@@ -46,6 +46,7 @@ type Service struct {
 	mu           *sync.Mutex
 	now          func() time.Time
 	reads        readThrottle
+	fileAuth     fileAuthCooldown
 	captureReads captureReads
 	captureQueue chan captureItem
 	consent      atomic.Pointer[captureConsent]
@@ -63,6 +64,10 @@ func New(s *store.Store, t transport.Transport, control *sync.Mutex) *Service {
 
 // SetClock replaces the service clock (tests only).
 func (svc *Service) SetClock(now func() time.Time) { svc.now = now }
+
+// Reconnected clears transient file-authorization cooldowns after a connection
+// outage ends so eligible archive downloads can resume promptly.
+func (svc *Service) Reconnected() { svc.fileAuth.clear() }
 
 // HistoryHost is the consent-checked adapter the history worker reads through,
 // including its optional capture-gap and paged-discovery abilities.

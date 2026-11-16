@@ -28,15 +28,21 @@ type Engine struct {
 	// WorkerPollDelay spaces polls of the download worker between stages;
 	// zero means one second.
 	WorkerPollDelay time.Duration
+	// WorkerCancelInterval spaces sweeps that deliver scope cancellations to
+	// workers; zero means three seconds (scaled when WorkerPollDelay < 1s).
+	WorkerCancelInterval time.Duration
 	// mu is the control lock shared with Collection: send decisions serialize
 	// with consent changes and protected commits.
 	mu              *sync.Mutex
 	preflight       preflightRetry
+	videoChecked    string
+	workerUnlocked  bool
 	dispatchMu      sync.Mutex
 	now             func() time.Time
 	pending         map[string]context.CancelFunc
 	downloadUploads map[string]downloadUpload
 	downloadWG      sync.WaitGroup
+	cancelNudge     chan struct{}
 }
 
 // New wires an engine without touching storage or starting work. control is
@@ -46,7 +52,7 @@ func New(s *store.Store, t transport.Transport, c *collection.Service, control *
 	if _, offline := t.(*transport.Fixture); offline {
 		provider = SimulatedProvider{}
 	}
-	return &Engine{Collection: c, Store: s, Transport: t, Provider: provider, mu: control, now: time.Now, pending: map[string]context.CancelFunc{}, downloadUploads: map[string]downloadUpload{}}
+	return &Engine{Collection: c, Store: s, Transport: t, Provider: provider, mu: control, now: time.Now, pending: map[string]context.CancelFunc{}, downloadUploads: map[string]downloadUpload{}, cancelNudge: make(chan struct{}, 1)}
 }
 
 // Init performs the engine's one-time startup work: offline fixture mode
@@ -77,15 +83,16 @@ func (e *Engine) CollectionSettingsSaved(s collection.Settings) {
 	for _, cancel := range e.pending {
 		cancel()
 	}
+	e.nudgeWorkerCancel()
 }
 
 // lookupMode tells check which phase a job is in. liveLookup asks the phone for
 // the conversation now and is mandatory at acceptance (admit) and in every
-// check right before uploading or sending (sendableVideo, collectDownloadUploads,
-// prepareFiles, generateReply and submit). cachedLookup is used only while a
-// job is in its worker-preparation phase (re-dispatched solely to poll a worker
-// task): it checks the transport's cached conversation when one exists and
-// falls back to a live lookup otherwise.
+// check right before uploading or sending (sendableVideo, prepareDownloadUpload,
+// collectDownloadUploads, prepareFiles, generateReply and submit). cachedLookup
+// is used only while a job is in its worker-preparation phase (re-dispatched
+// solely to poll a worker task): it checks the transport's cached conversation
+// when one exists and falls back to a live lookup otherwise.
 type lookupMode int
 
 const (
@@ -93,14 +100,18 @@ const (
 	cachedLookup
 )
 
-// lookupError separates a lookup failure while the transport is still ready
-// (ErrLookupFailed, which backs off that job) from a lost connection
-// (ErrUnavailable, returned only when the transport reports not ready).
+func (e *Engine) sessionUp() bool {
+	return transport.SessionUp(e.Transport)
+}
+
+// lookupError separates a lookup failure while the transport session is still
+// up (ErrLookupFailed, which backs off that job) from a lost session
+// (ErrUnavailable, returned only when the session is down).
 func (e *Engine) lookupError(err error) error {
 	if err == nil {
 		return nil
 	}
-	if !e.Transport.Ready() {
+	if !e.sessionUp() {
 		return transport.ErrUnavailable
 	}
 	return transport.ErrLookupFailed
@@ -108,6 +119,9 @@ func (e *Engine) lookupError(err error) error {
 
 func (e *Engine) lookupConversation(ctx context.Context, id string) (transport.Conversation, error) {
 	c, err := transport.Lookup(ctx, e.Transport, id)
+	if errors.Is(err, transport.ErrIneligibleConversation) {
+		return transport.Conversation{ID: id}, nil
+	}
 	return c, e.lookupError(err)
 }
 
@@ -124,34 +138,45 @@ func (e *Engine) conversationForCheck(ctx context.Context, id string, mode looku
 
 func (e *Engine) Pause(value bool) error {
 	e.mu.Lock()
-	defer e.mu.Unlock()
 	if value {
 		for _, cancel := range e.pending {
 			cancel()
 		}
 	}
-	return e.Store.Pause(value)
+	err := e.Store.Pause(value)
+	e.mu.Unlock()
+	if value && err == nil {
+		e.nudgeWorkerCancel()
+	}
+	return err
 }
 
 // ConnectionInterrupted cancels unsent work without changing the owner's Live/Pause choice.
 // Submitted or uncertain intents retain their state and are never retried here.
 func (e *Engine) ConnectionInterrupted() error {
 	e.mu.Lock()
-	defer e.mu.Unlock()
 	for _, cancel := range e.pending {
 		cancel()
 	}
-	return e.Store.CancelUnsentJobs("connection_interrupted")
+	err := e.Store.CancelUnsentJobs("connection_interrupted")
+	e.mu.Unlock()
+	if err == nil {
+		e.nudgeWorkerCancel()
+	}
+	return err
 }
 
 func (e *Engine) Unenroll(id string) error {
 	e.mu.Lock()
-	defer e.mu.Unlock()
 	e.cancelRunning(id)
 	if err := e.Store.Unenroll(id); err != nil {
+		e.mu.Unlock()
 		return err
 	}
-	return e.Store.ClearMemory(id, "")
+	err := e.Store.ClearMemory(id, "")
+	e.mu.Unlock()
+	e.nudgeWorkerCancel()
+	return err
 }
 func (e *Engine) Enroll(id, peer string) error {
 	e.mu.Lock()
@@ -179,20 +204,26 @@ func (e *Engine) EnrollMember(conv, member, roster string) error {
 // UnenrollMember stops one member using the bot in a group.
 func (e *Engine) UnenrollMember(conv, member string) error {
 	e.mu.Lock()
-	defer e.mu.Unlock()
 	e.cancelRunning(conv)
-	return e.Store.UnenrollMember(conv, member)
+	err := e.Store.UnenrollMember(conv, member)
+	e.mu.Unlock()
+	if err == nil {
+		e.nudgeWorkerCancel()
+	}
+	return err
 }
 
 // SetGroupShared switches whether a group has one AI conversation for everyone.
 func (e *Engine) SetGroupShared(conv string, shared bool) error {
 	e.mu.Lock()
-	defer e.mu.Unlock()
 	e.cancelRunning(conv)
 	if err := e.Store.SetGroupShared(conv, shared); err != nil {
+		e.mu.Unlock()
 		return err
 	}
 	e.cancelClearedThreadRuns()
+	e.mu.Unlock()
+	e.nudgeWorkerCancel()
 	return nil
 }
 
@@ -200,9 +231,13 @@ func (e *Engine) SetGroupShared(conv string, shared bool) error {
 // the owner has looked at who is there now.
 func (e *Engine) ApproveGroup(conv, roster string, present []string) error {
 	e.mu.Lock()
-	defer e.mu.Unlock()
 	e.cancelRunning(conv)
-	return e.Store.ApproveGroup(conv, roster, present)
+	err := e.Store.ApproveGroup(conv, roster, present)
+	e.mu.Unlock()
+	if err == nil {
+		e.nudgeWorkerCancel()
+	}
+	return err
 }
 
 // enrolledFor reports whether the person a plan is for may still use the bot
@@ -239,11 +274,15 @@ func (e *Engine) validGroupMember(ctx context.Context, conv, member, roster stri
 }
 func (e *Engine) Cancel(id string) error {
 	e.mu.Lock()
-	defer e.mu.Unlock()
 	if cancel := e.pending[id]; cancel != nil {
 		cancel()
 	}
-	return e.Store.Cancel(id)
+	err := e.Store.Cancel(id)
+	e.mu.Unlock()
+	if err == nil {
+		e.nudgeWorkerCancel()
+	}
+	return err
 }
 func (e *Engine) Approve(id string) error {
 	e.mu.Lock()
@@ -745,6 +784,9 @@ func (e *Engine) check(ctx context.Context, j store.Job, p store.Plan, mode look
 		return cfg, "paused", nil
 	}
 	if !e.Transport.Ready() {
+		if e.sessionUp() {
+			return cfg, "", transport.ErrLookupFailed
+		}
 		return cfg, "transport_unavailable", nil
 	}
 	at, err := time.Parse(time.RFC3339Nano, j.CreatedAt)
@@ -868,6 +910,8 @@ func (e *Engine) Dispatch(ctx context.Context) error {
 	e.dispatchMu.Lock()
 	defer e.dispatchMu.Unlock()
 	e.mu.Lock()
+	e.videoChecked = ""
+	e.workerUnlocked = false
 	if err := e.collectDownloadUploads(ctx); err != nil {
 		e.mu.Unlock()
 		return err
@@ -880,7 +924,11 @@ func (e *Engine) Dispatch(ctx context.Context) error {
 	if p.Mutation != nil {
 		return e.dispatchReaction(ctx, j, p) // releases the lock
 	}
-	defer e.mu.Unlock()
+	defer func() {
+		e.videoChecked = ""
+		e.workerUnlocked = false
+		e.mu.Unlock()
+	}()
 	if done, err := e.runPipeline(ctx, j, &p, &cfg); done {
 		return err
 	}
@@ -892,14 +940,14 @@ func (e *Engine) Dispatch(ctx context.Context) error {
 	} else if done, err := e.prepareFiles(ctx, j, &p); done {
 		return err
 	}
-	if mode == cachedLookup && len(p.Attachments) == 0 {
+	if (mode == cachedLookup || e.workerUnlocked) && len(p.Attachments) == 0 && e.videoChecked != j.ID {
 		// A pipeline whose worker step produced no attachment skipped sendableVideo
 		// and upload checks; verify live before submitting.
 		checked, code, err := e.check(ctx, j, p, liveLookup)
 		cfg = checked
 		if err != nil {
 			if errors.Is(err, transport.ErrLookupFailed) {
-				_ = e.Store.Complete(j.ID, "failed", "final_check_failed")
+				e.backoffPreflight(j.ID)
 			}
 			return err
 		}
@@ -913,6 +961,14 @@ func (e *Engine) Dispatch(ctx context.Context) error {
 	}
 	// The conversation turn's earlier history, as checked by the AI step.
 	return e.submit(ctx, j, p, cfg)
+}
+
+func (e *Engine) backoffPreflight(id string) {
+	if e.preflight.job != id {
+		e.preflight = preflightRetry{job: id}
+	}
+	e.preflight.failures++
+	e.preflight.until = e.now().Add(min(30*time.Second, time.Second*time.Duration(1<<min(e.preflight.failures-1, 5))))
 }
 
 // nextReady returns the next queued job that passes every pre-send check.
@@ -943,11 +999,10 @@ func (e *Engine) nextReady(ctx context.Context) (j store.Job, p store.Plan, cfg 
 	}
 	cfg, code, err := e.check(ctx, j, p, mode)
 	if err != nil {
-		if !e.Transport.Ready() {
+		if !e.sessionUp() {
 			return j, p, cfg, mode, false, transport.ErrUnavailable
 		}
-		e.preflight.failures++
-		e.preflight.until = e.now().Add(min(30*time.Second, time.Second*time.Duration(1<<min(e.preflight.failures-1, 5))))
+		e.backoffPreflight(j.ID)
 		return j, p, cfg, mode, false, err
 	}
 	e.preflight = preflightRetry{}
@@ -960,6 +1015,9 @@ func (e *Engine) nextReady(ctx context.Context) (j store.Job, p store.Plan, cfg 
 				state = "expired"
 			}
 			err = e.Store.Complete(j.ID, state, code)
+			if err == nil {
+				e.nudgeWorkerCancel()
+			}
 		}
 		return j, p, cfg, mode, false, err
 	}
@@ -1015,6 +1073,7 @@ func (e *Engine) generateReply(ctx context.Context, j store.Job, p *store.Plan, 
 	}
 	genctx, cancel := context.WithTimeout(ctx, 95*time.Second)
 	e.pending[j.ID] = cancel
+	e.videoChecked = ""
 	e.mu.Unlock()
 	var result Result
 	image, imageErr := e.loadFile(genctx, j.ConversationID, call.File, cfg.Settings.AIPhotoMaxMB)
@@ -1079,6 +1138,7 @@ func (e *Engine) generateReply(ctx context.Context, j store.Job, p *store.Plan, 
 		}
 		return true, err
 	}
+	e.workerUnlocked = false
 	if ok, err = e.Store.Transition(j.ID, "generating", "queued"); err != nil || !ok {
 		return true, err
 	}
@@ -1105,6 +1165,7 @@ func (e *Engine) prepareFiles(ctx context.Context, j store.Job, p *store.Plan) (
 	}
 	uploadCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	e.pending[j.ID] = cancel
+	e.videoChecked = ""
 	e.mu.Unlock()
 	files, uploadErr := preparer.PrepareFiles(uploadCtx, p.Attachments)
 	cancel()
@@ -1128,6 +1189,7 @@ func (e *Engine) prepareFiles(ctx context.Context, j store.Job, p *store.Plan) (
 		err = e.Store.Complete(j.ID, "cancelled", "attachment_final_check_failed")
 		return true, err
 	}
+	e.workerUnlocked = false
 	p.Attachments = files
 	if err = e.Store.SavePlan(j.ID, *p); err != nil {
 		return true, err
@@ -1364,7 +1426,17 @@ func (e *Engine) Playground(name, input string) (map[string]any, error) {
 }
 func (e *Engine) Run(ctx context.Context, report func(error)) {
 	ctx, cancel := context.WithCancel(ctx)
-	defer func() { cancel(); e.downloadWG.Wait() }()
+	var sweepWG sync.WaitGroup
+	defer func() {
+		cancel()
+		sweepWG.Wait()
+		e.downloadWG.Wait()
+	}()
+	sweepWG.Add(1)
+	go func() {
+		defer sweepWG.Done()
+		e.runWorkerCancelSweep(ctx)
+	}()
 	ticker := time.NewTicker(250 * time.Millisecond)
 	defer ticker.Stop()
 	retention := time.NewTicker(time.Hour)

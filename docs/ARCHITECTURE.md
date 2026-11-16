@@ -78,6 +78,15 @@ sends twice.
 - **Record before sending, never retry the uncertain.** An unknown outcome is shown to
   you and is never retried automatically.
 - **Pause wins.** Every start is paused, and pausing cancels queued work.
+- **Same sending number.** A request remembers which identity the phone sends
+  from in its conversation when it is accepted. If the phone would send from a
+  different one (for example after a SIM change), the send is refused with
+  `outgoing_identity_changed`.
+- **A blip is not a lost connection.** A conversation check that fails while the
+  phone is still connected delays only that request and retries it later. Unsent
+  work is cancelled only when the connection is really lost: the library reports
+  a failure, or its message stream stays missing for 5 seconds (it is briefly
+  missing during every normal stream rollover).
 - **Plans don't change.** Editing a command doesn't affect requests already queued.
 - **No secrets in logs.** Message text, contacts, credentials and raw errors from Google
   are never logged. `Send:` journal entries report whether a send used a native
@@ -102,10 +111,16 @@ sends twice.
   task worker (the host's own, or one on another machine over Tailscale, chosen per
   task from `workers.json`, which Settings > Workers edits) and defers its next poll in `job_work`, letting other sends run.
   One background upload lane also yields dispatch; its results are committed only
-  by dispatch after repeating safety checks. Activity exposes sanitized stages. The single-slot worker keeps
+  by dispatch after repeating safety checks. Activity exposes sanitized stages
+  and says Working while a worker runs a queued request. While a request only
+  waits on its worker, recipient checks use the conversation record already held;
+  the phone is asked live at acceptance and before every upload or send. The worker keeps
   originals, verified MP4 results and job state as plain files in the owner-only
   downloads folder; checkpoints survive worker restart.
-  Progress watchdogs and a renewable lease stop stalled or unauthorized work.
+  When a bot job ends, the bot asks its workers to cancel that job's tasks, which
+  stop within about a second. Progress watchdogs and a renewable 300-second lease
+  stop stalled or orphaned work; the lease outlasts the longest step that holds
+  dispatch, such as an AI reply, and covers a bot that cannot reach the worker.
   Every normal enrollment, pause, attachment and send check still applies, with
   the execution deadline replacing post-acceptance freshness for these jobs.
   Restarting SmsBot still pauses and cancels unsent jobs. Checkpoints alone never
@@ -128,14 +143,20 @@ sends twice.
   checkpoint, and `internal/history/plan.go` decides what runs next. Discovery, which
   finds the conversations to archive, runs every 15 minutes when idle; turning
   collection on, widening it to every conversation or selecting a new one runs it at
-  once, so archiving starts when the owner asks.
+  once, so archiving starts when the owner asks. A conversation the phone reports
+  as not readable (deleted, read-only, no sending SIM, or left from a previous
+  phone) ends its pass without a retry; real failures back off up to a day. The
+  history job reads settings once per pass from memory, and saving re-checks them.
 - **Database access:** queries live in `internal/store` as named operations.
 - **Dashboard URLs:** each page and open conversation has its own path
   (`/settings`, `/conversations/ID`), defined in `web/src/lib/routes.ts`, so Back,
   reload and bookmarks work. The server answers those paths with the app
   (`internal/httpapi/dashboard.go`); other unknown paths stay 404.
 - **Dashboard state:** `useDashboard` owns app-wide polling; `useConversationMessages`,
-  `useThreadScroll` and `useComposer` own a single conversation.
+  `useThreadScroll` and `useComposer` own a single conversation. Settings tabs keep
+  what they last loaded in memory (`web/src/lib/resource.ts`) and refresh it in the
+  background; nothing is written to browser storage, and signing out clears it.
+  Worker status is cached on the server for 30 seconds; Refresh asks for a live check.
 - **State on disk:** the data directory holds `smsbot.db`, the encrypted Google session
   and archived files; the key lives elsewhere. A lock stops two processes from using
   the same directory.

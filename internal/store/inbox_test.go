@@ -86,3 +86,49 @@ func TestRetentionPreservesDedupAndUncertainMarkers(t *testing.T) {
 		t.Fatal("dedup lost")
 	}
 }
+
+func TestRetentionSkipsAlreadyClearedJobPlans(t *testing.T) {
+	t.Parallel()
+	s := inboxStore(t)
+	if _, err := s.Enqueue("job-cleared", "fixture-chat", "ping", Plan{Reply: "a", Participant: "fixture-peer"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Complete("job-cleared", "submitted", "ok"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Enqueue("job-stale-plan", "fixture-chat", "ping", Plan{Reply: "b", Participant: "fixture-peer"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Enqueue("job-active", "fixture-chat", "ping", Plan{Reply: "c", Participant: "fixture-peer"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DB.Exec(`
+		UPDATE jobs SET created='2000-01-01T00:00:00Z' WHERE id='job-cleared';
+		UPDATE jobs SET state='failed',created='2000-01-01T00:00:00Z' WHERE id='job-stale-plan';
+		UPDATE jobs SET created='2000-01-01T00:00:00Z' WHERE id='job-active';
+		CREATE TEMP TABLE job_updates(n INTEGER NOT NULL);
+		CREATE TEMP TRIGGER count_job_updates AFTER UPDATE ON jobs BEGIN INSERT INTO job_updates VALUES(1); END;
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Retention(30); err != nil {
+		t.Fatal(err)
+	}
+	var updates int
+	if err := s.DB.QueryRow("SELECT count(*) FROM job_updates").Scan(&updates); err != nil || updates != 1 {
+		t.Fatalf("first retention updated %d job rows, want 1 (err=%v)", updates, err)
+	}
+	var stalePlan, activePlan string
+	if err := s.DB.QueryRow("SELECT plan FROM jobs WHERE id='job-stale-plan'").Scan(&stalePlan); err != nil || stalePlan != "" {
+		t.Fatalf("stale plan not cleared: %q %v", stalePlan, err)
+	}
+	if err := s.DB.QueryRow("SELECT plan FROM jobs WHERE id='job-active'").Scan(&activePlan); err != nil || activePlan == "" {
+		t.Fatalf("active queued plan cleared: %v", err)
+	}
+	if _, err := s.Retention(30); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DB.QueryRow("SELECT count(*) FROM job_updates").Scan(&updates); err != nil || updates != 1 {
+		t.Fatalf("second retention rewrote empty-plan rows: total updates=%d, want 1 (err=%v)", updates, err)
+	}
+}

@@ -1,6 +1,10 @@
+import errno
 import importlib.util
+import io
 import json
 import os
+import socket
+import subprocess
 import time
 import sys
 import shutil
@@ -156,6 +160,95 @@ class WorkerBoundaryTests(unittest.TestCase):
                 worker.bind_address(bad)
         with self.assertRaises(ValueError):
             worker.create_server(Path(tempfile.gettempdir()), "x"*40, 0, bind="0.0.0.0")
+
+    def test_second_instance_fails_without_touching_scratch(self):
+        worker_script = Path(__file__).with_name("download-worker.py")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "research" / "rednote_downloader" / "app").mkdir(parents=True)
+            (root / "research" / "rednote_downloader" / "app" / "downloader.py").write_text("# stub\n", encoding="utf-8")
+            out = root / "out"
+            token = "SYNTHETIC_TOKEN_FOR_OFFLINE_TEST_ONLY"
+            token_file = root / "token"
+            token_file.write_text(token, encoding="ascii")
+
+            first = worker.create_server(root, token, 0, output_root=out, bind="127.0.0.1")
+            thread = threading.Thread(target=first.serve_forever, daemon=True)
+            thread.start()
+            try:
+                sentinel = out / ".scratch" / "job-live" / "working.mp4"
+                sentinel.parent.mkdir(parents=True)
+                sentinel.write_bytes(b"in-progress-scratch-data")
+                self.assertEqual((out / "worker.pid").read_text(encoding="ascii").strip(), str(os.getpid()))
+
+                with self.assertRaises(OSError):
+                    worker.create_server(root, token, first.server_port, output_root=out, bind="127.0.0.1")
+                self.assertEqual(sentinel.read_bytes(), b"in-progress-scratch-data")
+                self.assertEqual((out / "worker.pid").read_text(encoding="ascii").strip(), str(os.getpid()))
+
+                # Also verify across a second OS process (exercises SO_EXCLUSIVEADDRUSE on Windows).
+                second_proc = subprocess.run(
+                    [sys.executable, str(worker_script), "--root", str(root), "--output-root", str(out),
+                     "--token-file", str(token_file), "--bind", "127.0.0.1", "--port", str(first.server_port)],
+                    capture_output=True, text=True, timeout=15,
+                )
+                self.assertNotEqual(second_proc.returncode, 0)
+                self.assertNotEqual(second_proc.returncode, worker.EXIT_ADDR_NOT_AVAILABLE)
+                self.assertEqual(sentinel.read_bytes(), b"in-progress-scratch-data")
+                self.assertEqual((out / "worker.pid").read_text(encoding="ascii").strip(), str(os.getpid()))
+
+                opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+                req = urllib.request.Request(
+                    f"http://127.0.0.1:{first.server_port}/download/capabilities",
+                    headers={"Authorization": "Bearer " + token},
+                )
+                with opener.open(req, timeout=3) as resp:
+                    self.assertEqual(resp.status, 200)
+            finally:
+                first.shutdown()
+                first.server_close()
+                thread.join(timeout=3)
+            self.assertFalse((out / "worker.pid").exists())
+
+    def test_address_unavailable_exits_with_distinct_code(self):
+        worker_script = Path(__file__).with_name("download-worker.py")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "research" / "rednote_downloader" / "app").mkdir(parents=True)
+            (root / "research" / "rednote_downloader" / "app" / "downloader.py").write_text("# stub\n", encoding="utf-8")
+            token_file = root / "token"
+            token_file.write_text("SYNTHETIC_TOKEN_FOR_OFFLINE_TEST_ONLY", encoding="ascii")
+            out = root / "out"
+            argv = ["--root", str(root), "--output-root", str(out), "--token-file", str(token_file),
+                    "--bind", "100.127.255.254", "--port", "0"]
+
+            posix_err = OSError(errno.EADDRNOTAVAIL, "Cannot assign requested address")
+            win_err = OSError("The requested address is not valid in its context")
+            win_err.winerror = 10049
+            for err in (posix_err, win_err):
+                with self.subTest(err=err), mock.patch.object(worker, "create_server", side_effect=err), \
+                        mock.patch("sys.stderr", io.StringIO()):
+                    with self.assertRaises(SystemExit) as ctx:
+                        worker.main(argv)
+                    self.assertEqual(ctx.exception.code, worker.EXIT_ADDR_NOT_AVAILABLE)
+
+            unassigned = None
+            for candidate in ("100.127.255.254", "100.127.255.253", "100.64.255.254"):
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe_sock:
+                    try:
+                        probe_sock.bind((candidate, 0))
+                    except OSError as exc:
+                        if worker.is_addr_not_available(exc):
+                            unassigned = candidate
+                            break
+            if unassigned is not None:
+                res = subprocess.run(
+                    [sys.executable, str(worker_script), "--root", str(root), "--output-root", str(out),
+                     "--token-file", str(token_file), "--bind", unassigned, "--port", "0"],
+                    capture_output=True, text=True, timeout=15,
+                )
+                self.assertEqual(res.returncode, worker.EXIT_ADDR_NOT_AVAILABLE)
+                self.assertFalse((out / ".scratch").exists())
 
     def test_url_allowlist(self):
         for url in ("https://douyin.com.attacker.test/video/1", "http://douyin.com/", "https://user:pass@douyin.com/", "https://douyin.com:443/", "file:///C:/private"):
@@ -341,8 +434,9 @@ class ProtocolV4Tests(unittest.TestCase):
         _, jobs = self.jobs()
         past_deadline = int(time.time()) - 2
         for stage, extra in (("complete", {"outputs": {"echo": {"type": "file", "handle": "1"*64 + "/echo", "size": 2}}}),
-                             ("failed", {"code": "video_too_long"})):
-            job = ("1" if stage == "complete" else "2") * 64
+                             ("failed", {"code": "video_too_long"}),
+                             ("cancelled", {})):
+            job = {"complete": "1", "failed": "2", "cancelled": "4"}[stage] * 64
             req = self.request(deadline=past_deadline)
             jobs.save(jobs.path(job), {**req, "stage": stage, **extra})
             res = jobs.poll(job, req)
@@ -354,6 +448,101 @@ class ProtocolV4Tests(unittest.TestCase):
         res = jobs.poll(queued_job, req)
         self.assertEqual(res, {"stage": "expired", "protocol": 4})
         self.assertEqual(jobs.load(jobs.path(queued_job))["stage"], "expired")
+
+    def test_cancel_scope_stops_active_job_frees_slot_and_blocks_later_polls(self):
+        root, _ = self.jobs()
+        entered = threading.Event()
+        runs = []
+
+        def run_slow(job):
+            runs.append(job.id)
+            job.stage("downloading")
+            entered.set()
+            job.run([sys.executable, "-c", "import time; time.sleep(30)"])
+
+        tasks = worker.load_tasks(root)
+        tasks["test.slow"] = {"version": 1, "validate": lambda i, s: (i, {}), "run": run_slow}
+        token = "SYNTHETIC_TOKEN_FOR_OFFLINE_TEST_ONLY"
+        server = worker.create_server(root, token, 0, tasks=tasks, slots=1)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        base = "http://127.0.0.1:%s/download" % server.server_port
+
+        def call(method, path, value=None, auth="Bearer " + token):
+            headers = {"Authorization": auth}
+            data = b"" if method == "POST" and value is None else None
+            if value is not None:
+                data = json.dumps(value).encode()
+                headers["Content-Type"] = "application/json"
+            req = urllib.request.Request(base + path, method=method, data=data, headers=headers)
+            try:
+                with opener.open(req, timeout=5) as response:
+                    return response.status, json.loads(response.read())
+            except urllib.error.HTTPError as error:
+                return error.code, None
+
+        try:
+            scope_a, scope_b, unknown_scope = "a" * 64, "b" * 64, "0" * 64
+            slow_job, fast_job, later_job, disk_job = "1" * 64, "2" * 64, "3" * 64, "4" * 64
+            deadline = int(time.time()) + 600
+            slow_req = {"protocol": 4, "task": "test.slow", "version": 1, "scope": scope_a,
+                        "inputs": {}, "settings": {}, "deadline": deadline}
+            fast_req = self.request(scope=scope_b, deadline=deadline)
+
+            # Auth required, bad paths rejected, unknown scope is a 200 no-op with empty body.
+            self.assertEqual(call("POST", "/scopes/" + scope_a + "/cancel", auth="Bearer wrong")[0], 401)
+            self.assertEqual(call("GET", "/scopes/" + scope_a + "/cancel")[0], 404)
+            self.assertEqual(call("POST", "/scopes/bad/cancel")[0], 502)
+            self.assertEqual(call("POST", "/scopes/" + unknown_scope + "/cancel"),
+                             (200, {"protocol": 4, "cancelled": 0}))
+
+            # Start slow_job on the single slot, then queue fast_job behind it.
+            self.assertEqual(call("POST", "/jobs/" + slow_job, slow_req)[0], 200)
+            self.assertTrue(entered.wait(timeout=5), "slow job never entered run()")
+            self.assertEqual(call("POST", "/jobs/" + fast_job, fast_req),
+                             (200, {"stage": "queued", "protocol": 4}))
+
+            # Cancel scope_a: kills slow_job within ~1s, frees the slot for fast_job.
+            started = time.monotonic()
+            self.assertEqual(call("POST", "/scopes/" + scope_a + "/cancel"),
+                             (200, {"protocol": 4, "cancelled": 1}))
+            fast_done = None
+            while time.monotonic() - started < 10.0:
+                _, body = call("POST", "/jobs/" + fast_job, fast_req)
+                if body and body.get("stage") == "complete":
+                    fast_done = body
+                    break
+                time.sleep(0.05)
+            self.assertIsNotNone(fast_done, "cancelling active job did not free slot quickly")
+            self.assertLess(time.monotonic() - started, 10.0)
+
+            # Cancelled job stays cancelled on disk (not overwritten to queued on LeaseExpired)
+            # and a later poll neither restarts slow_job nor starts new/queued jobs in scope_a.
+            time.sleep(0.1)
+            saved = json.loads((root / "downloads" / "smsbot" / slow_job / "state.json").read_text(encoding="utf-8"))
+            self.assertEqual(saved["stage"], "cancelled")
+            self.assertEqual(call("POST", "/jobs/" + slow_job, slow_req),
+                             (200, {"stage": "cancelled", "protocol": 4}))
+            self.assertEqual(runs, [slow_job])
+
+            self.assertEqual(call("POST", "/jobs/" + later_job, slow_req),
+                             (200, {"stage": "cancelled", "protocol": 4}))
+            later_saved = json.loads((root / "downloads" / "smsbot" / later_job / "state.json").read_text(encoding="utf-8"))
+            self.assertEqual(later_saved["stage"], "cancelled")
+
+            # A pre-existing non-terminal job on disk for the cancelled scope becomes cancelled on poll.
+            disk_dir = root / "downloads" / "smsbot" / disk_job
+            disk_dir.mkdir(parents=True, exist_ok=True)
+            (disk_dir / "state.json").write_text(json.dumps({**slow_req, "stage": "queued"}), encoding="utf-8")
+            self.assertEqual(call("POST", "/jobs/" + disk_job, slow_req),
+                             (200, {"stage": "cancelled", "protocol": 4}))
+            self.assertEqual(json.loads((disk_dir / "state.json").read_text(encoding="utf-8"))["stage"], "cancelled")
+            self.assertEqual(runs, [slow_job])
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=3)
 
     def test_busy_returns_503(self):
         root, _ = self.jobs()
@@ -498,16 +687,23 @@ class CleanupTests(unittest.TestCase):
             old_complete = self.make_job(jobs, "1" * 64, "complete", now - 8 * day, now + 600, now)
             old_failed = self.make_job(jobs, "2" * 64, "failed", now - 8 * day, now + 600, now)
             old_expired = self.make_job(jobs, "3" * 64, "expired", now - 8 * day, now - 8 * day, now)
+            old_cancelled = self.make_job(jobs, "b" * 64, "cancelled", now - 8 * day, now + 600, now)
             # Eligible: terminal + recent mtime, but deadline passed > N days ago
             old_deadline = self.make_job(jobs, "4" * 64, "complete", now - 1 * day, now - 8 * day, now)
+            # Eligible: past-deadline orphaned non-terminal jobs older than N days
+            old_orphan_queued = self.make_job(jobs, "c" * 64, "queued", now - 8 * day, now - 8 * day, now)
+            old_orphan_dl = self.make_job(jobs, "7" * 64, "downloading", now - 10 * day, now - 10 * day, now)
 
             # Preserved: terminal + within N days
             fresh_complete = self.make_job(jobs, "5" * 64, "complete", now - 6 * day, now - 6 * day, now)
-            # Preserved: non-terminal even with old mtime or old deadline
+            fresh_cancelled = self.make_job(jobs, "d" * 64, "cancelled", now - 2 * day, now - 2 * day, now)
+            # Preserved: past-deadline orphan within N days (subject to --keep-days age rule)
+            fresh_orphan = self.make_job(jobs, "e" * 64, "queued", now - 2 * day, now - 2 * day, now)
+            # Preserved: non-terminal whose deadline has not passed, even with old mtime
             non_terminal_queued = self.make_job(jobs, "6" * 64, "queued", now - 10 * day, now + 600, now)
-            non_terminal_dl = self.make_job(jobs, "7" * 64, "downloading", now - 10 * day, now - 10 * day, now)
-            # Preserved: active job even if terminal/old on disk
-            active_job = self.make_job(jobs, "8" * 64, "complete", now - 10 * day, now - 10 * day, now)
+            non_terminal_dl = self.make_job(jobs, "f" * 64, "downloading", now - 10 * day, now + 600, now)
+            # Preserved: active job even if terminal/past-deadline/old on disk
+            active_job = self.make_job(jobs, "8" * 64, "queued", now - 10 * day, now - 10 * day, now)
             jobs.active[active_job.name] = time.monotonic() + 300
 
             # Preserved: non-job dir, missing state.json, corrupt state.json, and .scratch
@@ -519,10 +715,14 @@ class CleanupTests(unittest.TestCase):
             os.utime(corrupt / "state.json", (now - 10 * day, now - 10 * day))
 
             deleted = jobs.cleanup_old_jobs(7, now=now)
-            self.assertEqual(set(deleted), {old_complete.name, old_failed.name, old_expired.name, old_deadline.name})
-            for gone in (old_complete, old_failed, old_expired, old_deadline):
+            expected_deleted = {
+                old_complete, old_failed, old_expired, old_cancelled,
+                old_deadline, old_orphan_queued, old_orphan_dl,
+            }
+            self.assertEqual(set(deleted), {p.name for p in expected_deleted})
+            for gone in expected_deleted:
                 self.assertFalse(gone.exists())
-            for kept in (fresh_complete, non_terminal_queued, non_terminal_dl, active_job, other_dir, no_state, corrupt, jobs.scratch):
+            for kept in (fresh_complete, fresh_cancelled, fresh_orphan, non_terminal_queued, non_terminal_dl, active_job, other_dir, no_state, corrupt, jobs.scratch):
                 self.assertTrue(kept.exists(), f"{kept} should have been kept")
 
     def test_keep_days_validation_and_server_startup_cleanup(self):
