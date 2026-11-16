@@ -117,8 +117,10 @@ sends twice.
   the phone is asked live at acceptance and before every upload or send. The worker keeps
   originals, verified MP4 results and job state as plain files in the owner-only
   downloads folder; checkpoints survive worker restart.
-  Progress watchdogs and a renewable 300-second lease stop stalled or unauthorized
-  work; the lease outlasts the longest step that holds dispatch, such as an AI reply.
+  When a bot job ends, the bot asks its workers to cancel that job's tasks, which
+  stop within about a second. Progress watchdogs and a renewable 300-second lease
+  stop stalled or orphaned work; the lease outlasts the longest step that holds
+  dispatch, such as an AI reply, and covers a bot that cannot reach the worker.
   Every normal enrollment, pause, attachment and send check still applies, with
   the execution deadline replacing post-acceptance freshness for these jobs.
   Restarting SmsBot still pauses and cancels unsent jobs. Checkpoints alone never

@@ -32,7 +32,7 @@ work = threading.local()
 DOWNLOAD_STALL_SECONDS = 300
 # Lease must exceed the bot's longest blocking dispatch step (AI reply + upload).
 LEASE_SECONDS = 300
-TERMINAL_STAGES = frozenset(("complete", "failed", "expired"))
+TERMINAL_STAGES = frozenset(("complete", "failed", "expired", "cancelled"))
 CLEANUP_INTERVAL_SECONDS = 3600
 
 
@@ -418,6 +418,8 @@ class Jobs:
         self.scratch.mkdir(mode=0o700)
         self.lock = threading.RLock()
         self.active = {}
+        self.scopes = {}
+        self.cancelled_scopes = set()
         # Jobs run in up to `slots` at once; the rest wait their turn.
         self.busy = threading.Semaphore(slots)
 
@@ -474,27 +476,57 @@ class Jobs:
             raise ValueError("source_unavailable")
         return f
 
+    def cancel_scope(self, scope):
+        if not isinstance(scope, str) or not JOB.fullmatch(scope):
+            raise ValueError("invalid_scope")
+        cancelled = 0
+        with self.lock:
+            self.cancelled_scopes.add(scope)
+            for job in list(self.active):
+                job_scope = self.scopes.get(job)
+                if job_scope is None and (self.directory / job / "state.json").is_file():
+                    job_scope = self.load(self.directory / job).get("scope")
+                if job_scope != scope:
+                    continue
+                self.active.pop(job, None)
+                self.scopes.pop(job, None)
+                path = self.directory / job
+                if (path / "state.json").is_file():
+                    state = self.load(path)
+                    if state.get("stage") not in TERMINAL_STAGES:
+                        state["stage"] = "cancelled"
+                        self.save(path, state)
+                cancelled += 1
+        return {"protocol": 4, "cancelled": cancelled}
+
     def poll(self, job, request):
         if not isinstance(request, dict) or request.get("protocol") != 4:
             raise ValueError("unsupported_protocol")
         with self.lock:
             request = self.task_request(request)
+            scope = request["scope"]
             path = self.path(job)
             if (path / "state.json").exists():
                 state = self.load(path)
                 if any(state.get(k) != request.get(k) for k in set(state) | set(request) if k not in ("stage", "outputs", "code")):
                     raise ValueError("immutable_job")
             else:
-                state = {**request, "stage": "queued"}
+                state = {**request, "stage": "cancelled" if scope in self.cancelled_scopes else "queued"}
                 self.save(path, state)
-            if state["stage"] not in ("complete", "failed", "expired"):
-                if time.time() >= state["deadline"]:
+            if state["stage"] not in TERMINAL_STAGES:
+                if scope in self.cancelled_scopes:
+                    self.active.pop(job, None)
+                    self.scopes.pop(job, None)
+                    state["stage"] = "cancelled"
+                    self.save(path, state)
+                elif time.time() >= state["deadline"]:
                     state["stage"] = "expired"
                     self.save(path, state)
                 elif job in self.active:
                     self.active[job] = time.monotonic() + LEASE_SECONDS
                 elif len(self.active) < 100:
                     self.active[job] = time.monotonic() + LEASE_SECONDS
+                    self.scopes[job] = scope
                     threading.Thread(target=self.execute, args=(job,), daemon=True).start()
                 else:
                     raise RuntimeError("busy")
@@ -514,11 +546,15 @@ class Jobs:
                     state = self.load(path)
                 def alive():
                     with self.lock:
-                        return time.monotonic() < self.active.get(job, 0) and time.time() < state["deadline"]
+                        return (state.get("scope") not in self.cancelled_scopes and
+                                time.monotonic() < self.active.get(job, 0) and
+                                time.time() < state["deadline"])
                 if not alive():
                     return
                 def stage(value):
                     with self.lock:
+                        if not alive():
+                            raise LeaseExpired()
                         state["stage"] = value
                         self.save(path, state)
                 # Working files are transient, owner-only; only finished files
@@ -532,26 +568,36 @@ class Jobs:
                         raise TaskFailed("unknown_task")
                     tj = TaskJob(self, job, path, state, folder, deadline, stage)
                     task["run"](tj)
-                    if not alive():
-                        raise LeaseExpired()
                     with self.lock:
+                        if not alive():
+                            raise LeaseExpired()
                         state["outputs"] = tj.outputs
-                    stage("complete")
+                        state["stage"] = "complete"
+                        self.save(path, state)
         except (TimeoutError, LeaseExpired):
             with self.lock:
-                state["stage"] = "expired" if time.time() >= state["deadline"] else "queued"
+                if state.get("scope") in self.cancelled_scopes or state.get("stage") == "cancelled":
+                    state["stage"] = "cancelled"
+                elif time.time() >= state["deadline"]:
+                    state["stage"] = "expired"
+                else:
+                    state["stage"] = "queued"
                 self.save(path, state)
         except Exception as e:
             if state is None:
                 return
             with self.lock:
-                state["stage"] = "failed"
-                state["code"] = failure_code(e)
+                if state.get("scope") in self.cancelled_scopes or state.get("stage") == "cancelled":
+                    state["stage"] = "cancelled"
+                else:
+                    state["stage"] = "failed"
+                    state["code"] = failure_code(e)
                 self.save(path, state)
         finally:
             work.__dict__.clear()
             with self.lock:
                 self.active.pop(job, None)
+                self.scopes.pop(job, None)
 
     def output_file(self, job, name):
         """A file output of a completed protocol-4 job, for the bot to fetch."""
@@ -565,7 +611,7 @@ class Jobs:
             return f
 
     def cleanup_old_jobs(self, keep_days, now=None):
-        """Delete terminal job folders whose state.json mtime or deadline is older than keep_days."""
+        """Delete terminal or past-deadline job folders whose state.json mtime or deadline is older than keep_days."""
         if keep_days is None:
             return []
         if isinstance(keep_days, bool) or not isinstance(keep_days, (int, float)) or not math.isfinite(keep_days) or keep_days <= 0:
@@ -591,15 +637,18 @@ class Jobs:
                     state = json.loads(state_file.read_text(encoding="utf-8"))
                 except (OSError, ValueError):
                     continue
-                if not isinstance(state, dict) or state.get("stage") not in TERMINAL_STAGES:
+                if not isinstance(state, dict):
                     continue
                 deadline = state.get("deadline")
-                deadline_expired = (
+                valid_deadline = (
                     isinstance(deadline, (int, float))
                     and not isinstance(deadline, bool)
                     and math.isfinite(deadline)
-                    and deadline < cutoff
                 )
+                past_deadline = valid_deadline and deadline <= now
+                if state.get("stage") not in TERMINAL_STAGES and not past_deadline:
+                    continue
+                deadline_expired = valid_deadline and deadline < cutoff
                 if mtime < cutoff or deadline_expired:
                     try:
                         shutil.rmtree(entry)
@@ -683,6 +732,25 @@ def create_server(root, token, port, output_root=None, bind="127.0.0.1", tasks=N
                     self.wfile.write(data)
                     return
                 parts = self.path.split("/")
+                if parts[:3] == ["", "download", "scopes"]:
+                    if len(parts) != 5 or parts[4] != "cancel" or not JOB.fullmatch(parts[3]):
+                        raise ValueError()
+                    if self.command != "POST":
+                        self.send_error(404)
+                        return
+                    length = int(self.headers.get("Content-Length", "0"))
+                    if not 0 <= length <= 1 << 16:
+                        raise ValueError()
+                    if length:
+                        self.rfile.read(length)
+                    data = json.dumps(jobs.cancel_scope(parts[3])).encode()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(data)))
+                    self.send_header("Cache-Control", "no-store")
+                    self.end_headers()
+                    self.wfile.write(data)
+                    return
                 if len(parts) not in (4, 5, 6) or parts[:3] != ["", "download", "jobs"]:
                     raise ValueError()
                 job = parts[3]
@@ -727,7 +795,7 @@ def create_server(root, token, port, output_root=None, bind="127.0.0.1", tasks=N
             self.job_request()
 
         def do_POST(self):
-            if self.path.startswith("/download/jobs/"):
+            if self.path.startswith(("/download/jobs/", "/download/scopes/")):
                 return self.job_request()
             # Old synchronous helpers must be upgraded with the bot.
             self.send_error(410, "async_download_required")

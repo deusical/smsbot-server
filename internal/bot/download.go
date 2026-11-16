@@ -93,6 +93,8 @@ func (e *Engine) pollWorker(ctx context.Context, j store.Job, p *store.Plan, pol
 	delete(e.pending, j.ID)
 	current, loaderr := e.Store.Job(j.ID)
 	if current.State != "" && current.State != "generating" {
+		_ = e.Store.RecordInterruptedWorkerPoll(j.ID)
+		e.nudgeWorkerCancel()
 		return false, nil
 	}
 	if loaderr != nil {
@@ -272,4 +274,64 @@ func (e *Engine) collectDownloadUploads(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+type scopeCanceller interface {
+	CancelScope(ctx context.Context, scope string) bool
+}
+
+func (e *Engine) workerCancelInterval() time.Duration {
+	if e.WorkerCancelInterval > 0 {
+		return e.WorkerCancelInterval
+	}
+	if e.WorkerPollDelay > 0 && e.WorkerPollDelay < time.Second {
+		return 3 * e.WorkerPollDelay
+	}
+	return 3 * time.Second
+}
+
+func (e *Engine) nudgeWorkerCancel() {
+	select {
+	case e.cancelNudge <- struct{}{}:
+	default:
+	}
+}
+
+func (e *Engine) runWorkerCancelSweep(ctx context.Context) {
+	e.sweepWorkerCancels(ctx)
+	ticker := time.NewTicker(e.workerCancelInterval())
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			e.sweepWorkerCancels(ctx)
+		case <-e.cancelNudge:
+			e.sweepWorkerCancels(ctx)
+		}
+	}
+}
+
+func (e *Engine) sweepWorkerCancels(ctx context.Context) {
+	canceller, ok := e.Tasks.(scopeCanceller)
+	if !ok || canceller == nil {
+		return
+	}
+	now := time.Now()
+	if e.now != nil {
+		now = e.now()
+	}
+	ids, err := e.Store.PendingWorkerCancels(now)
+	if err != nil || len(ids) == 0 {
+		return
+	}
+	for _, id := range ids {
+		if ctx.Err() != nil {
+			return
+		}
+		if canceller.CancelScope(ctx, id) {
+			_ = e.Store.MarkWorkerCancelSent(id)
+		}
+	}
 }

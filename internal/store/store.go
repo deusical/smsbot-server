@@ -165,8 +165,10 @@ func (s *Store) migrate() error {
 	if err := s.ensureGroupEnrollment(); err != nil {
 		return err
 	}
-	_, err := s.DB.Exec(`CREATE TABLE IF NOT EXISTS job_work(job TEXT PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE,stage TEXT NOT NULL,next_poll INTEGER NOT NULL);` + jobFilesSchema + jobStepsTrigger + messageMetaChange + jobIndexes)
-	return err
+	if _, err := s.DB.Exec(`CREATE TABLE IF NOT EXISTS job_work(job TEXT PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE,stage TEXT NOT NULL,next_poll INTEGER NOT NULL,cancel_sent INTEGER NOT NULL DEFAULT 0);` + jobFilesSchema + jobStepsTrigger + messageMetaChange + jobIndexes); err != nil {
+		return err
+	}
+	return s.ensureJobWorkCancelSent()
 }
 
 const jobIndexes = `CREATE INDEX IF NOT EXISTS jobs_state_created ON jobs(state,created);
