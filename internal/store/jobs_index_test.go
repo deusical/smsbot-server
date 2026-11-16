@@ -56,6 +56,12 @@ func TestJobsIndexesAndQueryPlans(t *testing.T) {
 			index: "jobs_state_created",
 		},
 		{
+			name:  "Retention",
+			sql:   "UPDATE jobs SET plan='' WHERE plan!='' AND julianday(created)<julianday(?) AND state NOT IN ('queued','generating','processing','awaiting_approval','submitting')",
+			args:  []any{"2026-01-01T00:00:00Z"},
+			index: "jobs_open_plan",
+		},
+		{
 			name:  "Limits",
 			sql:   "SELECT count(*) FROM jobs WHERE command NOT IN ('manual','reaction') AND created>=?",
 			args:  []any{"2026-01-01T00:00:00Z"},
