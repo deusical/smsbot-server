@@ -2,9 +2,12 @@ package httpapi
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/deusical/smsbot-server/internal/bot"
@@ -58,5 +61,64 @@ func TestWorkersAreConfiguredFromTheDashboard(t *testing.T) {
 		if w := ownerRequest(s, "PUT", "/api/v1/workers", bad); w.Code != 400 {
 			t.Fatal("accepted", bad, w.Code)
 		}
+	}
+}
+
+func TestWorkersStatusCacheAndRefreshParameter(t *testing.T) {
+	t.Parallel()
+	s := apiSetup(t)
+	token := strings.Repeat("k", 40)
+	var probes atomic.Int32
+	var version atomic.Int32
+	version.Store(1)
+	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+token {
+			w.WriteHeader(401)
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/capabilities") {
+			probes.Add(1)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"protocol":  4,
+				"protocols": []int{4},
+				"tasks":     map[string]int{"video.download": int(version.Load())},
+			})
+			return
+		}
+		w.WriteHeader(404)
+	}))
+	t.Cleanup(worker.Close)
+
+	s.Workers = &bot.Tasks{Path: filepath.Join(t.TempDir(), "workers.json"), Store: s.Store}
+	body := `{"workers":[{"name":"laptop","endpoint":"` + worker.URL + `/download","token":"` + token + `"}],"routes":{}}`
+	w := ownerRequest(s, "PUT", "/api/v1/workers", body)
+	if w.Code != 200 || probes.Load() != 1 || strings.Contains(w.Body.String(), token) || !strings.Contains(w.Body.String(), `"online":true`) {
+		t.Fatalf("put: code=%d probes=%d body=%s", w.Code, probes.Load(), w.Body.String())
+	}
+
+	// Ordinary GETs (and refresh=0) serve the cached status without probing again.
+	version.Store(2)
+	for _, path := range []string{"/api/v1/workers", "/api/v1/workers?refresh=0"} {
+		w = ownerRequest(s, "GET", path, "")
+		if w.Code != 200 || probes.Load() != 1 || strings.Contains(w.Body.String(), token) || !strings.Contains(w.Body.String(), `"video.download":1`) {
+			t.Fatalf("cached %s: code=%d probes=%d body=%s", path, w.Code, probes.Load(), w.Body.String())
+		}
+	}
+
+	// ?refresh=1 forces a live probe and updates the cache.
+	w = ownerRequest(s, "GET", "/api/v1/workers?refresh=1", "")
+	if w.Code != 200 || probes.Load() != 2 || strings.Contains(w.Body.String(), token) || !strings.Contains(w.Body.String(), `"video.download":2`) {
+		t.Fatalf("refresh=1: code=%d probes=%d body=%s", w.Code, probes.Load(), w.Body.String())
+	}
+	w = ownerRequest(s, "GET", "/api/v1/workers", "")
+	if w.Code != 200 || probes.Load() != 2 || !strings.Contains(w.Body.String(), `"video.download":2`) {
+		t.Fatalf("after refresh=1: code=%d probes=%d body=%s", w.Code, probes.Load(), w.Body.String())
+	}
+
+	// Saving workers invalidates the cache and probes fresh.
+	version.Store(3)
+	w = ownerRequest(s, "PUT", "/api/v1/workers", strings.Replace(body, token, "", 1))
+	if w.Code != 200 || probes.Load() != 3 || strings.Contains(w.Body.String(), token) || !strings.Contains(w.Body.String(), `"video.download":3`) {
+		t.Fatalf("put refresh: code=%d probes=%d body=%s", w.Code, probes.Load(), w.Body.String())
 	}
 }

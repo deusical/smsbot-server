@@ -177,8 +177,9 @@ Acceptance snapshots the pipeline into the encrypted plan and runs the steps
 whose inputs are known then (`immediate` modules); a step can decline the command
 (no usable model) or end it early with a reply (no link, unreadable file,
 expired thread). Dispatch runs the remaining steps in order; long steps yield
-through `job_work`. Modules never send. The reply text stays on the run. A file is taken onto the
-plan so its bytes can be sealed in `job_files`, apart from the run. At send, the
+through `job_work`. Modules never send. The reply text stays on the run. A prepared file is staged
+on the plan so its bytes are sealed in `job_files`, apart from the run, and the
+reply step resolves its reference. At send, the
 dispatcher reads the text from the run, freezes it for that one submission, and
 then runs the uploads, the pre-send checks and the persisted outbound intent.
 Uncertain-send handling stays in the dispatcher. A queued job whose stored run

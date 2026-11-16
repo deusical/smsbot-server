@@ -97,7 +97,7 @@ export function ActivityFeed({
                 </time>
                 <span className="status">
                   {jobState(j)}
-                  {current(j) && j.state !== "awaiting_approval"
+                  {current(j)
                     ? ` · ${moduleTitle(modules, current(j)!.module)}`
                     : ""}
                   {j.state === "queued" &&

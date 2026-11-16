@@ -431,17 +431,28 @@ type subToolHost struct {
 
 func (h *subToolHost) Effect(s *cmdflow.Step) error {
 	if v, ok := s.Take("file"); ok {
-		if f := valueMedia(v); f != nil {
-			inbox, err := h.e.Collection.Settings()
-			candidate := append(append([]media.File(nil), h.p.Attachments...), *f)
-			if err == nil && inbox.FileLimits().Check(candidate) == nil {
-				h.p.Attachments = candidate
-				h.attachedName = f.Name
-			} else {
-				h.limitExceeded = true
+		var f *media.File
+		if v.Handle != "" {
+			if staged, found := h.p.StagedFile(v.Handle); found {
+				f = &staged
 			}
+		} else {
+			f = valueMedia(v)
+		}
+		if f == nil {
+			h.p.Staged = nil
+			return cmdflow.ErrFailed
+		}
+		inbox, err := h.e.Collection.Settings()
+		candidate := append(append([]media.File(nil), h.p.Attachments...), *f)
+		if err == nil && inbox.FileLimits().Check(candidate) == nil {
+			h.p.Attachments = candidate
+			h.attachedName = f.Name
+		} else {
+			h.limitExceeded = true
 		}
 	}
+	h.p.Staged = nil
 	return nil
 }
 
@@ -450,6 +461,7 @@ func (h *subToolHost) Halt(s *cmdflow.Step, v cmdflow.Value) error {
 		s.Outputs = map[string]cmdflow.Value{}
 	}
 	s.Outputs["halt"] = v
+	h.p.Staged = nil
 	return nil
 }
 

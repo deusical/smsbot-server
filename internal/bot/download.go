@@ -130,16 +130,13 @@ func (e *Engine) pollWorkerStep(ctx context.Context, j store.Job, p *store.Plan,
 	return true, "", nil
 }
 
-// finishWorkerStep saves the step's output and returns the job to the queue.
-func (e *Engine) finishWorkerStep(j store.Job, p *store.Plan) (bool, error) {
+// finishWorkerStep returns the job to the queue; cmdflow saves the updated plan.
+func (e *Engine) finishWorkerStep(j store.Job) (bool, error) {
 	if err := e.Store.DeferWork(j.ID, "complete", 0); err != nil {
 		return true, err
 	}
-	if err := e.Store.SavePlan(j.ID, *p); err != nil {
-		return true, err
-	}
-	_, err := e.Store.Transition(j.ID, "generating", "queued")
-	return err != nil, err
+	ok, err := e.Store.Transition(j.ID, "generating", "queued")
+	return !ok || err != nil, err
 }
 
 // sendableVideo turns the worker's verified MP4 into the reply's attachment,

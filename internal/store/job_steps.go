@@ -3,7 +3,15 @@ package store
 import (
 	"database/sql"
 	"strings"
+
+	"github.com/deusical/cmdflow"
 )
+
+const jobStepsTrigger = `CREATE TRIGGER IF NOT EXISTS job_steps_reply_sent AFTER UPDATE OF state ON jobs WHEN NEW.state IN ('submitted','delivered','read') BEGIN UPDATE job_steps SET done=1 WHERE job=NEW.id AND module='reply' AND done=0; END;`
+
+func stepDone(step cmdflow.StepRun) bool {
+	return step.Module != "reply" && step.Finished()
+}
 
 // JobStep is one step of a job's pipeline as Activity shows it: the step's
 // name and module (owner configuration, no message content), whether it has
@@ -50,7 +58,7 @@ func recordSteps(q execer, job string, p Plan) error {
 		if i == 0 {
 			continue // the trigger
 		}
-		if _, err := q.Exec("INSERT OR IGNORE INTO job_steps VALUES(?,?,?,?,?)", job, i, step.ID, step.Module, step.Finished()); err != nil {
+		if _, err := q.Exec("INSERT OR IGNORE INTO job_steps VALUES(?,?,?,?,?)", job, i, step.ID, step.Module, stepDone(step)); err != nil {
 			return err
 		}
 	}
@@ -63,7 +71,7 @@ func syncSteps(q execer, job string, p Plan) error {
 		return nil
 	}
 	for i, step := range p.Pipeline.Steps {
-		if i > 0 && step.Finished() {
+		if i > 0 && stepDone(step) {
 			if _, err := q.Exec("UPDATE job_steps SET done=1 WHERE job=? AND position=? AND done=0", job, i); err != nil {
 				return err
 			}

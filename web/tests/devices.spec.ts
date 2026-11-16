@@ -1,4 +1,4 @@
-import { test, expect, type Page, signIn, nextPoll } from "./fixtures";
+import { test, expect, type Page, signIn, nextPoll, pollAndSettle } from "./fixtures";
 
 async function openDevices(page: Page) {
   await signIn(page);
@@ -34,6 +34,7 @@ test("Devices guides phone replacement through approval, cancellation and retry"
     await route.fulfill({ json: { ...(await response.json()), fixture: false, paused: true } });
   });
   let status = { state: "idle", emoji: "", maintenance: false };
+  let gets = 0;
   const inputs: string[] = [];
   await page.route("**/api/v1/phone-pairing", async route => {
     const method = route.request().method();
@@ -42,11 +43,15 @@ test("Devices guides phone replacement through approval, cancellation and retry"
       status = { state: "pairing", emoji: "synthetic-emoji", maintenance: true };
       await route.fulfill({ status: 202, json: { state: "pairing" } });
     } else {
+      if (method === "GET") gets++;
       if (method === "DELETE") status = { state: "failed", emoji: "", maintenance: false };
       await route.fulfill({ json: status });
     }
   });
   await openDevices(page);
+  await expect.poll(() => gets).toBe(1);
+  await pollAndSettle(page, 6000);
+  expect(gets).toBe(1);
   await page.getByRole("button", { name: "Replace phone", exact: true }).click();
   const input = page.getByRole("textbox", { name: "Copied Google request" });
   await input.fill("synthetic copied request");

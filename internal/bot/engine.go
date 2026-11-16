@@ -1069,9 +1069,6 @@ func (e *Engine) generateReply(ctx context.Context, j store.Job, p *store.Plan, 
 			p.Approval = true
 			p.Approved = false
 			p.ApprovalDeadline = e.approvalWindow(*p)
-			if err = e.Store.SavePlan(j.ID, *p); err != nil {
-				return true, err
-			}
 			_, err = e.Store.Transition(j.ID, "generating", "awaiting_approval")
 		} else {
 			state := "cancelled"
@@ -1082,10 +1079,7 @@ func (e *Engine) generateReply(ctx context.Context, j store.Job, p *store.Plan, 
 		}
 		return true, err
 	}
-	if err = e.Store.SavePlan(j.ID, *p); err != nil {
-		return true, err
-	}
-	if _, err = e.Store.Transition(j.ID, "generating", "queued"); err != nil {
+	if ok, err = e.Store.Transition(j.ID, "generating", "queued"); err != nil || !ok {
 		return true, err
 	}
 
