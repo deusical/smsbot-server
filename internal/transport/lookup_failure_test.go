@@ -148,3 +148,173 @@ func TestFetchHistoryDistinguishesIneligibleConversationFromLookupFailure(t *tes
 		t.Fatalf("eligible conversation failed: %v", err)
 	}
 }
+
+func TestSendPartsRetriesGetConversationOnce(t *testing.T) {
+	t.Parallel()
+	ctx := WithOutgoingID(context.Background(), "self")
+	rcsConv := func() *gmproto.Conversation {
+		c := individual("c1")
+		c.Type = gmproto.ConversationType(2)
+		c.SimCard = &gmproto.SIMCard{SIMData: &gmproto.SIMData{SIMPayload: &gmproto.SIMPayload{SIMNumber: 1}}}
+		return c
+	}
+
+	readyGoogle := func(logFn func(SendDiagnostic)) *Google {
+		g := NewGoogle(nil, "")
+		g.ready.Store(true)
+		g.connected = func() bool { return true }
+		g.SendLog = logFn
+		return g
+	}
+
+	t.Run("transient_lookup_recovers_and_sends_once", func(t *testing.T) {
+		var logs []SendDiagnostic
+		g := readyGoogle(func(d SendDiagnostic) { logs = append(logs, d) })
+		c := rcsConv()
+		g.cacheDetail(c)
+
+		getCalls, sendCalls := 0, 0
+		got, err := g.sendPartsWith(ctx, "c1", "txn-1", "synthetic", nil, time.Millisecond,
+			func(context.Context, string) (*gmproto.Conversation, error) {
+				getCalls++
+				if getCalls == 1 {
+					return nil, errors.New("transient rpc blip")
+				}
+				return c, nil
+			},
+			func(context.Context, *gmproto.SendMessageRequest) (*gmproto.SendMessageResponse, error) {
+				sendCalls++
+				return &gmproto.SendMessageResponse{Status: gmproto.SendMessageResponse_SUCCESS}, nil
+			},
+		)
+		if err != nil || got.State != "submitted" || getCalls != 2 || sendCalls != 1 {
+			t.Fatalf("got=%+v err=%v getCalls=%d sendCalls=%d", got, err, getCalls, sendCalls)
+		}
+		if len(logs) != 1 || logs[0].Result != "submitted" {
+			t.Fatalf("unexpected diagnostics: %+v", logs)
+		}
+	})
+
+	t.Run("two_lookup_failures_refuse_before_send", func(t *testing.T) {
+		var logs []SendDiagnostic
+		g := readyGoogle(func(d SendDiagnostic) { logs = append(logs, d) })
+		g.cacheDetail(rcsConv())
+
+		getCalls, sendCalls := 0, 0
+		_, err := g.sendPartsWith(ctx, "c1", "txn-2", "synthetic", nil, time.Millisecond,
+			func(context.Context, string) (*gmproto.Conversation, error) {
+				getCalls++
+				return nil, errors.New("transient rpc blip")
+			},
+			func(context.Context, *gmproto.SendMessageRequest) (*gmproto.SendMessageResponse, error) {
+				sendCalls++
+				return &gmproto.SendMessageResponse{Status: gmproto.SendMessageResponse_SUCCESS}, nil
+			},
+		)
+		if !errors.Is(err, ErrNotSubmitted) || RefusalReason(err) != "conversation_lookup_failed" || getCalls != 2 || sendCalls != 0 {
+			t.Fatalf("err=%v reason=%q getCalls=%d sendCalls=%d", err, RefusalReason(err), getCalls, sendCalls)
+		}
+		if len(logs) != 1 || logs[0].Result != "conversation_lookup_failed" {
+			t.Fatalf("unexpected diagnostics: %+v", logs)
+		}
+	})
+
+	t.Run("identity_change_after_retry_still_refuses", func(t *testing.T) {
+		g := readyGoogle(nil)
+		g.cacheDetail(rcsConv())
+
+		getCalls, sendCalls := 0, 0
+		_, err := g.sendPartsWith(ctx, "c1", "txn-3", "synthetic", nil, time.Millisecond,
+			func(context.Context, string) (*gmproto.Conversation, error) {
+				getCalls++
+				if getCalls == 1 {
+					return nil, errors.New("transient rpc blip")
+				}
+				changed := rcsConv()
+				changed.Participants[0].ID.ParticipantID = "other-peer"
+				return changed, nil
+			},
+			func(context.Context, *gmproto.SendMessageRequest) (*gmproto.SendMessageResponse, error) {
+				sendCalls++
+				return &gmproto.SendMessageResponse{Status: gmproto.SendMessageResponse_SUCCESS}, nil
+			},
+		)
+		if !errors.Is(err, ErrNotSubmitted) || RefusalReason(err) != "participant_changed" || getCalls != 2 || sendCalls != 0 {
+			t.Fatalf("err=%v reason=%q getCalls=%d sendCalls=%d", err, RefusalReason(err), getCalls, sendCalls)
+		}
+	})
+
+	t.Run("send_error_is_unknown_and_never_retried", func(t *testing.T) {
+		g := readyGoogle(nil)
+		c := rcsConv()
+		g.cacheDetail(c)
+
+		getCalls, sendCalls := 0, 0
+		_, err := g.sendPartsWith(ctx, "c1", "txn-4", "synthetic", nil, time.Millisecond,
+			func(context.Context, string) (*gmproto.Conversation, error) {
+				getCalls++
+				if getCalls == 1 {
+					return nil, errors.New("transient rpc blip")
+				}
+				return c, nil
+			},
+			func(context.Context, *gmproto.SendMessageRequest) (*gmproto.SendMessageResponse, error) {
+				sendCalls++
+				return nil, errors.New("send timeout")
+			},
+		)
+		if !errors.Is(err, ErrUnknown) || errors.Is(err, ErrNotSubmitted) || getCalls != 2 || sendCalls != 1 {
+			t.Fatalf("err=%v getCalls=%d sendCalls=%d", err, getCalls, sendCalls)
+		}
+	})
+}
+
+func TestReactRetriesGetConversationOnce(t *testing.T) {
+	t.Parallel()
+	ctx := WithOutgoingID(context.Background(), "self")
+	rcsConv := func() *gmproto.Conversation {
+		c := individual("c1")
+		c.Type = gmproto.ConversationType(2)
+		c.SimCard = &gmproto.SIMCard{SIMData: &gmproto.SIMData{SIMPayload: &gmproto.SIMPayload{SIMNumber: 1}}}
+		return c
+	}
+
+	g := NewGoogle(nil, "")
+	g.ready.Store(true)
+	g.connected = func() bool { return true }
+	c := rcsConv()
+	g.cacheDetail(c)
+
+	getCalls, reactCalls := 0, 0
+	err := g.reactWith(ctx, "c1", "peer", "wire-1", "👍", "add", time.Millisecond,
+		func(context.Context, string) (*gmproto.Conversation, error) {
+			getCalls++
+			if getCalls == 1 {
+				return nil, errors.New("transient rpc blip")
+			}
+			return c, nil
+		},
+		func(context.Context, *gmproto.SendReactionRequest) (*gmproto.SendReactionResponse, error) {
+			reactCalls++
+			return &gmproto.SendReactionResponse{Success: true}, nil
+		},
+	)
+	if err != nil || getCalls != 2 || reactCalls != 1 {
+		t.Fatalf("err=%v getCalls=%d reactCalls=%d", err, getCalls, reactCalls)
+	}
+
+	getCalls, reactCalls = 0, 0
+	err = g.reactWith(ctx, "c1", "peer", "wire-1", "👍", "add", time.Millisecond,
+		func(context.Context, string) (*gmproto.Conversation, error) {
+			getCalls++
+			return nil, errors.New("transient rpc blip")
+		},
+		func(context.Context, *gmproto.SendReactionRequest) (*gmproto.SendReactionResponse, error) {
+			reactCalls++
+			return &gmproto.SendReactionResponse{Success: true}, nil
+		},
+	)
+	if !errors.Is(err, ErrNotSubmitted) || RefusalReason(err) != "conversation_lookup_failed" || getCalls != 2 || reactCalls != 0 {
+		t.Fatalf("err=%v reason=%q getCalls=%d reactCalls=%d", err, RefusalReason(err), getCalls, reactCalls)
+	}
+}

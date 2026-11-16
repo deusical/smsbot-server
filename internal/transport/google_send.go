@@ -19,6 +19,24 @@ func (g *Google) SendFiles(ctx context.Context, id, txn, text string, files []me
 }
 
 func (g *Google) sendParts(ctx context.Context, id, txn, text string, files []media.File, replyTo ...string) (Receipt, error) {
+	var get func(context.Context, string) (*gmproto.Conversation, error)
+	var send func(context.Context, *gmproto.SendMessageRequest) (*gmproto.SendMessageResponse, error)
+	if g.client != nil {
+		get = g.client.GetConversation
+		send = g.client.SendMessage
+	}
+	return g.sendPartsWith(ctx, id, txn, text, files, lookupRetryPause, get, send, replyTo...)
+}
+
+func (g *Google) sendPartsWith(
+	ctx context.Context,
+	id, txn, text string,
+	files []media.File,
+	pause time.Duration,
+	getConversation func(context.Context, string) (*gmproto.Conversation, error),
+	sendMessage func(context.Context, *gmproto.SendMessageRequest) (*gmproto.SendMessageResponse, error),
+	replyTo ...string,
+) (Receipt, error) {
 	d := SendDiagnostic{Reply: len(replyTo) > 0}
 	defer func() {
 		if g.SendLog != nil {
@@ -44,7 +62,7 @@ func (g *Google) sendParts(ctx context.Context, id, txn, text string, files []me
 	}
 
 	g.countPhone(ctx, phoneLookup)
-	c, e := g.client.GetConversation(ctx, id)
+	c, e := fetchConversation(ctx, id, pause, getConversation)
 	if e != nil {
 		return refused("conversation_lookup_failed")
 	}
@@ -76,7 +94,7 @@ func (g *Google) sendParts(ctx context.Context, id, txn, text string, files []me
 		req.ForceRCS = true
 	}
 	g.countPhone(ctx, phoneSend)
-	res, e := g.client.SendMessage(ctx, req)
+	res, e := sendMessage(ctx, req)
 	if e != nil {
 		d.Result = "submission_unknown"
 		return Receipt{}, ErrUnknown

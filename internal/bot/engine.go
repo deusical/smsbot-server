@@ -35,6 +35,8 @@ type Engine struct {
 	// with consent changes and protected commits.
 	mu              *sync.Mutex
 	preflight       preflightRetry
+	videoChecked    string
+	workerUnlocked  bool
 	dispatchMu      sync.Mutex
 	now             func() time.Time
 	pending         map[string]context.CancelFunc
@@ -86,11 +88,11 @@ func (e *Engine) CollectionSettingsSaved(s collection.Settings) {
 
 // lookupMode tells check which phase a job is in. liveLookup asks the phone for
 // the conversation now and is mandatory at acceptance (admit) and in every
-// check right before uploading or sending (sendableVideo, collectDownloadUploads,
-// prepareFiles, generateReply and submit). cachedLookup is used only while a
-// job is in its worker-preparation phase (re-dispatched solely to poll a worker
-// task): it checks the transport's cached conversation when one exists and
-// falls back to a live lookup otherwise.
+// check right before uploading or sending (sendableVideo, prepareDownloadUpload,
+// collectDownloadUploads, prepareFiles, generateReply and submit). cachedLookup
+// is used only while a job is in its worker-preparation phase (re-dispatched
+// solely to poll a worker task): it checks the transport's cached conversation
+// when one exists and falls back to a live lookup otherwise.
 type lookupMode int
 
 const (
@@ -878,6 +880,8 @@ func (e *Engine) Dispatch(ctx context.Context) error {
 	e.dispatchMu.Lock()
 	defer e.dispatchMu.Unlock()
 	e.mu.Lock()
+	e.videoChecked = ""
+	e.workerUnlocked = false
 	if err := e.collectDownloadUploads(ctx); err != nil {
 		e.mu.Unlock()
 		return err
@@ -890,7 +894,11 @@ func (e *Engine) Dispatch(ctx context.Context) error {
 	if p.Mutation != nil {
 		return e.dispatchReaction(ctx, j, p) // releases the lock
 	}
-	defer e.mu.Unlock()
+	defer func() {
+		e.videoChecked = ""
+		e.workerUnlocked = false
+		e.mu.Unlock()
+	}()
 	if done, err := e.runPipeline(ctx, j, &p, &cfg); done {
 		return err
 	}
@@ -902,14 +910,14 @@ func (e *Engine) Dispatch(ctx context.Context) error {
 	} else if done, err := e.prepareFiles(ctx, j, &p); done {
 		return err
 	}
-	if mode == cachedLookup && len(p.Attachments) == 0 {
+	if (mode == cachedLookup || e.workerUnlocked) && len(p.Attachments) == 0 && e.videoChecked != j.ID {
 		// A pipeline whose worker step produced no attachment skipped sendableVideo
 		// and upload checks; verify live before submitting.
 		checked, code, err := e.check(ctx, j, p, liveLookup)
 		cfg = checked
 		if err != nil {
 			if errors.Is(err, transport.ErrLookupFailed) {
-				_ = e.Store.Complete(j.ID, "failed", "final_check_failed")
+				e.backoffPreflight(j.ID)
 			}
 			return err
 		}
@@ -923,6 +931,14 @@ func (e *Engine) Dispatch(ctx context.Context) error {
 	}
 	// The conversation turn's earlier history, as checked by the AI step.
 	return e.submit(ctx, j, p, cfg)
+}
+
+func (e *Engine) backoffPreflight(id string) {
+	if e.preflight.job != id {
+		e.preflight = preflightRetry{job: id}
+	}
+	e.preflight.failures++
+	e.preflight.until = e.now().Add(min(30*time.Second, time.Second*time.Duration(1<<min(e.preflight.failures-1, 5))))
 }
 
 // nextReady returns the next queued job that passes every pre-send check.
@@ -956,8 +972,7 @@ func (e *Engine) nextReady(ctx context.Context) (j store.Job, p store.Plan, cfg 
 		if !e.Transport.Ready() {
 			return j, p, cfg, mode, false, transport.ErrUnavailable
 		}
-		e.preflight.failures++
-		e.preflight.until = e.now().Add(min(30*time.Second, time.Second*time.Duration(1<<min(e.preflight.failures-1, 5))))
+		e.backoffPreflight(j.ID)
 		return j, p, cfg, mode, false, err
 	}
 	e.preflight = preflightRetry{}
@@ -1028,6 +1043,7 @@ func (e *Engine) generateReply(ctx context.Context, j store.Job, p *store.Plan, 
 	}
 	genctx, cancel := context.WithTimeout(ctx, 95*time.Second)
 	e.pending[j.ID] = cancel
+	e.videoChecked = ""
 	e.mu.Unlock()
 	var result Result
 	image, imageErr := e.loadFile(genctx, j.ConversationID, call.File, cfg.Settings.AIPhotoMaxMB)
@@ -1087,6 +1103,7 @@ func (e *Engine) generateReply(ctx context.Context, j store.Job, p *store.Plan, 
 		}
 		return true, err
 	}
+	e.workerUnlocked = false
 	if ok, err = e.Store.Transition(j.ID, "generating", "queued"); err != nil || !ok {
 		return true, err
 	}
@@ -1113,6 +1130,7 @@ func (e *Engine) prepareFiles(ctx context.Context, j store.Job, p *store.Plan) (
 	}
 	uploadCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	e.pending[j.ID] = cancel
+	e.videoChecked = ""
 	e.mu.Unlock()
 	files, uploadErr := preparer.PrepareFiles(uploadCtx, p.Attachments)
 	cancel()
@@ -1136,6 +1154,7 @@ func (e *Engine) prepareFiles(ctx context.Context, j store.Job, p *store.Plan) (
 		err = e.Store.Complete(j.ID, "cancelled", "attachment_final_check_failed")
 		return true, err
 	}
+	e.workerUnlocked = false
 	p.Attachments = files
 	if err = e.Store.SavePlan(j.ID, *p); err != nil {
 		return true, err

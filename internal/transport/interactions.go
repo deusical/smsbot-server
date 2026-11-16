@@ -115,6 +115,22 @@ func (g *Google) SendReply(ctx context.Context, conv, txn, text, target string, 
 }
 
 func (g *Google) React(ctx context.Context, conv, expectedPeer, target, emoji, operation string) error {
+	var get func(context.Context, string) (*gmproto.Conversation, error)
+	var react func(context.Context, *gmproto.SendReactionRequest) (*gmproto.SendReactionResponse, error)
+	if g.client != nil {
+		get = g.client.GetConversation
+		react = g.client.SendReaction
+	}
+	return g.reactWith(ctx, conv, expectedPeer, target, emoji, operation, lookupRetryPause, get, react)
+}
+
+func (g *Google) reactWith(
+	ctx context.Context,
+	conv, expectedPeer, target, emoji, operation string,
+	pause time.Duration,
+	getConversation func(context.Context, string) (*gmproto.Conversation, error),
+	sendReaction func(context.Context, *gmproto.SendReactionRequest) (*gmproto.SendReactionResponse, error),
+) error {
 	ctx = WithPhonePurpose(ctx, "reaction")
 	if !g.Ready() {
 		return refuse("not_ready")
@@ -123,7 +139,7 @@ func (g *Google) React(ctx context.Context, conv, expectedPeer, target, emoji, o
 		return refuse("reaction_target_missing")
 	}
 	g.countPhone(ctx, phoneLookup)
-	c, err := g.client.GetConversation(ctx, conv)
+	c, err := fetchConversation(ctx, conv, pause, getConversation)
 	if err != nil || c.GetConversationID() != conv {
 		return refuse("conversation_lookup_failed")
 	}
@@ -179,7 +195,7 @@ func (g *Google) React(ctx context.Context, conv, expectedPeer, target, emoji, o
 		return ErrNotSubmitted
 	}
 	g.countPhone(ctx, phoneReact)
-	res, err := g.client.SendReaction(ctx, &gmproto.SendReactionRequest{MessageID: target, ReactionData: gmproto.MakeReactionData(emoji), Action: action, SIMPayload: sim})
+	res, err := sendReaction(ctx, &gmproto.SendReactionRequest{MessageID: target, ReactionData: gmproto.MakeReactionData(emoji), Action: action, SIMPayload: sim})
 	if err != nil {
 		return ErrUnknown
 	}
