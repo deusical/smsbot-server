@@ -95,3 +95,90 @@ func TestRefreshPersistenceCreatesEncryptedUpdatedState(t *testing.T) {
 		t.Fatal("refreshed token lost")
 	}
 }
+
+func TestRunPeriodicSaveSkipsUnchangedSessionAndWritesOnChange(t *testing.T) {
+	t.Parallel()
+	g, original := cookieUpdateFixture(t, syntheticSession)
+	plain, err := g.vault.Open("google-session", string(original))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var auth libgm.AuthData
+	if err := json.Unmarshal(plain, &auth); err != nil {
+		t.Fatal(err)
+	}
+	g.attach(&auth)
+	g.saveInterval = 10 * time.Millisecond
+	g.recoveryInterval = time.Hour
+	g.connected = func() bool { return true }
+	g.ready.Store(true)
+
+	if err := g.Save(); err != nil {
+		t.Fatal(err)
+	}
+	firstCiphertext, err := os.ReadFile(g.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	runTicks := func(d time.Duration) {
+		ctx, cancel := context.WithTimeout(context.Background(), d)
+		defer cancel()
+		g.Run(ctx, func(Incoming) {}, func() {}, func(string, string, string, string) {})
+	}
+
+	// Unchanged periodic ticks must not re-seal or rewrite the session file.
+	runTicks(65 * time.Millisecond)
+	afterIdle, err := os.ReadFile(g.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(firstCiphertext, afterIdle) {
+		t.Fatal("unchanged session was rewritten on periodic tick")
+	}
+
+	// Mutating session cookies causes the next periodic tick to persist once.
+	auth.CookiesLock.Lock()
+	if auth.Cookies == nil {
+		auth.Cookies = map[string]string{}
+	}
+	auth.Cookies["SID"] = "SYNTHETIC_ROTATED_SID"
+	auth.CookiesLock.Unlock()
+
+	deadline := time.Now().Add(2 * time.Second)
+	var afterChange []byte
+	for time.Now().Before(deadline) {
+		runTicks(25 * time.Millisecond)
+		afterChange, err = os.ReadFile(g.path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(firstCiphertext, afterChange) {
+			break
+		}
+	}
+	if bytes.Equal(firstCiphertext, afterChange) {
+		t.Fatal("changed session was not saved on periodic tick")
+	}
+	opened, err := g.vault.Open("google-session", string(afterChange))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var persisted libgm.AuthData
+	if err := json.Unmarshal(opened, &persisted); err != nil {
+		t.Fatal(err)
+	}
+	if persisted.Cookies["SID"] != "SYNTHETIC_ROTATED_SID" {
+		t.Fatalf("persisted cookie = %q", persisted.Cookies["SID"])
+	}
+
+	// Further ticks with no new change keep the file untouched again.
+	runTicks(65 * time.Millisecond)
+	afterSecondIdle, err := os.ReadFile(g.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(afterChange, afterSecondIdle) {
+		t.Fatal("unchanged session rewritten after saving update")
+	}
+}

@@ -143,7 +143,7 @@ func normalize(w *libgm.WrappedMessage, started time.Time) (Incoming, bool) {
 func (g *Google) Run(ctx context.Context, incoming func(Incoming), pause func(), receipt func(string, string, string, string), interrupted ...func() error) {
 	// Session replacement must not race an old recovery probe saving its session.
 	defer g.recoveryWG.Wait()
-	timer := time.NewTicker(30 * time.Second)
+	timer := time.NewTicker(cmp.Or(g.saveInterval, 30*time.Second))
 	defer timer.Stop()
 	recoveryTimer := time.NewTicker(cmp.Or(g.recoveryInterval, time.Second))
 	defer recoveryTimer.Stop()
