@@ -21,6 +21,9 @@ export function ConversationsPage({
   state,
   busy,
   act,
+  onPatchConversation,
+  onRefresh,
+  onError,
   selected,
   onSelect,
   partial,
@@ -38,6 +41,9 @@ export function ConversationsPage({
   state: State | null;
   busy: boolean;
   act: (fn: () => Promise<unknown>, refreshAfter?: boolean) => Promise<void>;
+  onPatchConversation: (id: string, patch: Partial<Conversation>) => void;
+  onRefresh: () => void;
+  onError: (e: unknown) => void;
   selected: string;
   onSelect: (id: string) => void;
   partial: boolean;
@@ -46,7 +52,9 @@ export function ConversationsPage({
   onResume: () => void;
 }) {
   const [search, setSearch] = useState(""),
-    [filter, setFilter] = useState<Filter>("all");
+    [filter, setFilter] = useState<Filter>("all"),
+    [toggling, setToggling] = useState<Record<string, boolean>>({});
+  const togglingRef = useRef<Set<string>>(new Set());
   const searchBox = useRef<HTMLInputElement>(null);
   const { markSeen, isUnread } = useSeen();
   const typing = useTyping(!!state?.capabilities.includes("typing") && !!inbox?.enabled);
@@ -95,21 +103,39 @@ export function ConversationsPage({
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, []);
-  const toggle = (c: Conversation) =>
-    act(() =>
-      c.enrolled
-        ? api(`/enrollment/${encodeURIComponent(c.id)}`, "DELETE")
-        : api("/enrollment", "POST", {
-            conversation_id: c.id,
-            participant_id: c.participant_id,
-          }),
-    );
+  const toggle = async (c: Conversation) => {
+    if (togglingRef.current.has(c.id)) return;
+    togglingRef.current.add(c.id);
+    const next = !c.enrolled;
+    setToggling((prev) => ({ ...prev, [c.id]: true }));
+    try {
+      if (next) {
+        await api("/enrollment", "POST", {
+          conversation_id: c.id,
+          participant_id: c.participant_id,
+        });
+      } else {
+        await api(`/enrollment/${encodeURIComponent(c.id)}`, "DELETE");
+      }
+      onPatchConversation(c.id, { enrolled: next });
+    } catch (e) {
+      onError(e);
+      onRefresh();
+    } finally {
+      togglingRef.current.delete(c.id);
+      setToggling((prev) => {
+        const copy = { ...prev };
+        delete copy[c.id];
+        return copy;
+      });
+    }
+  };
   const enrollSwitch = (c: Conversation, compact: boolean) => (
     <Switch
       label={compact ? `Bot replies for ${c.label}` : "Bot replies"}
       hideLabel={compact}
       checked={c.enrolled}
-      disabled={busy || c.group || !c.writable}
+      disabled={!!toggling[c.id] || c.group || !c.writable}
       onChange={() => void toggle(c)}
     />
   );
@@ -253,7 +279,18 @@ export function ConversationsPage({
             state={state}
             busy={busy}
             act={act}
-            enrollControl={current.group ? <GroupBot conversation={current} busy={busy} act={act} /> : enrollSwitch(current, false)}
+            enrollControl={
+              current.group ? (
+                <GroupBot
+                  conversation={current}
+                  onPatchConversation={onPatchConversation}
+                  onRefresh={onRefresh}
+                  onError={onError}
+                />
+              ) : (
+                enrollSwitch(current, false)
+              )
+            }
             typing={typing.has(current.id)}
             onBack={() => onSelect("")}
             onResume={onResume}

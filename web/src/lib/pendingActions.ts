@@ -7,6 +7,7 @@ export type ReactionAttempt = {
   version: string;
   id?: string;
   state: string;
+  error?: string;
 };
 let epoch=0;
 export const reactionEpoch=()=>epoch;

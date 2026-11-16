@@ -14,11 +14,14 @@ export function ArchiveSettings({ conversations }: { conversations: Conversation
     [job, setJob] = useState<Job | null>(null),
     [error, setError] = useState(""),
     [notice, setNotice] = useState(""),
-    [busy, setBusy] = useState(false);
+    [busy, setBusy] = useState(false),
+    [policyBusy, setPolicyBusy] = useState(false);
   const [conversation, setConversation] = useState(""),
     [since, setSince] = useState(""),
     [format, setFormat] = useState("encrypted");
-  const pending = useRef(false),
+  const savedPolicy = useRef<Policy | null>(null),
+    policySaving = useRef(false),
+    pending = useRef(false),
     epoch = useRef(0),
     refreshing = useRef(false),
     disposed = useRef(false),
@@ -42,7 +45,10 @@ export function ArchiveSettings({ conversations }: { conversations: Conversation
     disposed.current = false;
     void api<Policy>("/inbox/archive/files/policy")
       .then((p) => {
-        if (!disposed.current) setPolicy(p);
+        if (!disposed.current) {
+          savedPolicy.current = p;
+          setPolicy(p);
+        }
       })
       .catch(() => {
         if (!disposed.current) setError("Could not load file archive policy.");
@@ -72,7 +78,7 @@ export function ArchiveSettings({ conversations }: { conversations: Conversation
     };
   }, [running, refresh]);
   async function action(fn: () => Promise<void>): Promise<boolean> {
-    if (pending.current) return false;
+    if (pending.current || policySaving.current) return false;
     pending.current = true;
     epoch.current++;
     setBusy(true);
@@ -82,11 +88,11 @@ export function ArchiveSettings({ conversations }: { conversations: Conversation
       await fn();
       return true;
     } catch {
-      setError("Archive operation failed. Check disk space and retry.");
+      if (!disposed.current) setError("Archive operation failed. Check disk space and retry.");
       return false;
     } finally {
       pending.current = false;
-      setBusy(false);
+      if (!disposed.current) setBusy(false);
     }
   }
   const exportStatus = job && (
@@ -108,7 +114,32 @@ export function ArchiveSettings({ conversations }: { conversations: Conversation
       >
         {policy && (
           <>
-            <Switch label="Automatically archive original files" checked={policy.enabled} onChange={(enabled) => setPolicy({ ...policy, enabled })} />
+            <Switch
+              label="Automatically archive original files"
+              checked={policy.enabled}
+              disabled={busy || policyBusy}
+              onChange={async (enabled) => {
+                if (policySaving.current || pending.current) return;
+                policySaving.current = true;
+                setPolicyBusy(true);
+                const base = savedPolicy.current ?? policy;
+                setError("");
+                setPolicy((cur) => (cur ? { ...cur, enabled } : { ...base, enabled }));
+                try {
+                  const saved = await api<Policy>("/inbox/archive/files/policy", "PUT", { ...base, enabled });
+                  savedPolicy.current = saved;
+                  if (!disposed.current) setPolicy((cur) => (cur ? { ...cur, enabled: saved.enabled } : saved));
+                } catch {
+                  if (!disposed.current) {
+                    setPolicy((cur) => (cur ? { ...cur, enabled: base.enabled } : base));
+                    setError("Could not save file archive policy.");
+                  }
+                } finally {
+                  policySaving.current = false;
+                  if (!disposed.current) setPolicyBusy(false);
+                }
+              }}
+            />
             <div className="field-row">
               <Field label="Maximum original file (MiB, 0 unlimited)" unit="MiB">
                 <input
@@ -136,11 +167,15 @@ export function ArchiveSettings({ conversations }: { conversations: Conversation
               <button
                 type="button"
                 className="primary"
-                disabled={busy}
+                disabled={busy || policyBusy}
                 onClick={() =>
                   void action(async () => {
-                    setPolicy(await api<Policy>("/inbox/archive/files/policy", "PUT", policy));
-                    setNotice("File archive policy saved.");
+                    const saved = await api<Policy>("/inbox/archive/files/policy", "PUT", policy);
+                    savedPolicy.current = saved;
+                    if (!disposed.current) {
+                      setPolicy(saved);
+                      setNotice("File archive policy saved.");
+                    }
                   })
                 }
               >

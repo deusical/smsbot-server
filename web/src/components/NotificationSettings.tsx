@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError, type Conversation } from "../lib/api";
 import { useResource } from "../lib/resource";
 import { RefreshBar } from "./RefreshBar";
@@ -106,9 +106,14 @@ export function NotificationSettings({ conversations, notify }: { conversations:
   const devices = state?.devices ?? [];
   const current = devices.find((d) => d.id === mine);
   const others = devices.filter((d) => d.id !== mine);
-  const replace = (d: NotificationDevice) => {
-    if (state) list.set({ ...state, devices: state.devices.map((x) => (x.id === d.id ? d : x)) });
-  };
+  const replace = useCallback(
+    (d: NotificationDevice) => {
+      list.set((prev) =>
+        prev ? { ...prev, devices: prev.devices.map((x) => (x.id === d.id ? d : x)) } : null,
+      );
+    },
+    [list.set],
+  );
   const checking = !unsupported && !!state && !here.data;
 
   return (
@@ -226,31 +231,66 @@ function DevicePrefs({
   const [prefs, setPrefs] = useState(device.prefs);
   const [query, setQuery] = useState("");
   const saved = useRef(device);
+  const alive = useRef(true);
+  const draft = useRef({ label: device.label, prefs: device.prefs });
+  const pendingSave = useRef(false);
+  const saving = useRef(false);
   useEffect(() => {
     saved.current = device;
+    if (!saving.current && !pendingSave.current) {
+      draft.current = { label: device.label, prefs: device.prefs };
+      setLabel(device.label);
+      setPrefs(device.prefs);
+    }
   }, [device]);
-  // Changes build on the latest edit, not the last render, and a failed save
-  // only reverts when no newer change has been made since.
-  const latest = useRef(device.prefs);
-  const version = useRef(0);
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
 
-  async function save(next: NotificationPrefs, nextLabel = label) {
-    const mine = ++version.current;
-    latest.current = next;
-    setPrefs(next);
+  async function flushSaves() {
+    if (saving.current) return;
+    saving.current = true;
     try {
-      const d = await api<NotificationDevice>(`/notifications/devices/${encodeURIComponent(device.id)}`, "PUT", { label: nextLabel.trim(), prefs: next });
-      if (mine === version.current) onSaved(d);
-    } catch {
-      if (mine !== version.current) return;
-      latest.current = saved.current.prefs;
-      setPrefs(saved.current.prefs);
-      onError("The setting was not saved. Try again.");
+      while (pendingSave.current && alive.current) {
+        pendingSave.current = false;
+        const { label: nextLabel, prefs: nextPrefs } = draft.current;
+        try {
+          const d = await api<NotificationDevice>(
+            `/notifications/devices/${encodeURIComponent(device.id)}`,
+            "PUT",
+            { label: nextLabel.trim(), prefs: nextPrefs },
+          );
+          if (!alive.current) return;
+          saved.current = d;
+          onSaved(d);
+        } catch {
+          if (!alive.current) return;
+          if (!pendingSave.current) {
+            draft.current = { label: saved.current.label, prefs: saved.current.prefs };
+            setPrefs(saved.current.prefs);
+            setLabel(saved.current.label);
+            onSaved(saved.current);
+            onError("The setting was not saved. Try again.");
+          }
+        }
+      }
+    } finally {
+      saving.current = false;
     }
   }
-  const set = <K extends keyof NotificationPrefs>(key: K, value: NotificationPrefs[K]) => void save({ ...latest.current, [key]: value });
+
+  function save(next: NotificationPrefs, nextLabel = draft.current.label) {
+    draft.current = { label: nextLabel, prefs: next };
+    setPrefs(next);
+    pendingSave.current = true;
+    void flushSaves();
+  }
+  const set = <K extends keyof NotificationPrefs>(key: K, value: NotificationPrefs[K]) => save({ ...draft.current.prefs, [key]: value });
   const toggle = (key: "conversations" | "muted", id: string) => {
-    const list = latest.current[key];
+    const list = draft.current.prefs[key];
     set(key, list.includes(id) ? list.filter((x) => x !== id) : [...list, id]);
   };
 
@@ -268,8 +308,11 @@ function DevicePrefs({
           id={`device-name-${device.id}`}
           value={label}
           maxLength={60}
-          onChange={(e) => setLabel(e.target.value)}
-          onBlur={() => label.trim() !== saved.current.label && void save(latest.current, label)}
+          onChange={(e) => {
+            draft.current = { ...draft.current, label: e.target.value };
+            setLabel(e.target.value);
+          }}
+          onBlur={() => label.trim() !== saved.current.label && save(draft.current.prefs, label)}
         />
       </div>
       <div className="field">

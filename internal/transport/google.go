@@ -43,6 +43,7 @@ type Google struct {
 	list             []Conversation
 	settings         *gmproto.Settings
 	conversations    map[string]*gmproto.Conversation
+	staleCached      map[string]bool
 	updates          chan any
 	queueMu          sync.Mutex
 	overflow         atomic.Bool

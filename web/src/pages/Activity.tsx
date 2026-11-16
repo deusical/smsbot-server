@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { api, type Conversation, type Job } from "../lib/api";
+import { useRef, useState } from "react";
+import { type Conversation, type Job } from "../lib/api";
 import { moduleTitle, useModules } from "../lib/modules";
 import { Icon } from "../components/Icon";
 import { LoadingState } from "../components/Loading";
@@ -52,17 +52,34 @@ function shortUsedTools(tools?: string[]): string {
 export function ActivityFeed({
   jobs,
   conversations,
-  busy = false,
-  act,
+  onApprove,
+  onCancel,
   compact = false,
 }: {
   jobs: Job[];
   conversations: Conversation[];
-  busy?: boolean;
-  act?: (fn: () => Promise<unknown>) => Promise<void>;
+  onApprove?: (id: string) => Promise<void>;
+  onCancel?: (id: string) => Promise<void>;
   compact?: boolean;
 }) {
   const [open, setOpen] = useState<string | null>(null);
+  const [pending, setPending] = useState<Record<string, boolean>>({});
+  const pendingRef = useRef<Set<string>>(new Set());
+  const runJobAction = async (id: string, fn: (id: string) => Promise<void>) => {
+    if (pendingRef.current.has(id)) return;
+    pendingRef.current.add(id);
+    setPending((p) => ({ ...p, [id]: true }));
+    try {
+      await fn(id);
+    } finally {
+      pendingRef.current.delete(id);
+      setPending((p) => {
+        const next = { ...p };
+        delete next[id];
+        return next;
+      });
+    }
+  };
   const { modules } = useModules();
   // The step a request is on: the first not yet finished. A request being
   // sent is still on its last steps.
@@ -112,39 +129,30 @@ export function ActivityFeed({
                     : ""}
                 </span>
               </button>
-              {act && pendingStates.includes(j.state) && (
+              {(onApprove || onCancel) && pendingStates.includes(j.state) && (
                 <span className="feed-actions">
-                  {j.state === "awaiting_approval" && (
+                  {onApprove && j.state === "awaiting_approval" && (
                     <button
                       type="button"
                       className="small primary"
-                      disabled={busy}
-                      onClick={() =>
-                        void act(() =>
-                          api(
-                            `/jobs/${encodeURIComponent(j.id)}/approve`,
-                            "POST",
-                          ),
-                        )
-                      }
+                      disabled={!!pending[j.id]}
+                      onClick={() => void runJobAction(j.id, onApprove)}
                     >
                       <Icon name="check" size={15} />
                       Approve
                     </button>
                   )}
-                  <button
-                    type="button"
-                    className="small ghost"
-                    disabled={busy}
-                    aria-label={`Cancel !${j.command.replace(/^!/, "")}`}
-                    onClick={() =>
-                      void act(() =>
-                        api(`/jobs/${encodeURIComponent(j.id)}/cancel`, "POST"),
-                      )
-                    }
-                  >
-                    Cancel
-                  </button>
+                  {onCancel && (
+                    <button
+                      type="button"
+                      className="small ghost"
+                      disabled={!!pending[j.id]}
+                      aria-label={`Cancel !${j.command.replace(/^!/, "")}`}
+                      onClick={() => void runJobAction(j.id, onCancel)}
+                    >
+                      Cancel
+                    </button>
+                  )}
                 </span>
               )}
             </div>
@@ -274,15 +282,15 @@ export function ActivityFeed({
 export function ActivityPage({
   jobs,
   conversations,
-  busy,
-  act,
+  onApprove,
+  onCancel,
   loaded = true,
   loadError = "",
 }: {
   jobs: Job[];
   conversations: Conversation[];
-  busy: boolean;
-  act: (fn: () => Promise<unknown>) => Promise<void>;
+  onApprove: (id: string) => Promise<void>;
+  onCancel: (id: string) => Promise<void>;
   /** False until the first read of Activity has finished. */
   loaded?: boolean;
   loadError?: string;
@@ -375,8 +383,8 @@ export function ActivityPage({
           <ActivityFeed
             jobs={shown}
             conversations={conversations}
-            busy={busy}
-            act={act}
+            onApprove={onApprove}
+            onCancel={onCancel}
           />
         ) : (
           <div className="empty">

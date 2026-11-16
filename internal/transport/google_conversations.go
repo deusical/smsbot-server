@@ -110,6 +110,45 @@ func (g *Google) cacheDetail(c *gmproto.Conversation) {
 		g.conversations = map[string]*gmproto.Conversation{}
 	}
 	g.conversations[c.GetConversationID()] = c
+	delete(g.staleCached, c.GetConversationID())
+}
+
+// updateBaselineLocked updates g.conversations from a phone event or list page
+// unless an already-known conversation changed identity, sending SIM, group
+// roster or readability, in which case the send baseline is preserved and
+// CachedConversation marks id stale until a verified lookup replaces it.
+// Caller holds g.mu.
+func (g *Google) updateBaselineLocked(c *gmproto.Conversation, allowUnreadable bool) bool {
+	if c == nil || c.GetConversationID() == "" {
+		return false
+	}
+	id := c.GetConversationID()
+	old := g.conversations[id]
+	markStale := func() {
+		if old == nil {
+			return
+		}
+		if g.staleCached == nil {
+			g.staleCached = map[string]bool{}
+		}
+		g.staleCached[id] = true
+	}
+	if !allowUnreadable && !readable(c) {
+		markStale()
+		return false
+	}
+	changed := old != nil && eligible(old) && (!eligible(c) || peer(old) != peer(c) || old.GetDefaultOutgoingID() != c.GetDefaultOutgoingID())
+	moved := old != nil && old.GetIsGroupChat() && (!readable(c) || roster(old) != roster(c) || old.GetDefaultOutgoingID() != c.GetDefaultOutgoingID())
+	if changed || moved {
+		markStale()
+		return changed
+	}
+	if g.conversations == nil {
+		g.conversations = map[string]*gmproto.Conversation{}
+	}
+	g.conversations[id] = c
+	delete(g.staleCached, id)
+	return false
 }
 
 func conversationLabel(c *gmproto.Conversation) string {
@@ -182,15 +221,17 @@ func (g *Google) conversationGetter() func(context.Context, string) (*gmproto.Co
 }
 
 // CachedConversation projects the last phone record seen for id, from a
-// lookup, the conversation list or a phone update.
+// lookup, the conversation list or a phone update, unless a subsequent event
+// or list page reported an identity, SIM, roster or readability change.
 func (g *Google) CachedConversation(id string) (Conversation, bool) {
 	if !g.Ready() {
 		return Conversation{}, false
 	}
 	g.mu.Lock()
 	c := g.conversations[id]
+	stale := g.staleCached[id]
 	g.mu.Unlock()
-	if c == nil || c.GetConversationID() != id {
+	if stale || c == nil || c.GetConversationID() != id {
 		return Conversation{}, false
 	}
 	return detailConversation(id, c), true
@@ -229,6 +270,7 @@ func (g *Google) Conversations(ctx context.Context) ([]Conversation, error) {
 			continue
 		}
 		g.conversations[c.GetConversationID()] = c
+		delete(g.staleCached, c.GetConversationID())
 		out = append(out, listConversation(c))
 	}
 	g.mu.Unlock()

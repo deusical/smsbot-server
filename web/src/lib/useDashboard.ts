@@ -17,6 +17,7 @@ type ConversationPage = {
 };
 type ListFetch = { revision: string; ready: boolean; partial: boolean; at: number };
 const unfetched: ListFetch = { revision: "", ready: false, partial: false, at: 0 };
+const pendingJobStates = new Set(["queued", "generating", "awaiting_approval"]);
 
 function mergeConversations(previous: Conversation[], next: Conversation[]) {
   const m = new Map(previous.map((c) => [c.id, c]));
@@ -48,30 +49,43 @@ export function useDashboard(session: Session, onExpired: () => void) {
   const listFetched = useRef<ListFetch>(unfetched);
   const forceList = useRef(true);
   const refreshing = useRef(false);
+  const rerunRefresh = useRef(false);
   const refreshingDetails = useRef(false);
+  const rerunDetails = useRef<State | null>(null);
   const stateRevision = useRef(0);
+  const listEpoch = useRef(0);
+  const jobsEpoch = useRef(0);
   const expired = useRef(onExpired);
   expired.current = onExpired;
   const { generation, confirm } = session;
 
   const refreshDetails = useCallback(
     async (s: State, started: number) => {
-      if (refreshingDetails.current) return;
+      if (refreshingDetails.current) {
+        rerunDetails.current = s;
+        return;
+      }
       refreshingDetails.current = true;
       let stage = "settings";
       try {
-        let inboxConfig: InboxSettings | null = null;
-        if (s.capabilities.includes("full_inbox")) {
-          inboxConfig = await api<InboxSettings>("/inbox/settings");
-          if (started !== generation.current) return;
+        const jobsStamp = jobsEpoch.current;
+        const [inboxConfig, activity] = await Promise.all([
+          s.capabilities.includes("full_inbox")
+            ? api<InboxSettings>("/inbox/settings")
+            : Promise.resolve(null),
+          api<Job[]>("/activity").catch((e: unknown) => {
+            stage = "activity";
+            throw e;
+          }),
+        ]);
+        if (started !== generation.current) return;
+        if (inboxConfig) {
           setInbox((previous) =>
-            previous && previous.revision > inboxConfig!.revision ? previous : inboxConfig,
+            previous && previous.revision > inboxConfig.revision ? previous : inboxConfig,
           );
         }
-        stage = "activity";
-        const activity = await api<Job[]>("/activity");
-        if (started !== generation.current) return;
-        setJobs(activity);
+        if (jobsStamp === jobsEpoch.current) setJobs(activity);
+        if (rerunDetails.current) return;
         if (s.transport_ready || s.capabilities.includes("archive_history")) {
           stage = "conversations";
           const force = forceList.current;
@@ -87,6 +101,7 @@ export function useDashboard(session: Session, onExpired: () => void) {
           if (!fresh && (inboxConfig?.enabled || s.capabilities.includes("archive_history"))) {
             // A return to the app during this read keeps its own forced read.
             forceList.current = false;
+            const listStamp = listEpoch.current;
             const discovered = await api<ConversationPage>(
               force ? "/inbox/conversations?refresh=1" : "/inbox/conversations",
             ).catch((e: unknown) => {
@@ -94,16 +109,22 @@ export function useDashboard(session: Session, onExpired: () => void) {
               throw e;
             });
             if (started !== generation.current) return;
-            if (!paginated.current) setConversationCursor(discovered.next_cursor);
-            setConversations((previous) => mergeConversations(previous, discovered.conversations));
-            setDiscoveryPartial(!!discovered.partial);
-            // A stale page predates recent activity; ask again on the next poll.
-            listFetched.current = {
-              revision: discovered.stale ? "" : (s.conversations_revision ?? ""),
-              ready: s.transport_ready,
-              partial: !!discovered.partial,
-              at: Date.now(),
-            };
+            if (listStamp === listEpoch.current) {
+              if (!paginated.current) setConversationCursor(discovered.next_cursor);
+              setConversations((previous) => mergeConversations(previous, discovered.conversations));
+              setDiscoveryPartial(!!discovered.partial);
+              // A stale page predates recent activity; ask again on the next poll.
+              listFetched.current = {
+                revision: discovered.stale ? "" : (s.conversations_revision ?? ""),
+                ready: s.transport_ready,
+                partial: !!discovered.partial,
+                at: Date.now(),
+              };
+            } else {
+              // A local toggle changed conversations while this read was in flight;
+              // keep the newer local state and let the toggle's refresh re-read.
+              listFetched.current = unfetched;
+            }
           }
           setError("");
         } else setError("Your phone isn’t connected. Conversations may be out of date.");
@@ -117,6 +138,9 @@ export function useDashboard(session: Session, onExpired: () => void) {
         else setError("Connection lost. Retrying…");
       } finally {
         refreshingDetails.current = false;
+        const next = rerunDetails.current;
+        rerunDetails.current = null;
+        if (next && started === generation.current) void refreshDetails(next, started);
       }
     },
     [generation],
@@ -124,15 +148,19 @@ export function useDashboard(session: Session, onExpired: () => void) {
 
   /** Reads state; on success confirms the session and refreshes details. */
   const refresh = useCallback(async () => {
-    if (refreshing.current) return;
+    if (refreshing.current) {
+      rerunRefresh.current = true;
+      return;
+    }
     refreshing.current = true;
     const started = generation.current;
     try {
       const revision = stateRevision.current;
       const s = await api<State>("/state");
       if (started !== generation.current) return;
-      if (revision === stateRevision.current) setState(s);
       confirm();
+      if (revision !== stateRevision.current) return;
+      setState(s);
       // Startup discovery can be slow. It must not hold login busy or stop
       // readiness/pause polling while the phone is connecting.
       void refreshDetails(s, started);
@@ -142,6 +170,10 @@ export function useDashboard(session: Session, onExpired: () => void) {
       else setError("Could not refresh from the server. Retrying…");
     } finally {
       refreshing.current = false;
+      if (rerunRefresh.current && started === generation.current) {
+        rerunRefresh.current = false;
+        void refresh();
+      }
     }
   }, [generation, confirm, refreshDetails]);
 
@@ -165,12 +197,80 @@ export function useDashboard(session: Session, onExpired: () => void) {
 
   /** Forgets the fetched list so the next refresh rereads it. */
   const invalidateList = useCallback(() => {
+    listEpoch.current++;
     listFetched.current = unfetched;
   }, []);
 
+  /** Applies a confirmed conversation change at once and schedules a quiet catch-up read. */
+  const patchConversation = useCallback(
+    (id: string, patch: Partial<Conversation>) => {
+      listEpoch.current++;
+      listFetched.current = unfetched;
+      setConversations((previous) =>
+        previous.map((c) => (c.id === id ? { ...c, ...patch } : c)),
+      );
+      void refresh();
+    },
+    [refresh],
+  );
+
+  /** Applies a confirmed job state change at once and schedules a quiet catch-up read. */
+  const patchJob = useCallback(
+    (id: string, patch: Partial<Job>) => {
+      jobsEpoch.current++;
+      setJobs((previous) =>
+        previous.map((j) =>
+          j.id === id && pendingJobStates.has(j.state) ? { ...j, ...patch } : j,
+        ),
+      );
+      void refresh();
+    },
+    [refresh],
+  );
+
+  const approveJob = useCallback(
+    async (id: string) => {
+      setError("");
+      try {
+        await api(`/jobs/${encodeURIComponent(id)}/approve`, "POST");
+        patchJob(id, { state: "queued" });
+      } catch (e) {
+        setError(
+          e instanceof ApiError
+            ? e.message.replaceAll("_", " ")
+            : "Could not reach the server.",
+        );
+        void refresh();
+      }
+    },
+    [patchJob, refresh],
+  );
+
+  const cancelJob = useCallback(
+    async (id: string) => {
+      setError("");
+      try {
+        await api(`/jobs/${encodeURIComponent(id)}/cancel`, "POST");
+        patchJob(id, { state: "cancelled", code: "owner_cancelled" });
+      } catch (e) {
+        setError(
+          e instanceof ApiError
+            ? e.message.replaceAll("_", " ")
+            : "Could not reach the server.",
+        );
+        void refresh();
+      }
+    },
+    [patchJob, refresh],
+  );
+
   /** Clears all session data after sign-out or expiry. */
   const reset = useCallback(() => {
+    listEpoch.current++;
+    jobsEpoch.current++;
     listFetched.current = unfetched;
+    rerunDetails.current = null;
+    rerunRefresh.current = false;
     paginated.current = false;
     setState(null);
     setJobs([]);
@@ -180,23 +280,44 @@ export function useDashboard(session: Session, onExpired: () => void) {
   }, []);
 
   /** Sets Live/Pause; an older state read cannot overwrite the result. */
-  const setPaused = useCallback(async (paused: boolean) => {
-    stateRevision.current++;
-    const updated = await api<State>("/pause", "POST", { paused });
-    stateRevision.current++;
-    setState(updated);
-  }, []);
+  const setPaused = useCallback(
+    async (paused: boolean) => {
+      stateRevision.current++;
+      const updated = await api<State>("/pause", "POST", { paused });
+      stateRevision.current++;
+      setState(updated);
+      if (paused) {
+        jobsEpoch.current++;
+        setJobs((previous) =>
+          previous.map((j) =>
+            pendingJobStates.has(j.state)
+              ? { ...j, state: "cancelled", code: "paused" }
+              : j,
+          ),
+        );
+        void refresh();
+      }
+    },
+    [refresh],
+  );
 
   /** Appends the next page of conversations. */
   const loadMoreConversations = useCallback(async () => {
+    const started = generation.current;
+    const listStamp = listEpoch.current;
     const p = await api<ConversationPage>(
       `/inbox/conversations?cursor=${encodeURIComponent(conversationCursor)}`,
     );
-    setConversations((old) => mergeConversations(old, p.conversations));
+    if (started !== generation.current) return;
+    setConversations((old) => {
+      if (listStamp === listEpoch.current) return mergeConversations(old, p.conversations);
+      const existing = new Set(old.map((c) => c.id));
+      return [...old, ...p.conversations.filter((c) => !existing.has(c.id))];
+    });
     setDiscoveryPartial(!!p.partial);
     paginated.current = true;
     setConversationCursor(p.next_cursor === conversationCursor ? "" : p.next_cursor);
-  }, [conversationCursor]);
+  }, [conversationCursor, generation]);
 
   return {
     state,
@@ -211,6 +332,9 @@ export function useDashboard(session: Session, onExpired: () => void) {
     setError,
     refresh,
     invalidateList,
+    patchConversation,
+    approveJob,
+    cancelJob,
     reset,
     setPaused,
     loadMoreConversations,

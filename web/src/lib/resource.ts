@@ -39,7 +39,7 @@ export type Resource<T> = {
   error: string;
   refresh: (fresh?: boolean) => Promise<void>;
   /** Replace the kept copy, for example with the answer to a save. */
-  set: (value: T) => void;
+  set: (value: T | ((previous: T | null) => T | null)) => void;
 };
 
 /**
@@ -63,6 +63,7 @@ export function useResource<T>(
   const alive = useRef(true);
   const inFlight = useRef<Promise<void> | null>(null);
   const inFlightFresh = useRef(false);
+  const mutation = useRef(0);
   const current = useRef(key);
   current.current = key;
 
@@ -73,11 +74,14 @@ export function useResource<T>(
         return inFlight.current.then(() => refresh(true));
       }
       const forKey = key;
+      const startedMutation = mutation.current;
       inFlightFresh.current = fresh;
       setRefreshing(true);
       const run = loader
         .current(fresh)
         .then((data) => {
+          // A save completed while this read was in flight; keep the newer saved state.
+          if (startedMutation !== mutation.current) return;
           storeResource(forKey, data);
           if (alive.current && current.current === forKey) {
             setEntry({ data, at: Date.now() });
@@ -85,12 +89,15 @@ export function useResource<T>(
           }
         })
         .catch((e) => {
+          if (startedMutation !== mutation.current) return;
           if (alive.current && current.current === forKey) setError(explain.current(e));
         })
         .finally(() => {
-          inFlight.current = null;
-          inFlightFresh.current = false;
-          if (alive.current) setRefreshing(false);
+          if (inFlight.current === run) {
+            inFlight.current = null;
+            inFlightFresh.current = false;
+          }
+          if (alive.current && startedMutation === mutation.current) setRefreshing(false);
         });
       inFlight.current = run;
       return run;
@@ -114,9 +121,16 @@ export function useResource<T>(
   }, [key, enabled]);
 
   const set = useCallback(
-    (value: T) => {
-      storeResource(key, value);
-      setEntry({ data: value, at: Date.now() });
+    (value: T | ((previous: T | null) => T | null)) => {
+      const existing = read<T>(key)?.data ?? null;
+      const next = typeof value === "function" ? (value as (prev: T | null) => T | null)(existing) : value;
+      if (next === null) return;
+      mutation.current++;
+      inFlight.current = null;
+      inFlightFresh.current = false;
+      storeResource(key, next);
+      setEntry({ data: next, at: Date.now() });
+      setRefreshing(false);
       setError("");
     },
     [key],

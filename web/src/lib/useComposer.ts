@@ -111,9 +111,11 @@ export function useComposer({
     setReplyTarget(null);
     setFiles([]);
     setSendError("");
+    let batchInbox: Promise<InboxSettings | null | undefined> | null = null;
+    const sharedReadInbox = () => (batchInbox ??= readInbox());
     for (const item of items) {
       addPending(conversation.id, item);
-      void enqueue(() => postPending(conversation, item.key, readInbox));
+      void enqueue(() => postPending(conversation, item.key, sharedReadInbox));
     }
     textarea.current?.focus();
   }

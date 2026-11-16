@@ -61,6 +61,52 @@ func TestConversationEventKeepsSendBaselineOnIdentityChange(t *testing.T) {
 	}
 }
 
+func TestCacheListedPreservesIdentityAndRosterBaselines(t *testing.T) {
+	t.Parallel()
+	g := NewGoogle(nil, "")
+	g.ready.Store(true)
+	g.connected = func() bool { return true }
+	c := individual("chat-1")
+	g.mu.Lock()
+	g.updateBaselineLocked(c, false)
+	g.mu.Unlock()
+	if got, ok := g.CachedConversation("chat-1"); !ok || got.ParticipantID != "peer" {
+		t.Fatalf("expected listed conversation in cache, got %+v ok=%v", got, ok)
+	}
+
+	// A peer or SIM change in a list page must mark CachedConversation stale while
+	// keeping the old baseline so rememberConversationEvent still triggers pause.
+	peerChanged := proto.Clone(c).(*gmproto.Conversation)
+	peerChanged.Participants[0].ID.ParticipantID = "stranger"
+	g.mu.Lock()
+	g.updateBaselineLocked(peerChanged, false)
+	g.mu.Unlock()
+	if _, ok := g.CachedConversation("chat-1"); ok {
+		t.Fatal("CachedConversation served pre-change record after identity changed")
+	}
+	if !g.rememberConversationEvent(peerChanged) {
+		t.Fatal("discovery list overwrite hid identity change from rememberConversationEvent")
+	}
+
+	grp := group("g1", "a", "b")
+	g.mu.Lock()
+	g.updateBaselineLocked(grp, false)
+	moved := group("g1", "a", "b", "c")
+	g.updateBaselineLocked(moved, false)
+	g.mu.Unlock()
+	if roster(g.conversations["g1"]) != roster(grp) {
+		t.Fatal("discovery list overwrite replaced group send baseline")
+	}
+	if _, ok := g.CachedConversation("g1"); ok {
+		t.Fatal("CachedConversation served pre-change group roster")
+	}
+	// A verified single-conversation lookup clears the stale mark.
+	g.cacheDetail(moved)
+	if got, ok := g.CachedConversation("g1"); !ok || got.Roster != roster(moved) {
+		t.Fatalf("verified cacheDetail did not refresh CachedConversation: %+v ok=%v", got, ok)
+	}
+}
+
 func TestOutgoingIdentitySnapshottedWithoutJSONExposure(t *testing.T) {
 	t.Parallel()
 	c := individual("chat-1")

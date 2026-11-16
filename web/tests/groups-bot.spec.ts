@@ -133,3 +133,84 @@ test("the owner can switch several people, or everyone, without waiting between 
     await putInbox(page, original);
   }
 });
+
+test("everyone switch updates in one request and ignores stale in-flight polls without snapping back", async ({ page }) => {
+  await login(page);
+  const original = await getInbox(page);
+  await putInbox(page, { ...original, enabled: true, scope: "all", groups: true, load_older: false });
+  await setMembers(page, ["demo-member-a", "demo-member-b"]);
+  const listBefore = (await (await page.request.get("/api/v1/inbox/conversations")).json()) as {
+    conversations: { id: string; roster?: string }[];
+  };
+  const groupRoster = listBefore.conversations.find((c) => c.id === "demo-group")?.roster ?? "";
+  await page.request.put("/api/v1/enrollment/demo-group/members", {
+    headers,
+    data: { members: ["demo-member-a", "demo-member-b"], roster: groupRoster },
+  });
+
+  let holdStaleList = false;
+  let releaseStaleList: () => void = () => {};
+  let staleStarted: () => void = () => {};
+  let staleFinished: () => void = () => {};
+  const staleInFlight = new Promise<void>((resolve) => {
+    staleStarted = resolve;
+  });
+  const staleDone = new Promise<void>((resolve) => {
+    staleFinished = resolve;
+  });
+  let batchPuts = 0;
+  page.on("request", (req) => {
+    if (req.method() === "PUT" && req.url().endsWith("/api/v1/enrollment/demo-group/members")) {
+      batchPuts++;
+    }
+  });
+
+  try {
+    await page.reload();
+    await openGroup(page);
+    const chip = page.locator(".group-bot").getByRole("button").first();
+    await expect(chip).toHaveText("Bot on for Alex, Sam");
+    await chip.click();
+    const everyone = page.getByRole("switch", { name: "Bot replies for everyone" });
+    await expect(everyone).toBeChecked();
+
+    // Hold one pre-toggle conversation list read in flight so it finishes AFTER the toggle saves.
+    holdStaleList = true;
+    await page.route(/\/api\/v1\/inbox\/conversations(\?.*)?$/, async (route) => {
+      if (holdStaleList) {
+        holdStaleList = false;
+        const staleResponse = await route.fetch();
+        const staleJson = await staleResponse.json();
+        staleStarted();
+        await new Promise<void>((resolve) => {
+          releaseStaleList = resolve;
+        });
+        await route.fulfill({ response: staleResponse, json: staleJson });
+        staleFinished();
+        return;
+      }
+      await route.continue();
+    });
+
+    // Trigger a poll whose /inbox/conversations read captures the pre-click "both on" state.
+    await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+    await staleInFlight;
+
+    // Flip "Bot replies for everyone" off while the stale read is still in flight.
+    await everyone.click();
+    await expect(everyone).not.toBeChecked();
+    await expect(chip).toHaveText("Bot off");
+    expect(batchPuts).toBe(1);
+
+    // Now let the older pre-click list response land: the switch and chip must NOT snap back to "on".
+    releaseStaleList();
+    await staleDone;
+    await expect(everyone).not.toBeChecked();
+    await expect(chip).toHaveText("Bot off");
+  } finally {
+    releaseStaleList();
+    await page.unrouteAll({ behavior: "ignoreErrors" });
+    await page.request.delete("/api/v1/enrollment/demo-group", { headers });
+    await putInbox(page, original);
+  }
+});

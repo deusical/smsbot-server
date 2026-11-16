@@ -109,6 +109,15 @@ func (svc *Service) lookup(ctx context.Context, id string) (transport.Conversati
 	return transport.Lookup(ctx, svc.Transport, id)
 }
 
+func (svc *Service) cachedOrLookup(ctx context.Context, id string) (transport.Conversation, error) {
+	if cache, ok := svc.Transport.(transport.CachedLookup); ok {
+		if c, found := cache.CachedConversation(id); found {
+			return c, nil
+		}
+	}
+	return svc.lookup(ctx, id)
+}
+
 // Binding selects one conversation by its exact participant, or for a group by
 // its fixed group identity.
 type Binding struct {
