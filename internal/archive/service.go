@@ -61,7 +61,9 @@ type Service struct {
 	cursor      string
 	// Interval spaces background ticks; zero means every 3 seconds.
 	Interval     time.Duration
+	Now          func() time.Time
 	lastGC       time.Time
+	gcDeletions  uint64
 	nextScan     time.Time
 	idleSequence int64
 	scanPolicy   Policy
@@ -123,15 +125,26 @@ func (s *Service) Run(ctx context.Context) {
 		}
 	}
 }
+func (s *Service) now() time.Time {
+	if s.Now != nil {
+		return s.Now()
+	}
+	return time.Now()
+}
+
 func (s *Service) Tick(ctx context.Context) {
 	s.tick.Lock()
 	defer s.tick.Unlock()
 	if ctx.Err() != nil {
 		return
 	}
-	if time.Since(s.lastGC) > time.Minute {
-		_ = s.Collect(ctx)
-		s.lastGC = time.Now()
+	now := s.now()
+	deletions := s.Store.MessageDeletionSequence()
+	if s.lastGC.IsZero() || now.Sub(s.lastGC) >= time.Hour || deletions != s.gcDeletions {
+		if s.Collect(ctx) == nil {
+			s.gcDeletions = deletions
+		}
+		s.lastGC = s.now()
 	}
 	policy, err := s.Policy()
 	if err != nil || !policy.Enabled || s.Host == nil {
@@ -152,7 +165,7 @@ func (s *Service) Tick(ctx context.Context) {
 		focused[r.Message] = true
 	}
 	records := focus
-	if !(time.Now().Before(s.nextScan) && policy == s.scanPolicy && sequence == s.idleSequence) {
+	if !(s.now().Before(s.nextScan) && policy == s.scanPolicy && sequence == s.idleSequence) {
 		s.scanPolicy = policy
 		batch, err := s.Store.AttachmentBatch(ctx, s.cursor, 20)
 		if err != nil {
@@ -161,7 +174,7 @@ func (s *Service) Tick(ctx context.Context) {
 		if len(batch) == 0 {
 			s.cursor = ""
 			s.idleSequence = sequence
-			s.nextScan = time.Now().Add(time.Minute)
+			s.nextScan = s.now().Add(time.Minute)
 		} else {
 			s.nextScan = time.Time{}
 		}
@@ -191,7 +204,7 @@ func (s *Service) Tick(ctx context.Context) {
 			}
 			// Repair can authorize or refresh against the phone, so local
 			// eligibility comes first.
-			allowed, err := s.phoneWorkAllowed(file, time.Now(), policy, &used)
+			allowed, err := s.phoneWorkAllowed(file, s.now(), policy, &used)
 			if err != nil {
 				return
 			}

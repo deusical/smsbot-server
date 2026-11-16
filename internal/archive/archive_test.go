@@ -773,3 +773,79 @@ func TestViewedOriginalPriorityKeepsBackgroundProgress(t *testing.T) {
 		t.Fatal("focus starved background originals", host.openedIDs)
 	}
 }
+
+func TestCollectRunsHourlyOrAfterMessageDeletionAndKeepsReferencedBlobs(t *testing.T) {
+	t.Parallel()
+	s, manager := setup(t)
+	now := time.Now()
+	manager.Now = func() time.Time { return now }
+
+	keepFile := media.File{Info: media.Info{ID: "keep", Size: 8}, RemoteID: "keep-source"}
+	seed(t, s, []media.File{keepFile})
+
+	expiringConv := transport.Conversation{ID: "expiring", ParticipantID: "expiring-peer", Writable: true}
+	if err := s.SaveArchive(store.Archive{Conversation: expiringConv, Generation: 1, State: "running"}, 1); err != nil {
+		t.Fatal(err)
+	}
+	expireFile := media.File{Info: media.Info{ID: "expire", Size: 8}, RemoteID: "expire-source"}
+	if err := s.SaveObservedFiles(expiringConv.ID, "old-msg", "", "incoming", "", "phone", "", now.Add(-48*time.Hour), []media.File{expireFile}); err != nil {
+		t.Fatal(err)
+	}
+
+	manager.Host = &fileHost{s: s, data: []byte("original")}
+	manager.Tick(context.Background())
+	manager.Tick(context.Background())
+
+	kept, err := s.Attachment("chat", store.Hash("chat\x00message"), "keep")
+	if err != nil || kept.BlobID == "" {
+		t.Fatal("kept original not saved", err)
+	}
+	expiring, err := s.Attachment(expiringConv.ID, store.Hash(expiringConv.ID+"\x00old-msg"), "expire")
+	if err != nil || expiring.BlobID == "" {
+		t.Fatal("expiring original not saved", err)
+	}
+
+	orphan, _ := manager.blobPath(store.ID())
+	if err := os.WriteFile(orphan, []byte("orphan"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Ticks at 2m, 15m, and 59m must skip Collect while no deletions happened.
+	for _, d := range []time.Duration{2 * time.Minute, 15 * time.Minute, 59 * time.Minute} {
+		now = time.Now().Add(d)
+		manager.Tick(context.Background())
+		if _, err := os.Stat(orphan); err != nil {
+			t.Fatalf("Collect ran before hourly interval at %v: %v", d, err)
+		}
+	}
+
+	// Hourly tick removes unreferenced orphan while keeping both referenced blobs.
+	now = time.Now().Add(61 * time.Minute)
+	manager.Tick(context.Background())
+	if _, err := os.Stat(orphan); !os.IsNotExist(err) {
+		t.Fatalf("hourly Collect did not remove orphan: %v", err)
+	}
+	keepPath, _ := manager.blobPath(kept.BlobID)
+	expirePath, _ := manager.blobPath(expiring.BlobID)
+	if _, err := os.Stat(keepPath); err != nil {
+		t.Fatal("referenced blob deleted", err)
+	}
+	if _, err := os.Stat(expirePath); err != nil {
+		t.Fatal("referenced expiring blob deleted before retention", err)
+	}
+
+	// Deleting messages via retention triggers Collect on the next 3s tick.
+	if err := s.ArchiveRetention(); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(3 * time.Second)
+	manager.Tick(context.Background())
+	if _, err := os.Stat(expirePath); !os.IsNotExist(err) {
+		t.Fatalf("post-retention tick did not collect newly orphaned blob: %v", err)
+	}
+	local, err := manager.OpenLocal(kept)
+	if err != nil {
+		t.Fatal("referenced blob unreadable after post-retention Collect", err)
+	}
+	local.Close()
+}

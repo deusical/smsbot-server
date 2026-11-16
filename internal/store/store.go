@@ -13,14 +13,27 @@ import (
 	"github.com/deusical/smsbot-server/internal/vault"
 	_ "modernc.org/sqlite"
 	"regexp"
+	"sync/atomic"
 	"time"
 )
 
 type Store struct {
-	DB    *sql.DB
-	Vault *vault.Vault
-	Path  string
+	DB               *sql.DB
+	Vault            *vault.Vault
+	Path             string
+	messageDeletions atomic.Uint64
 }
+
+// MessageDeletionSequence increments whenever messages are deleted from the
+// store, letting archive cleanup run promptly after retention without polling.
+func (s *Store) MessageDeletionSequence() uint64 {
+	return s.messageDeletions.Load()
+}
+
+func (s *Store) noteMessageDeletion() {
+	s.messageDeletions.Add(1)
+}
+
 type Job struct {
 	PreparationStage   string   `json:"preparation_stage,omitempty"`
 	ID                 string   `json:"id"`

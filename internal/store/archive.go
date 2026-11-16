@@ -219,18 +219,29 @@ func (s *Store) ArchiveRetention(pendingDays ...int) error {
 	if err != nil {
 		return err
 	}
+	var deleted int64
 	for _, p := range policies {
 		cutoff := time.Now().UTC().AddDate(0, 0, -p.days).Format("2006-01-02T15:04:05.000000000Z")
-		if _, err = s.DB.Exec("DELETE FROM messages WHERE conversation=? AND at<?", p.conv, cutoff); err != nil {
+		res, err := s.DB.Exec("DELETE FROM messages WHERE conversation=? AND at<?", p.conv, cutoff)
+		if err != nil {
 			return err
+		}
+		if n, err := res.RowsAffected(); err == nil {
+			deleted += n
 		}
 	}
 	if len(pendingDays) > 0 && pendingDays[0] > 0 {
 		cutoff := time.Now().UTC().AddDate(0, 0, -pendingDays[0]).Format("2006-01-02T15:04:05.000000000Z")
-		_, err = s.DB.Exec("DELETE FROM messages WHERE conversation IN (SELECT conversation FROM archive_pending) AND at<?", cutoff)
+		res, err := s.DB.Exec("DELETE FROM messages WHERE conversation IN (SELECT conversation FROM archive_pending) AND at<?", cutoff)
 		if err != nil {
 			return err
 		}
+		if n, err := res.RowsAffected(); err == nil {
+			deleted += n
+		}
+	}
+	if deleted > 0 {
+		s.noteMessageDeletion()
 	}
 	return nil
 }

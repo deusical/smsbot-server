@@ -131,5 +131,11 @@ func (s *Store) Retention(days int) (int64, error) {
 	if e != nil {
 		return 0, e
 	}
-	return n, tx.Commit()
+	if e = tx.Commit(); e != nil {
+		return 0, e
+	}
+	if n > 0 {
+		s.noteMessageDeletion()
+	}
+	return n, nil
 }
