@@ -142,8 +142,8 @@ func Open(path string, v *vault.Vault) (*Store, error) {
 	return s, nil
 }
 
-// migrate brings the schema up to date, then makes sure the tables added
-// without a version bump exist.
+// migrate brings the schema up to date, then makes sure the tables and indexes
+// added without a version bump exist.
 func (s *Store) migrate() error {
 	if err := s.migrateSchema(); err != nil {
 		return err
@@ -151,9 +151,13 @@ func (s *Store) migrate() error {
 	if err := s.ensureGroupEnrollment(); err != nil {
 		return err
 	}
-	_, err := s.DB.Exec(`CREATE TABLE IF NOT EXISTS job_work(job TEXT PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE,stage TEXT NOT NULL,next_poll INTEGER NOT NULL);` + jobFilesSchema + jobStepsTrigger + messageMetaChange)
+	_, err := s.DB.Exec(`CREATE TABLE IF NOT EXISTS job_work(job TEXT PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE,stage TEXT NOT NULL,next_poll INTEGER NOT NULL);` + jobFilesSchema + jobStepsTrigger + messageMetaChange + jobIndexes)
 	return err
 }
+
+const jobIndexes = `CREATE INDEX IF NOT EXISTS jobs_state_created ON jobs(state,created);
+CREATE INDEX IF NOT EXISTS jobs_created ON jobs(created);
+CREATE INDEX IF NOT EXISTS jobs_open_plan ON jobs(created) WHERE plan!='';`
 
 // messageMetaChange puts a message on the change feed when anything a dashboard
 // shows from its metadata changes: delivery status, who sent it (origin) and who
