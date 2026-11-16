@@ -58,7 +58,11 @@ function problem(e: unknown): string {
  */
 export function WorkerSettings() {
   // What was loaded last time shows at once; a fresh copy replaces it quietly.
-  const resource = useResource<WorkersView>("workers", () => api<WorkersView>("/workers"), loadProblem);
+  const resource = useResource<WorkersView>(
+    "workers",
+    (fresh) => api<WorkersView>(fresh ? "/workers?refresh=1" : "/workers"),
+    loadProblem,
+  );
   const view = resource.data;
   const [drafts, setDrafts] = useState<Draft[]>(() => (view ? draftsOf(view) : []));
   const [routes, setRoutes] = useState<Record<string, string>>(() => (view ? routesOf(view) : {}));
@@ -125,7 +129,7 @@ export function WorkerSettings() {
       <LoadingState
         what="workers"
         error={resource.error}
-        onRetry={() => void resource.refresh()}
+        onRetry={() => void resource.refresh(true)}
       />
     );
   const status = (name: string) => view.status.find((s) => s.name === name);
@@ -137,7 +141,7 @@ export function WorkerSettings() {
         updatedAt={resource.updatedAt}
         refreshing={resource.refreshing}
         error={resource.error}
-        onRefresh={() => void resource.refresh()}
+        onRefresh={() => void resource.refresh(true)}
       />
       <Group
         title="Workers"

@@ -1,8 +1,12 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
+import { clearResources } from "../lib/resource";
 import { knownTasks, parseRoute, WorkerSettings, type WorkersView } from "./WorkerSettings";
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  clearResources();
+  vi.unstubAllGlobals();
+});
 
 const view: WorkersView = {
   config: {
@@ -43,4 +47,39 @@ it("shows workers and saves edits without echoing stored tokens", async () => {
   });
   expect(puts).toEqual([{ workers: [{ name: "laptop", endpoint: "http://100.92.5.20:8767/download" }], routes: {} }]);
   expect(screen.getByText("Workers saved.")).toBeTruthy();
+});
+
+it("uses cached status on load and requests a fresh probe on Refresh", async () => {
+  const urls: string[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      urls.push(url);
+      if (url.endsWith("/workers?refresh=1")) {
+        return new Response(
+          JSON.stringify({
+            ...view,
+            status: [
+              { name: "local", token: true, online: true, tasks: { "video.download": 1 } },
+              { name: "laptop", endpoint: "http://100.92.5.20:8767/download", token: true, online: true, tasks: { "video.compress": 1 } },
+            ],
+          }),
+          { status: 200 },
+        );
+      }
+      return new Response(JSON.stringify(view), { status: 200 });
+    }),
+  );
+  render(<WorkerSettings />);
+  await act(async () => {});
+  expect(urls).toEqual(["/api/v1/workers"]);
+  expect(screen.getByText("Offline")).toBeTruthy();
+
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+  });
+  expect(urls).toEqual(["/api/v1/workers", "/api/v1/workers?refresh=1"]);
+  expect(screen.queryByText("Offline")).toBeNull();
+  expect(screen.getAllByText("Online")).toHaveLength(2);
 });

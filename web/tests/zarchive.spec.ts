@@ -152,14 +152,25 @@ test("archive feed serializes with held older pages and never polls stale head s
 
 test("archive exports select readable format, download and delete the package",async({page})=>{
  const previous=await setup(page);
+ let backupGets=0;
+ page.on("request",req=>{
+  if(req.method()==="GET"&&new URL(req.url()).pathname==="/api/v1/inbox/archive/backup")backupGets++;
+ });
  try{
   await emit(page,"export-ui-message","Synthetic readable export message");
   await page.reload();
+  backupGets=0;
   await page.getByRole("button",{name:"Archive",exact:true}).click();
   await expect(page.getByRole("heading",{name:"Original file archive",exact:true})).toBeVisible();
+  await expect.poll(()=>backupGets).toBe(1);
+  await pollAndSettle(page,9000);
+  expect(backupGets).toBe(1);
   await page.getByLabel("Archive export format").selectOption("plaintext");
   await page.getByRole("button",{name:"Start message export",exact:true}).click();
   await pollUntil(page,()=>expect(page.getByRole("link",{name:"Download message export",exact:true})).toBeVisible({timeout:500}));
+  const settledGets=backupGets;
+  await pollAndSettle(page,6000);
+  expect(backupGets).toBe(settledGets);
   await expect(page.getByRole("link",{name:"Download message export",exact:true})).toHaveAttribute("download","messages-export.tar");
   const file=await page.request.get(await page.getByRole("link",{name:"Download message export",exact:true}).getAttribute("href")||"");
   expect(file.ok()).toBeTruthy();

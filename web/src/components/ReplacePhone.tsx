@@ -1,33 +1,58 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../lib/api";
 import { Field } from "./ui";
 
 type PairingStatus = { state: string; emoji?: string; maintenance?: boolean };
 export function ReplacePhone() {
   const requestRevision = useRef(0);
+  const alive = useRef(true);
+  const reading = useRef(false);
+  const checked = useRef(false);
   const [status, setStatus] = useState<PairingStatus>({ state: "idle" });
   const [input, setInput] = useState("");
   const [open, setOpen] = useState(false);
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  useEffect(() => {
-    let alive = true;
-    let reading = false;
-    const poll = async () => {
-      if (reading || document.visibilityState === "hidden") return;
-      reading = true;
-      const revision = requestRevision.current;
-      try {
-        const next = await api<PairingStatus>("/phone-pairing");
-        if (alive && revision === requestRevision.current) { setStatus(next); if (next.state === "pairing" || next.state === "failed" || next.state === "complete") setOpen(true); }
-      } catch { /* Leave the last status visible during a network outage. */ }
-      finally { reading = false; }
-    };
-    void poll();
-    const timer = window.setInterval(() => void poll(), 1500);
-    return () => { alive = false; window.clearInterval(timer); };
-  }, []);
   const pairing = status.state === "pairing";
+  const active = open || pairing;
+  const poll = useCallback(async () => {
+    if (!alive.current || reading.current || document.visibilityState === "hidden") return;
+    reading.current = true;
+    checked.current = true;
+    const revision = requestRevision.current;
+    try {
+      const next = await api<PairingStatus>("/phone-pairing");
+      if (alive.current && revision === requestRevision.current) {
+        setStatus(next);
+        if (next.state === "pairing" || next.state === "failed" || next.state === "complete") setOpen(true);
+      }
+    } catch { /* Leave the last status visible during a network outage. */ }
+    finally { reading.current = false; }
+  }, []);
+  useEffect(() => {
+    alive.current = true;
+    void poll();
+    return () => { alive.current = false; };
+  }, [poll]);
+  useEffect(() => {
+    let timer: ReturnType<typeof setInterval> | null = null;
+    const start = () => { if (!timer) timer = setInterval(() => void poll(), 1500); };
+    const stop = () => { if (timer) { clearInterval(timer); timer = null; } };
+    const visible = () => {
+      if (document.visibilityState === "visible") {
+        if (active || !checked.current) void poll();
+        if (active) start();
+      } else {
+        stop();
+      }
+    };
+    if (active && document.visibilityState !== "hidden") start();
+    document.addEventListener("visibilitychange", visible);
+    return () => {
+      stop();
+      document.removeEventListener("visibilitychange", visible);
+    };
+  }, [active, poll]);
   return <div className="replace-phone">
     <button type="button" aria-expanded={open} disabled={status.state === "unsupported"} onClick={() => setOpen(!open)}>Replace phone</button>
     {open && <div className="replace-phone-body">

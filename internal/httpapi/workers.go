@@ -26,7 +26,7 @@ type workersView struct {
 
 func (s *Server) workerRoutes() {
 	s.mux.HandleFunc("GET /api/v1/workers", s.protected(func(w http.ResponseWriter, r *http.Request) {
-		s.workersView(w, r)
+		s.workersView(w, r, r.URL.Query().Get("refresh") == "1")
 	}))
 	s.mux.HandleFunc("PUT /api/v1/workers", s.protected(func(w http.ResponseWriter, r *http.Request) {
 		if s.Workers == nil {
@@ -50,11 +50,11 @@ func (s *Server) workerRoutes() {
 			s.json(w, 400, map[string]string{"error": "invalid_workers", "detail": err.Error()})
 			return
 		}
-		s.workersView(w, r)
+		s.workersView(w, r, true)
 	}))
 }
 
-func (s *Server) workersView(w http.ResponseWriter, r *http.Request) {
+func (s *Server) workersView(w http.ResponseWriter, r *http.Request, refresh bool) {
 	if s.Workers == nil {
 		s.bad(w, 503, "workers_unavailable")
 		return
@@ -64,7 +64,12 @@ func (s *Server) workersView(w http.ResponseWriter, r *http.Request) {
 		s.json(w, 500, map[string]string{"error": "workers_config_invalid", "detail": err.Error()})
 		return
 	}
-	status, err := s.Workers.Status(r.Context())
+	var status []bot.WorkerStatus
+	if refresh {
+		status, err = s.Workers.RefreshStatus(r.Context())
+	} else {
+		status, err = s.Workers.Status(r.Context())
+	}
 	if err != nil {
 		s.bad(w, 500, "workers_unavailable")
 		return

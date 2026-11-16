@@ -33,8 +33,18 @@ test("each device turns notifications on and keeps its own settings", async ({ p
   // Another device registered earlier.
   const other = await (await page.request.post("/api/v1/notifications/devices", { headers, data: { endpoint: "https://fcm.googleapis.com/fcm/send/synthetic-phone", keys: { p256dh: "k", auth: "a" }, label: "Spare phone" } })).json();
 
+  const calls: string[] = [];
+  page.on("request", (req) => {
+    const path = new URL(req.url()).pathname;
+    if (path === "/api/v1/notifications" || path === "/api/v1/notifications/devices") {
+      calls.push(`${req.method()} ${path}`);
+    }
+  });
+
   await page.getByRole("navigation", { name: "Main navigation" }).getByRole("button", { name: "Settings", exact: true }).click();
   await page.getByRole("navigation", { name: "Settings sections" }).getByRole("button", { name: "Notifications" }).click();
+  await expect(page.getByLabel("Device name")).toBeVisible();
+  expect(calls).toEqual(["GET /api/v1/notifications"]);
   await page.getByLabel("Device name").fill("Legion");
   await page.getByRole("button", { name: "Turn on notifications" }).click();
   await expect(page.getByText("On", { exact: true })).toBeVisible();
@@ -56,11 +66,13 @@ test("each device turns notifications on and keeps its own settings", async ({ p
   await others.getByRole("button", { name: "Remove" }).click();
   await expect(page.locator(".group").filter({ hasText: "Other devices" })).toHaveCount(0);
 
-  // Reopening Settings recognises this browser as the same device.
+  // Reopening Settings recognises this browser as the same device, looking it up once before listing once.
   await page.reload();
+  calls.length = 0;
   await page.getByRole("navigation", { name: "Main navigation" }).getByRole("button", { name: "Settings", exact: true }).click();
   await page.getByRole("navigation", { name: "Settings sections" }).getByRole("button", { name: "Notifications" }).click();
   await expect(page.getByRole("button", { name: "Turn off on this device" })).toBeVisible();
+  expect(calls).toEqual(["POST /api/v1/notifications/devices", "GET /api/v1/notifications"]);
   await page.screenshot({ path: "test-results/notifications-settings.png", fullPage: true });
   await page.getByRole("button", { name: "Turn off on this device" }).click();
   await expect(page.getByRole("button", { name: "Turn on notifications" })).toBeVisible();

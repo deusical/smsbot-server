@@ -133,7 +133,7 @@ test("a tab you already opened shows what it had at once while a slow refresh ru
 
 test("a failed refresh keeps the workers on screen and Refresh tries again", async ({ page }) => {
   let failing = false;
-  await page.route("**/api/v1/workers", async (route) =>
+  await page.route(/\/api\/v1\/workers(\?refresh=1)?$/, async (route) =>
     failing ? route.fulfill({ status: 500, json: { error: "boom" } }) : route.fulfill({ json: workers }),
   );
   await signIn(page);
