@@ -37,10 +37,13 @@ hand, listening only on its Tailscale address:
 ```
 
 `-Root` holds `research\rednote_downloader` and `research\.oss-venv`; `ffmpeg` and
-`ffprobe` with `h264_nvenc` must be on PATH. The script finds the PC's Tailscale
-address, creates a token file under `%LOCALAPPDATA%\SmsBot` (never printed) and
-keeps files under `Downloads\smsbot`. The worker refuses any address that isn't
-loopback or Tailscale.
+`ffprobe` with `h264_nvenc` must be on PATH. The script waits up to 30 seconds for
+the PC's Tailscale address to be assigned to an active local interface, creates a
+token file under `%LOCALAPPDATA%\SmsBot` (never printed) and keeps files under
+`Downloads\smsbot`. The worker refuses any address that isn't `127.0.0.1` or a
+Tailscale `100.64.0.0/10` address, and binds exclusively before touching `.scratch`
+so a second instance on the same address and port fails fast without disturbing a
+running worker.
 
 To start the Windows worker automatically when you sign in, without admin rights:
 
@@ -49,11 +52,18 @@ To start the Windows worker automatically when you sign in, without admin rights
 ```
 
 `-Install` registers and starts a per-user Scheduled Task named `SmsBot worker`
-that runs hidden at your logon, restarts a few times on failure, and has no
-execution time limit. Any `-Root`, `-OutputRoot`, `-TokenFile`, `-Bind`, `-Port`,
-`-Slots`, or `-KeepDays` flags are saved on the task; omitting `-Bind` keeps
-resolving the PC's Tailscale address at each start rather than baking an old
-address in. To stop and remove the task:
+that runs hidden at your logon with `-WaitForTailscale`, waiting with backoff until
+Wi-Fi and Tailscale are ready (and waiting again if the address isn't available
+yet), ignoring overlapping task launches, and running with no execution time limit.
+If the worker exits after running for at least a minute, the task restarts it with
+the same backoff; a worker that fails right away (a bad token file, a port already
+in use) stops the task so the problem shows. Task Scheduler's own restart setting
+is not used: it never fires when a script exits with an error.
+Any `-Root`, `-OutputRoot`, `-TokenFile`, `-Bind`, `-Port`, `-Slots`, or `-KeepDays`
+flags are saved on the task; omitting `-Bind` keeps resolving the PC's Tailscale
+address at each start rather than baking an old address in. Re-running `-Install`
+or running `-Uninstall` stops both the scheduled task and the worker process it
+started:
 
 ```powershell
 .\scripts\start-worker.ps1 -Uninstall

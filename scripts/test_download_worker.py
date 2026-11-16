@@ -1,6 +1,10 @@
+import errno
 import importlib.util
+import io
 import json
 import os
+import socket
+import subprocess
 import time
 import sys
 import shutil
@@ -156,6 +160,95 @@ class WorkerBoundaryTests(unittest.TestCase):
                 worker.bind_address(bad)
         with self.assertRaises(ValueError):
             worker.create_server(Path(tempfile.gettempdir()), "x"*40, 0, bind="0.0.0.0")
+
+    def test_second_instance_fails_without_touching_scratch(self):
+        worker_script = Path(__file__).with_name("download-worker.py")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "research" / "rednote_downloader" / "app").mkdir(parents=True)
+            (root / "research" / "rednote_downloader" / "app" / "downloader.py").write_text("# stub\n", encoding="utf-8")
+            out = root / "out"
+            token = "SYNTHETIC_TOKEN_FOR_OFFLINE_TEST_ONLY"
+            token_file = root / "token"
+            token_file.write_text(token, encoding="ascii")
+
+            first = worker.create_server(root, token, 0, output_root=out, bind="127.0.0.1")
+            thread = threading.Thread(target=first.serve_forever, daemon=True)
+            thread.start()
+            try:
+                sentinel = out / ".scratch" / "job-live" / "working.mp4"
+                sentinel.parent.mkdir(parents=True)
+                sentinel.write_bytes(b"in-progress-scratch-data")
+                self.assertEqual((out / "worker.pid").read_text(encoding="ascii").strip(), str(os.getpid()))
+
+                with self.assertRaises(OSError):
+                    worker.create_server(root, token, first.server_port, output_root=out, bind="127.0.0.1")
+                self.assertEqual(sentinel.read_bytes(), b"in-progress-scratch-data")
+                self.assertEqual((out / "worker.pid").read_text(encoding="ascii").strip(), str(os.getpid()))
+
+                # Also verify across a second OS process (exercises SO_EXCLUSIVEADDRUSE on Windows).
+                second_proc = subprocess.run(
+                    [sys.executable, str(worker_script), "--root", str(root), "--output-root", str(out),
+                     "--token-file", str(token_file), "--bind", "127.0.0.1", "--port", str(first.server_port)],
+                    capture_output=True, text=True, timeout=15,
+                )
+                self.assertNotEqual(second_proc.returncode, 0)
+                self.assertNotEqual(second_proc.returncode, worker.EXIT_ADDR_NOT_AVAILABLE)
+                self.assertEqual(sentinel.read_bytes(), b"in-progress-scratch-data")
+                self.assertEqual((out / "worker.pid").read_text(encoding="ascii").strip(), str(os.getpid()))
+
+                opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+                req = urllib.request.Request(
+                    f"http://127.0.0.1:{first.server_port}/download/capabilities",
+                    headers={"Authorization": "Bearer " + token},
+                )
+                with opener.open(req, timeout=3) as resp:
+                    self.assertEqual(resp.status, 200)
+            finally:
+                first.shutdown()
+                first.server_close()
+                thread.join(timeout=3)
+            self.assertFalse((out / "worker.pid").exists())
+
+    def test_address_unavailable_exits_with_distinct_code(self):
+        worker_script = Path(__file__).with_name("download-worker.py")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "research" / "rednote_downloader" / "app").mkdir(parents=True)
+            (root / "research" / "rednote_downloader" / "app" / "downloader.py").write_text("# stub\n", encoding="utf-8")
+            token_file = root / "token"
+            token_file.write_text("SYNTHETIC_TOKEN_FOR_OFFLINE_TEST_ONLY", encoding="ascii")
+            out = root / "out"
+            argv = ["--root", str(root), "--output-root", str(out), "--token-file", str(token_file),
+                    "--bind", "100.127.255.254", "--port", "0"]
+
+            posix_err = OSError(errno.EADDRNOTAVAIL, "Cannot assign requested address")
+            win_err = OSError("The requested address is not valid in its context")
+            win_err.winerror = 10049
+            for err in (posix_err, win_err):
+                with self.subTest(err=err), mock.patch.object(worker, "create_server", side_effect=err), \
+                        mock.patch("sys.stderr", io.StringIO()):
+                    with self.assertRaises(SystemExit) as ctx:
+                        worker.main(argv)
+                    self.assertEqual(ctx.exception.code, worker.EXIT_ADDR_NOT_AVAILABLE)
+
+            unassigned = None
+            for candidate in ("100.127.255.254", "100.127.255.253", "100.64.255.254"):
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe_sock:
+                    try:
+                        probe_sock.bind((candidate, 0))
+                    except OSError as exc:
+                        if worker.is_addr_not_available(exc):
+                            unassigned = candidate
+                            break
+            if unassigned is not None:
+                res = subprocess.run(
+                    [sys.executable, str(worker_script), "--root", str(root), "--output-root", str(out),
+                     "--token-file", str(token_file), "--bind", unassigned, "--port", "0"],
+                    capture_output=True, text=True, timeout=15,
+                )
+                self.assertEqual(res.returncode, worker.EXIT_ADDR_NOT_AVAILABLE)
+                self.assertFalse((out / ".scratch").exists())
 
     def test_url_allowlist(self):
         for url in ("https://douyin.com.attacker.test/video/1", "http://douyin.com/", "https://user:pass@douyin.com/", "https://douyin.com:443/", "file:///C:/private"):
