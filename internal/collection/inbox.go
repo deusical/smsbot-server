@@ -36,13 +36,19 @@ func (svc *Service) SetSettings(ctx context.Context, s Settings) error {
 	if (s.Scope != "all" && s.Scope != "selected") || len(s.Conversations) > 500 {
 		return errors.New("invalid_inbox_settings")
 	}
+	alreadyActive := map[Binding]bool{}
+	if old.Enabled && old.Scope == "selected" {
+		for _, b := range old.Conversations {
+			alreadyActive[b] = true
+		}
+	}
 	seen := map[string]bool{}
 	for _, b := range s.Conversations {
 		if b.Conversation == "" || b.Participant == "" || len(b.Conversation) > 200 || len(b.Participant) > 200 || seen[b.Conversation] {
 			return errors.New("invalid_inbox_binding")
 		}
 		seen[b.Conversation] = true
-		if s.Enabled && s.Scope == "selected" {
+		if s.Enabled && s.Scope == "selected" && !alreadyActive[b] {
 			c, err := svc.lookup(ctx, b.Conversation)
 			if err != nil || !c.Collectable() || c.ParticipantID != b.Participant {
 				return errors.New("conversation_identity_changed")
@@ -238,7 +244,7 @@ func (svc *Service) InboxPage(ctx context.Context, conv, cursor, search string, 
 	if a, archiveErr := svc.Store.Archive(conv); archiveErr == nil {
 		c = a.Conversation
 	} else {
-		c, err = svc.lookup(ctx, conv)
+		c, err = svc.cachedOrLookup(ctx, conv)
 		if err != nil {
 			return store.InboxPage{}, err
 		}

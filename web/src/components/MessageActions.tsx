@@ -281,7 +281,7 @@ export function MessageActions({
   async function post(attempt: ReactionAttempt) {
     if (submitting.current) return;
     submitting.current = true;
-    setReactionAttempt(key, { ...attempt, state: "posting" });
+    setReactionAttempt(key, { ...attempt, state: "posting", error: undefined });
     try {
       const result = await api<{ id: string }>(`${resource}/reactions`, "POST", {
         emoji: attempt.emoji,
@@ -290,17 +290,20 @@ export function MessageActions({
         request_id: attempt.request_id,
         ...(roster ? { roster } : {}),
       });
-      if (reactionAttempt(key)?.request_id === attempt.request_id) setReactionAttempt(key, { ...attempt, id: result.id, state: "queued" });
-      setOpen(false);
+      if (reactionAttempt(key)?.request_id === attempt.request_id) setReactionAttempt(key, { ...attempt, id: result.id, state: "queued", error: undefined });
     } catch (err) {
       // Keep the exact intent/key: the request may have reached the server.
-      if (reactionAttempt(key)?.request_id === attempt.request_id)
-        setReactionAttempt(key, { ...attempt, state: err instanceof ApiError && err.status >= 400 && err.status < 500 ? "failed" : "unconfirmed" });
-      setActionError(
+      const reason =
         err instanceof ApiError && err.message === "group_changed"
           ? "The people in this group changed. Check who is in it, then react again."
-          : "Reaction request not confirmed. Check its status before changing it.",
-      );
+          : undefined;
+      if (reactionAttempt(key)?.request_id === attempt.request_id)
+        setReactionAttempt(key, {
+          ...attempt,
+          state: err instanceof ApiError && err.status >= 400 && err.status < 500 ? "failed" : "unconfirmed",
+          error: reason,
+        });
+      if (open) setActionError(reason ?? "Reaction request not confirmed. Check its status before changing it.");
     } finally {
       submitting.current = false;
     }
@@ -308,6 +311,7 @@ export function MessageActions({
   function react(emoji: string) {
     if (!caps?.react || busy || !writable) return;
     const operation = mine === emoji ? "remove" : mine ? "switch" : "add";
+    setOpen(false);
     void post({ request_id: crypto.randomUUID(), emoji, operation, version: caps.version, state: "posting" });
   }
   return (
@@ -344,15 +348,17 @@ export function MessageActions({
       )}
       {pending && (
         <div className="reaction-progress" role="status">
-          {pending.state === "unknown_submission"
-            ? "Reaction outcome uncertain. Check your phone."
-            : pending.state === "unconfirmed"
-              ? "Reaction request not confirmed."
-              : ["failed", "cancelled", "expired"].includes(pending.state)
-                ? "Reaction was not sent."
-                : pending.state === "submitted"
-                  ? "Waiting for reaction to sync…"
-                  : "Updating reaction…"}
+          {pending.error
+            ? pending.error
+            : pending.state === "unknown_submission"
+              ? "Reaction outcome uncertain. Check your phone."
+              : pending.state === "unconfirmed"
+                ? "Reaction request not confirmed."
+                : ["failed", "cancelled", "expired"].includes(pending.state)
+                  ? "Reaction was not sent."
+                  : pending.state === "submitted"
+                    ? "Waiting for reaction to sync…"
+                    : "Updating reaction…"}
           {pending.state === "unconfirmed" && (
             <button type="button" className="small ghost" onClick={() => void post(pending)}>
               Check request

@@ -74,11 +74,17 @@ func (svc *Service) MarkConversationRead(ctx context.Context, conv string, throu
 	if !s.Enabled || !s.ReadReceipts() {
 		return errors.New("read_receipts_disabled")
 	}
+	if !s.AllowsID(conv) {
+		return errors.New("inbox_access_disabled")
+	}
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	c, err := svc.lookup(ctx, conv)
+	c, err := svc.cachedOrLookup(ctx, conv)
 	if err != nil {
 		return err
+	}
+	if c.Group {
+		return errors.New("ineligible_conversation")
 	}
 	if !s.Allows(c) {
 		return errors.New("inbox_access_disabled")
@@ -123,16 +129,17 @@ func (svc *Service) TypingConversations() []string {
 	return out
 }
 
-// ConversationRevision changes whenever the phone reports activity or a message
-// is saved, letting the dashboard refetch its list only when something changed.
+// ConversationRevision changes whenever the phone reports activity, a message
+// is saved, or local conversation settings (enrollment, group sharing, consent)
+// change, letting the dashboard refetch its list only when something changed.
 func (svc *Service) ConversationRevision() string {
 	var phone uint64
 	if reporter, ok := svc.Transport.(transport.ActivityReporter); ok {
 		phone = reporter.ActivityRevision()
 	}
-	return formatRevision(phone, svc.Store.ChangeSequence())
+	return formatRevision(phone, svc.Store.ChangeSequence(), svc.Store.ListChangeSequence())
 }
 
-func formatRevision(phone, saved uint64) string {
-	return strconv.FormatUint(phone, 10) + "." + strconv.FormatUint(saved, 10)
+func formatRevision(phone, saved, local uint64) string {
+	return strconv.FormatUint(phone, 10) + "." + strconv.FormatUint(saved, 10) + "." + strconv.FormatUint(local, 10)
 }

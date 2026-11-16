@@ -189,7 +189,11 @@ func (s *Store) SetInboxPreferences(b []byte, stopAutomatic bool, retention int)
 			return err
 		}
 	}
-	return tx.Commit()
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+	s.noteListChange()
+	return nil
 }
 
 // FirstObservation uses opaque IDs only. Content edits/status repeats must never

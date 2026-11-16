@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"io/fs"
+	"maps"
 	"math"
 	"mime"
 	"net/http"
@@ -58,6 +59,7 @@ func New(e *bot.Engine, c *collection.Service, origin string, fixture bool) *Ser
 	s.mux.HandleFunc("POST /api/v1/pause", s.protected(s.pause))
 	s.mux.HandleFunc("POST /api/v1/enrollment", s.protected(s.enroll))
 	s.mux.HandleFunc("DELETE /api/v1/enrollment/{id}", s.protected(s.unenroll))
+	s.mux.HandleFunc("PUT /api/v1/enrollment/{id}/members", s.protected(s.setGroupMembers))
 	s.mux.HandleFunc("DELETE /api/v1/enrollment/{id}/members/{member}", s.protected(s.unenrollMember))
 	s.mux.HandleFunc("POST /api/v1/enrollment/{id}/approve", s.protected(s.approveGroup))
 	s.mux.HandleFunc("PUT /api/v1/enrollment/{id}/shared", s.protected(s.sharedGroup))
@@ -307,6 +309,51 @@ func (s *Server) pause(w http.ResponseWriter, r *http.Request) {
 	}
 	s.state(w, r)
 }
+
+// conversationForToggle verifies a conversation for an enrollment or group
+// memory toggle, preferring the transport's cached phone record so dashboard
+// switches do not wake the phone unnecessarily. Sends and admissions still
+// verify live on the phone.
+func (s *Server) conversationForToggle(w http.ResponseWriter, r *http.Request, id string, match func(transport.Conversation) bool) (transport.Conversation, bool) {
+	if id == "" {
+		s.bad(w, 400, "ineligible_conversation")
+		return transport.Conversation{}, false
+	}
+	if cache, ok := s.Transport.(transport.CachedLookup); ok {
+		if c, found := cache.CachedConversation(id); found && match(c) {
+			return c, true
+		}
+	}
+	c, err := transport.Lookup(r.Context(), s.Transport, id)
+	if err != nil {
+		if errors.Is(err, transport.ErrUnavailable) || errors.Is(err, transport.ErrLookupFailed) || !transport.SessionUp(s.Transport) {
+			s.bad(w, 503, "transport_unavailable")
+			return transport.Conversation{}, false
+		}
+		s.bad(w, 400, "ineligible_conversation")
+		return transport.Conversation{}, false
+	}
+	if !match(c) {
+		s.bad(w, 400, "ineligible_conversation")
+		return transport.Conversation{}, false
+	}
+	return c, true
+}
+
+func (s *Server) writeGroupBot(w http.ResponseWriter, id string, extra map[string]any) {
+	members, botRoster, err := s.Store.GroupBot(id)
+	if err != nil {
+		s.bad(w, 500, "storage_error")
+		return
+	}
+	if members == nil {
+		members = []string{}
+	}
+	out := map[string]any{"enrolled": len(members) > 0, "enrolled_members": members, "bot_roster": botRoster}
+	maps.Copy(out, extra)
+	s.json(w, 200, out)
+}
+
 func (s *Server) enroll(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		ID   string `json:"conversation_id"`
@@ -317,33 +364,31 @@ func (s *Server) enroll(w http.ResponseWriter, r *http.Request) {
 	if !s.decode(w, r, &in) {
 		return
 	}
-	list, e := s.Transport.Conversations(r.Context())
-	if e != nil {
-		s.bad(w, 503, "transport_unavailable")
+	c, ok := s.conversationForToggle(w, r, in.ID, func(c transport.Conversation) bool {
+		if c.Group {
+			return c.Writable && in.Roster != "" && c.Roster == in.Roster && hasMember(c, in.Peer)
+		}
+		return c.Writable && in.Roster == "" && c.ParticipantID == in.Peer
+	})
+	if !ok {
 		return
 	}
-	for _, c := range list {
-		if c.ID == in.ID && c.Group && c.Writable && in.Roster != "" && c.Roster == in.Roster && hasMember(c, in.Peer) {
-			switch e = s.Engine.EnrollMember(c.ID, in.Peer, c.Roster); {
-			case e == nil:
-				s.json(w, 200, map[string]bool{"enrolled": true})
-			case errors.Is(e, store.ErrGroupNeedsApproval):
-				s.bad(w, 409, "group_needs_approval")
-			default:
-				s.bad(w, 500, "storage_error")
-			}
-			return
+	if c.Group {
+		switch e := s.Engine.EnrollMember(c.ID, in.Peer, c.Roster); {
+		case e == nil:
+			s.writeGroupBot(w, c.ID, nil)
+		case errors.Is(e, store.ErrGroupNeedsApproval):
+			s.bad(w, 409, "group_needs_approval")
+		default:
+			s.bad(w, 500, "storage_error")
 		}
-		if c.ID == in.ID && c.ParticipantID == in.Peer && c.Writable && !c.Group {
-			if e = s.Engine.Enroll(c.ID, c.ParticipantID); e != nil {
-				s.bad(w, 500, "storage_error")
-				return
-			}
-			s.json(w, 200, map[string]bool{"enrolled": true})
-			return
-		}
+		return
 	}
-	s.bad(w, 400, "ineligible_conversation")
+	if e := s.Engine.Enroll(c.ID, c.ParticipantID); e != nil {
+		s.bad(w, 500, "storage_error")
+		return
+	}
+	s.json(w, 200, map[string]bool{"enrolled": true})
 }
 func (s *Server) unenroll(w http.ResponseWriter, r *http.Request) {
 	if e := s.Engine.Unenroll(r.PathValue("id")); e != nil {
@@ -446,12 +491,59 @@ func hasMember(c transport.Conversation, id string) bool {
 	return false
 }
 
+func hasAllMembers(c transport.Conversation, ids []string) bool {
+	for _, id := range ids {
+		if id == "" || !hasMember(c, id) {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *Server) setGroupMembers(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Members *[]string `json:"members"`
+		Roster  string    `json:"roster"`
+	}
+	if !s.decode(w, r, &in) {
+		return
+	}
+	if in.Members == nil || len(*in.Members) > 200 {
+		s.bad(w, 400, "invalid_request")
+		return
+	}
+	id := r.PathValue("id")
+	if len(*in.Members) == 0 {
+		if err := s.Engine.SetGroupMembers(id, "", nil); err != nil {
+			s.bad(w, 500, "storage_error")
+			return
+		}
+		s.writeGroupBot(w, id, nil)
+		return
+	}
+	c, ok := s.conversationForToggle(w, r, id, func(c transport.Conversation) bool {
+		return c.Group && c.Writable && in.Roster != "" && c.Roster == in.Roster && hasAllMembers(c, *in.Members)
+	})
+	if !ok {
+		return
+	}
+	switch err := s.Engine.SetGroupMembers(c.ID, c.Roster, *in.Members); {
+	case err == nil:
+		s.writeGroupBot(w, c.ID, nil)
+	case errors.Is(err, store.ErrGroupNeedsApproval):
+		s.bad(w, 409, "group_needs_approval")
+	default:
+		s.bad(w, 500, "storage_error")
+	}
+}
+
 func (s *Server) unenrollMember(w http.ResponseWriter, r *http.Request) {
-	if e := s.Engine.UnenrollMember(r.PathValue("id"), r.PathValue("member")); e != nil {
+	id := r.PathValue("id")
+	if e := s.Engine.UnenrollMember(id, r.PathValue("member")); e != nil {
 		s.bad(w, 500, "storage_error")
 		return
 	}
-	s.json(w, 200, map[string]bool{"enrolled": false})
+	s.writeGroupBot(w, id, map[string]any{"enrolled": false})
 }
 
 // sharedGroup switches a group between one AI conversation each and one for
@@ -467,16 +559,13 @@ func (s *Server) sharedGroup(w http.ResponseWriter, r *http.Request) {
 		s.bad(w, 400, "shared_required")
 		return
 	}
-	c, e := transport.Lookup(r.Context(), s.Transport, r.PathValue("id"))
-	if e != nil {
-		s.bad(w, 503, "transport_unavailable")
+	c, ok := s.conversationForToggle(w, r, r.PathValue("id"), func(c transport.Conversation) bool {
+		return c.Group && c.Writable
+	})
+	if !ok {
 		return
 	}
-	if !c.Group || !c.Writable {
-		s.bad(w, 400, "ineligible_conversation")
-		return
-	}
-	if e = s.Engine.SetGroupShared(c.ID, *in.Shared); e != nil {
+	if e := s.Engine.SetGroupShared(c.ID, *in.Shared); e != nil {
 		s.bad(w, 500, "storage_error")
 		return
 	}
@@ -509,5 +598,5 @@ func (s *Server) approveGroup(w http.ResponseWriter, r *http.Request) {
 		s.bad(w, 500, "storage_error")
 		return
 	}
-	s.json(w, 200, map[string]bool{"approved": true})
+	s.writeGroupBot(w, c.ID, map[string]any{"approved": true})
 }

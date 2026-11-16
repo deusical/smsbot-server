@@ -61,9 +61,21 @@ function App() {
   const dashboard = useDashboard(session, endSession);
   dashboardReset.current = dashboard.reset;
   const { state, jobs, conversations, inbox, error, setError, lastUpdated } = dashboard;
-  const workspace = useWorkspace(signedIn, inbox, dashboard.setInbox);
+  const workspace = useWorkspace(signedIn, inbox, (s) => {
+    dashboard.setInbox(s);
+    void dashboard.refresh();
+  });
   usePendingFollower(signedIn);
   const dirty = workspace.dirty;
+  const reportError = useCallback(
+    (e: unknown) =>
+      setError(
+        e instanceof ApiError
+          ? e.message.replaceAll("_", " ")
+          : "Could not reach the server.",
+      ),
+    [setError],
+  );
   const notify = useCallback((text: string) => {
     const id = Date.now() + Math.random();
     setToasts((t) => [...t.slice(-2), { id, text }]);
@@ -174,16 +186,9 @@ function App() {
     setError("");
     try {
       await fn();
-      if (refreshAfter) {
-        dashboard.invalidateList();
-        await dashboard.refresh();
-      }
+      if (refreshAfter) await dashboard.refresh();
     } catch (e) {
-      setError(
-        e instanceof ApiError
-          ? e.message.replaceAll("_", " ")
-          : "Could not reach the server.",
-      );
+      reportError(e);
     } finally {
       setBusy(false);
     }
@@ -372,7 +377,8 @@ function App() {
             conversations={conversations}
             commands={workspace.config?.commands ?? []}
             busy={busy}
-            act={act}
+            onApprove={dashboard.approveJob}
+            onCancel={dashboard.cancelJob}
             onToggle={() => void togglePaused()}
             navigate={navigate}
             openConversation={(id) =>
@@ -387,6 +393,12 @@ function App() {
             state={state}
             busy={busy}
             act={act}
+            onPatchConversation={dashboard.patchConversation}
+            onRefresh={() => {
+              dashboard.invalidateList();
+              void dashboard.refresh();
+            }}
+            onError={reportError}
             selected={selected}
             onSelect={selectConversation}
             partial={dashboard.discoveryPartial}
@@ -408,8 +420,8 @@ function App() {
           <ActivityPage
             jobs={jobs}
             conversations={conversations}
-            busy={busy}
-            act={act}
+            onApprove={dashboard.approveJob}
+            onCancel={dashboard.cancelJob}
             loaded={lastUpdated !== null}
             loadError={error}
           />

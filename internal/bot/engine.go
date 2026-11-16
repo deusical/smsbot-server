@@ -187,7 +187,7 @@ func (e *Engine) Enroll(id, peer string) error {
 // cancelRunning stops work generating for conv. The caller holds the lock.
 func (e *Engine) cancelRunning(conv string) {
 	for job, cancel := range e.pending {
-		if j, err := e.Store.Job(job); err == nil && j.ConversationID == conv {
+		if j, _ := e.Store.Job(job); conv != "" && j.ConversationID == conv {
 			cancel()
 		}
 	}
@@ -208,6 +208,20 @@ func (e *Engine) UnenrollMember(conv, member string) error {
 	err := e.Store.UnenrollMember(conv, member)
 	e.mu.Unlock()
 	if err == nil {
+		e.nudgeWorkerCancel()
+	}
+	return err
+}
+
+// SetGroupMembers replaces who may use the bot in a group in one step.
+func (e *Engine) SetGroupMembers(conv, roster string, members []string) error {
+	e.mu.Lock()
+	removed, err := e.Store.SetGroupMembers(conv, roster, members)
+	if err == nil && removed {
+		e.cancelRunning(conv)
+	}
+	e.mu.Unlock()
+	if err == nil && removed {
 		e.nudgeWorkerCancel()
 	}
 	return err

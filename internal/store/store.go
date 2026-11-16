@@ -22,6 +22,7 @@ type Store struct {
 	Vault            *vault.Vault
 	Path             string
 	messageDeletions atomic.Uint64
+	listChanges      atomic.Uint64
 	lastFocusNano    atomic.Int64
 }
 
@@ -33,6 +34,16 @@ func (s *Store) MessageDeletionSequence() uint64 {
 
 func (s *Store) noteMessageDeletion() {
 	s.messageDeletions.Add(1)
+}
+
+// ListChangeSequence increments whenever local conversation state shown in the
+// dashboard list (enrollment, shared group AI, inbox consent) changes.
+func (s *Store) ListChangeSequence() uint64 {
+	return s.listChanges.Load()
+}
+
+func (s *Store) noteListChange() {
+	s.listChanges.Add(1)
 }
 
 type Job struct {
@@ -378,6 +389,9 @@ func (s *Store) Pause(value bool) error {
 }
 func (s *Store) Enroll(conv, peer string) error {
 	_, e := s.DB.Exec("INSERT INTO enrollment VALUES(?,?) ON CONFLICT(conversation) DO UPDATE SET participant=excluded.participant", conv, peer)
+	if e == nil {
+		s.noteListChange()
+	}
 	return e
 }
 func (s *Store) Unenroll(conv string) error {
@@ -395,7 +409,11 @@ func (s *Store) Unenroll(conv string) error {
 	if _, e = tx.Exec("UPDATE jobs SET state='cancelled',code='unenrolled',plan='' WHERE conversation=? AND state IN ('queued','generating','awaiting_approval')", conv); e != nil {
 		return e
 	}
-	return tx.Commit()
+	if e = tx.Commit(); e != nil {
+		return e
+	}
+	s.noteListChange()
+	return nil
 }
 func (s *Store) Enrolled(conv, peer string) bool {
 	var actual string

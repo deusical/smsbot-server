@@ -20,7 +20,8 @@ export function Home({
   conversations,
   commands,
   busy,
-  act,
+  onApprove,
+  onCancel,
   onToggle,
   navigate,
   openConversation,
@@ -36,7 +37,8 @@ export function Home({
     pipeline?: Pipeline;
   }[];
   busy: boolean;
-  act: (fn: () => Promise<unknown>, refreshAfter?: boolean) => Promise<void>;
+  onApprove: (id: string) => Promise<void>;
+  onCancel: (id: string) => Promise<void>;
   onToggle: () => void;
   navigate: (p: Destination) => void;
   openConversation: (id: string) => void;
@@ -157,8 +159,8 @@ export function Home({
                 ...jobs.filter((j) => j.state !== "awaiting_approval"),
               ].slice(0, 40)}
               conversations={conversations}
-              busy={busy}
-              act={act}
+              onApprove={onApprove}
+              onCancel={onCancel}
               compact
             />
           ) : (

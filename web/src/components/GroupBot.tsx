@@ -13,19 +13,26 @@ import { Switch } from "./ui";
  */
 export function GroupBot({
   conversation: c,
-  busy,
-  act,
+  onPatchConversation,
+  onRefresh,
+  onError,
 }: {
   conversation: Conversation;
-  busy: boolean;
-  act: (fn: () => Promise<unknown>, refreshAfter?: boolean) => Promise<void>;
+  onPatchConversation: (id: string, patch: Partial<Conversation>) => void;
+  onRefresh: () => void;
+  onError: (e: unknown) => void;
 }) {
   const [open, setOpen] = useState(false);
-  // Switch positions chosen but not yet confirmed by a refresh.
+  const [approving, setApproving] = useState(false);
+  const [savingShared, setSavingShared] = useState(false);
+  // Switch positions chosen but not yet confirmed by the server.
   const [wanted, setWanted] = useState<Record<string, boolean>>({});
   const queue = useRef<Promise<void>>(Promise.resolve());
   const pending = useRef(0);
   const failure = useRef<unknown>(null);
+  const confirmed = useRef<{ enrolled_members: string[]; bot_roster: string } | null>(null);
+  const latestConv = useRef(c);
+  latestConv.current = c;
   const members = c.members ?? [];
   const enrolled = c.enrolled_members ?? [];
   const needsApproval = enrolled.length > 0 && (c.bot_roster ?? "") !== (c.roster ?? "");
@@ -34,32 +41,82 @@ export function GroupBot({
   const isOn = (id: string) => wanted[id] ?? enrolled.includes(id);
   const allOn = members.length > 0 && members.every((m) => isOn(m.id));
 
-  const save = (id: string, on: boolean) =>
-    on
-      ? api("/enrollment", "POST", { conversation_id: c.id, participant_id: id, roster })
-      : api(`/enrollment/${encodeURIComponent(c.id)}/members/${encodeURIComponent(id)}`, "DELETE");
+  type GroupStateReply = {
+    enrolled?: boolean;
+    enrolled_members?: string[];
+    bot_roster?: string;
+  };
 
-  const setMany = (changes: [string, boolean][]) => {
+  const runSave = (
+    changes: [string, boolean][],
+    task: (conv: Conversation) => Promise<GroupStateReply>,
+  ) => {
     if (!changes.length) return;
     setWanted((w) => ({ ...w, ...Object.fromEntries(changes) }));
-    for (const [id, on] of changes) {
-      pending.current++;
-      queue.current = queue.current.then(async () => {
-        try {
-          await save(id, on);
-        } catch (e) {
-          failure.current ??= e;
+    pending.current++;
+    queue.current = queue.current.then(async () => {
+      try {
+        const res = await task(latestConv.current);
+        if (res.enrolled_members) {
+          confirmed.current = {
+            enrolled_members: res.enrolled_members,
+            bot_roster: res.bot_roster ?? "",
+          };
         }
-        if (--pending.current > 0) return;
-        const err = failure.current;
-        failure.current = null;
-        await act(async () => {
-          if (err) throw err;
+      } catch (e) {
+        failure.current ??= e;
+      }
+      if (--pending.current > 0) return;
+      const err = failure.current;
+      const saved = confirmed.current;
+      failure.current = null;
+      confirmed.current = null;
+      if (saved) {
+        onPatchConversation(latestConv.current.id, {
+          enrolled: saved.enrolled_members.length > 0,
+          enrolled_members: saved.enrolled_members,
+          bot_roster: saved.bot_roster,
         });
-        // A switch flipped during the refresh keeps its own position.
-        if (pending.current === 0) setWanted({});
-      });
-    }
+      }
+      setWanted({});
+      if (err) {
+        onError(err);
+        onRefresh();
+      } else if (!saved) {
+        onRefresh();
+      }
+    });
+  };
+
+  const setOne = (id: string, on: boolean) => {
+    if (isOn(id) === on) return;
+    runSave([[id, on]], (conv) =>
+      on
+        ? api<GroupStateReply>("/enrollment", "POST", {
+            conversation_id: conv.id,
+            participant_id: id,
+            roster: conv.roster ?? "",
+          })
+        : api<GroupStateReply>(
+            `/enrollment/${encodeURIComponent(conv.id)}/members/${encodeURIComponent(id)}`,
+            "DELETE",
+          ),
+    );
+  };
+
+  const setEveryone = (on: boolean) => {
+    const knownIds = [...new Set([...members.map((m) => m.id), ...(on ? [] : enrolled)])];
+    const changes: [string, boolean][] = knownIds
+      .filter((id) => isOn(id) !== on)
+      .map((id) => [id, on]);
+    if (!changes.length) return;
+    const targetIds = on ? members.map((m) => m.id) : [];
+    runSave(changes, (conv) =>
+      api<GroupStateReply>(`/enrollment/${encodeURIComponent(conv.id)}/members`, "PUT", {
+        members: targetIds,
+        ...(on ? { roster: conv.roster ?? "" } : {}),
+      }),
+    );
   };
 
   return (
@@ -84,8 +141,29 @@ export function GroupBot({
               then approve.{" "}
               <button
                 type="button"
-                disabled={busy}
-                onClick={() => void act(() => api(`/enrollment/${encodeURIComponent(c.id)}/approve`, "POST", { roster }))}
+                disabled={approving}
+                onClick={async () => {
+                  setApproving(true);
+                  try {
+                    const res = await api<GroupStateReply>(
+                      `/enrollment/${encodeURIComponent(c.id)}/approve`,
+                      "POST",
+                      { roster },
+                    );
+                    if (res.enrolled_members) {
+                      onPatchConversation(c.id, {
+                        enrolled: !!res.enrolled,
+                        enrolled_members: res.enrolled_members,
+                        bot_roster: res.bot_roster ?? roster,
+                      });
+                    } else onRefresh();
+                  } catch (e) {
+                    onError(e);
+                    onRefresh();
+                  } finally {
+                    setApproving(false);
+                  }
+                }}
               >
                 Approve these people
               </button>
@@ -96,7 +174,7 @@ export function GroupBot({
               label="Bot replies for everyone"
               checked={allOn}
               disabled={needsApproval && !allOn}
-              onChange={(on) => setMany(members.filter((m) => isOn(m.id) !== on).map((m) => [m.id, on]))}
+              onChange={setEveryone}
             />
           )}
           {members.map((m) => (
@@ -105,14 +183,25 @@ export function GroupBot({
               label={`Bot replies for ${m.name || "Someone"}`}
               checked={isOn(m.id)}
               disabled={needsApproval && !enrolled.includes(m.id)}
-              onChange={(on) => setMany([[m.id, on]])}
+              onChange={(on) => setOne(m.id, on)}
             />
           ))}
           <Switch
             label="One AI conversation for everyone"
             checked={c.shared_ai ?? false}
-            disabled={busy}
-            onChange={(on) => void act(() => api(`/enrollment/${encodeURIComponent(c.id)}/shared`, "PUT", { shared: on }))}
+            disabled={savingShared}
+            onChange={async (on) => {
+              setSavingShared(true);
+              try {
+                await api(`/enrollment/${encodeURIComponent(c.id)}/shared`, "PUT", { shared: on });
+                onPatchConversation(c.id, { shared_ai: on });
+              } catch (e) {
+                onError(e);
+                onRefresh();
+              } finally {
+                setSavingShared(false);
+              }
+            }}
           />
           <small>
             {c.shared_ai

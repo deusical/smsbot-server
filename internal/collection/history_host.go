@@ -352,7 +352,15 @@ func (svc *Service) RequestArchiveRefresh(ctx context.Context, conv, from, to st
 	if err != nil || until.Before(since) || until.After(svc.now().Add(5*time.Minute)) {
 		return store.Archive{}, errors.New("invalid_range")
 	}
-	c, err := svc.lookup(ctx, conv)
+	svc.mu.Lock()
+	initialSettings, initialErr := svc.Settings()
+	svc.mu.Unlock()
+	if initialErr != nil || !initialSettings.AllowsID(conv) {
+		return store.Archive{}, errors.New("archive_access_disabled")
+	}
+	from = since.UTC().Format(time.RFC3339Nano)
+	untilStr := until.UTC().Format(time.RFC3339Nano)
+	c, err := svc.cachedOrLookup(ctx, conv)
 	if err != nil {
 		return store.Archive{}, err
 	}
@@ -369,7 +377,6 @@ func (svc *Service) RequestArchiveRefresh(ctx context.Context, conv, from, to st
 	if err != nil || !settings.Allows(c) {
 		return store.Archive{}, errors.New("archive_access_disabled")
 	}
-	from = since.UTC().Format(time.RFC3339Nano)
 	focusAt := svc.now().UTC()
 	wake := false
 	a, err := svc.Store.UpdateArchive(conv, settings.ArchiveRetentionDays, func(a *store.Archive, exists bool) error {
@@ -384,7 +391,7 @@ func (svc *Service) RequestArchiveRefresh(ctx context.Context, conv, from, to st
 		if activeArchiveState(a.RefreshState) && !since.Before(currentSince) && (to == "" || !until.After(currentUntil)) {
 			return nil
 		}
-		if a.RefreshSince == from && (to == "" || a.RefreshUntil == until.UTC().Format(time.RFC3339Nano)) {
+		if a.RefreshSince == from && (to == "" || a.RefreshUntil == untilStr) {
 			checked, _ := time.Parse(time.RFC3339Nano, a.RefreshCheckedAt)
 			if svc.now().Sub(checked) < 30*time.Second {
 				return nil
@@ -392,7 +399,7 @@ func (svc *Service) RequestArchiveRefresh(ctx context.Context, conv, from, to st
 		}
 		a.ViewGeneration++
 		a.RefreshSince = from
-		a.RefreshUntil = until.UTC().Format(time.RFC3339Nano)
+		a.RefreshUntil = untilStr
 		a.RefreshState = "queued"
 		a.RefreshError = ""
 		a.RefreshRetryAt = ""

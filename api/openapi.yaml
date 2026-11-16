@@ -169,11 +169,43 @@ paths:
                   description: Required to enroll a member of a group. The conversation's `roster` as the owner saw it. The member then may use the bot in that group, but only while the group has exactly those people.
       responses:
         '200':
-          description: Exact individual participant, or group member, enrolled
+          description: Exact individual participant, or group member, enrolled. Group enrollment also returns `enrolled_members` and `bot_roster`.
         '400':
           description: Ineligible conversation, identity mismatch, or a roster that is not the group's
         '409':
           description: group_needs_approval; the group's people changed since others were enrolled, so approve the new roster first
+        '503':
+          description: transport_unavailable
+  /enrollment/{id}/members:
+    parameters:
+    - {name: id, in: path, required: true, schema: {type: string}}
+    put:
+      description: Replace who may use the bot in a group in one step. An empty list turns the bot off in that group and cancels work waiting for it; a non-empty list requires the group's `roster` as the owner saw it, and cancels waiting work if any enrolled member was removed.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [members]
+              properties:
+                members:
+                  type: array
+                  maxItems: 200
+                  items: {type: string}
+                roster:
+                  type: string
+                  description: Required when `members` is non-empty. The group's `roster` as the owner saw it.
+      responses:
+        '200':
+          description: Group members updated (`enrolled`, `enrolled_members`, `bot_roster`)
+        '400':
+          description: Invalid request, not a writable group, unknown member, or roster mismatch
+        '409':
+          description: group_needs_approval; the group's people changed since others were enrolled, so approve the new roster first
+        '503':
+          description: transport_unavailable
   /enrollment/{id}/members/{member}:
     parameters:
     - {name: id, in: path, required: true, schema: {type: string}}
@@ -182,7 +214,7 @@ paths:
       description: Stop one member of a group using the bot there, and cancel work waiting for the group.
       responses:
         '200':
-          description: Member removed
+          description: Member removed (`enrolled`, `enrolled_members`, `bot_roster`)
   /enrollment/{id}/approve:
     parameters:
     - {name: id, in: path, required: true, schema: {type: string}}
@@ -202,9 +234,11 @@ paths:
                   description: The group's current `roster`, as the owner saw it.
       responses:
         '200':
-          description: Approved
+          description: Approved (`approved`, `enrolled`, `enrolled_members`, `bot_roster`)
         '409':
           description: group_changed; the group has different people than the roster given
+        '503':
+          description: transport_unavailable
   /enrollment/{id}/shared:
     parameters:
     - {name: id, in: path, required: true, schema: {type: string}}
@@ -1650,7 +1684,7 @@ components:
               last_hour: {type: integer, minimum: 0}
         conversations_revision:
           type: string
-          description: Owner-only counter that changes when the phone reports activity or a message is saved; the dashboard refetches its conversation list only when it changes.
+          description: Owner-only counter that changes when the phone reports activity, a message is saved, or local conversation state (enrollment, shared group AI, collection consent) changes; the dashboard refetches its conversation list only when it changes.
         inbox_capture_gap:
           type: boolean
           description: Owner-only pending history-verification warning; ranges are not confirmed outages or proof of missing messages.

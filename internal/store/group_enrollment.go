@@ -55,6 +55,7 @@ func (s *Store) SetGroupShared(conv string, shared bool) error {
 	if err = tx.Commit(); err != nil {
 		return err
 	}
+	s.noteListChange()
 	return s.ClearMemory(conv, "")
 }
 
@@ -119,7 +120,11 @@ func (s *Store) EnrollMember(conv, member, roster string) error {
 	if _, err = tx.Exec("INSERT INTO group_enrollment VALUES(?,?,?) ON CONFLICT(conversation,participant) DO UPDATE SET roster=excluded.roster", conv, member, roster); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+	s.noteListChange()
+	return nil
 }
 
 // UnenrollMember stops a member using the bot in a group. Work waiting for the
@@ -136,7 +141,76 @@ func (s *Store) UnenrollMember(conv, member string) error {
 	if _, err = tx.Exec(cancelPending, conv); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+	s.noteListChange()
+	return nil
+}
+
+// SetGroupMembers replaces who may use the bot in a group in one transaction,
+// under roster when anyone is enrolled. Removing any member cancels work
+// waiting for the group.
+func (s *Store) SetGroupMembers(conv, roster string, members []string) (bool, error) {
+	if conv == "" {
+		return false, groupError("invalid_enrollment")
+	}
+	var unique []string
+	keep := map[string]bool{}
+	for _, member := range members {
+		if member == "" {
+			return false, groupError("invalid_enrollment")
+		}
+		if !keep[member] {
+			keep[member] = true
+			unique = append(unique, member)
+		}
+	}
+	if len(unique) > 0 && !strings.HasPrefix(roster, "group:") {
+		return false, groupError("invalid_enrollment")
+	}
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+	delQuery, delArgs := "DELETE FROM group_enrollment WHERE conversation=?", []any{conv}
+	if len(unique) > 0 {
+		var stale int
+		if err = tx.QueryRow("SELECT count(*) FROM group_enrollment WHERE conversation=? AND roster<>?", conv, roster).Scan(&stale); err != nil {
+			return false, err
+		}
+		if stale > 0 {
+			return false, ErrGroupNeedsApproval
+		}
+		delQuery += " AND participant NOT IN (" + strings.TrimSuffix(strings.Repeat("?,", len(unique)), ",") + ")"
+		for _, member := range unique {
+			delArgs = append(delArgs, member)
+		}
+	}
+	res, err := tx.Exec(delQuery, delArgs...)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	removed := n > 0
+	for _, member := range unique {
+		if _, err = tx.Exec("INSERT INTO group_enrollment VALUES(?,?,?) ON CONFLICT(conversation,participant) DO UPDATE SET roster=excluded.roster", conv, member, roster); err != nil {
+			return false, err
+		}
+	}
+	if removed {
+		if _, err = tx.Exec(cancelPending, conv); err != nil {
+			return false, err
+		}
+	}
+	if err = tx.Commit(); err != nil {
+		return false, err
+	}
+	if removed || len(unique) > 0 {
+		s.noteListChange()
+	}
+	return removed, nil
 }
 
 // ApproveGroup accepts the group's current roster for the members who are
@@ -171,7 +245,11 @@ func (s *Store) ApproveGroup(conv, roster string, present []string) error {
 	if _, err = tx.Exec(cancelPending, conv); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+	s.noteListChange()
+	return nil
 }
 
 // BotOn reports whether the bot is enrolled in conv, for a person or a group.

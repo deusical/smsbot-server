@@ -45,7 +45,7 @@ export function useReadReceipts({
     tried.current = 0;
   }, [conversation.id]);
   useEffect(() => {
-    if (loading || !messages.length) return;
+    if (conversation.group || loading || !messages.length) return;
     let newest = 0,
       newestIncoming = 0;
     for (const m of messages) {

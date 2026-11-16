@@ -67,12 +67,19 @@ func (g *Google) DiscoverConversations(ctx context.Context, cursor string) (Conv
 			return ConversationPage{}, err
 		}
 		// Discovery lists conversations whose exact people are known, groups included.
+		// Readable records are cached without replacing an altered send baseline.
 		conversations := []Conversation{}
+		g.mu.Lock()
 		for _, c := range res.GetConversations() {
-			if c.GetConversationID() != "" && readable(c) {
+			if c.GetConversationID() == "" {
+				continue
+			}
+			g.updateBaselineLocked(c, false)
+			if readable(c) {
 				conversations = append(conversations, listConversation(c))
 			}
 		}
+		g.mu.Unlock()
 		out := ConversationPage{Conversations: conversations}
 		if res.GetCursor() != nil {
 			b, err := proto.Marshal(res.GetCursor())

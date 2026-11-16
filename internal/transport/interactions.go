@@ -57,18 +57,7 @@ func (g *Google) rememberConversationEvent(c *gmproto.Conversation) bool {
 	g.identityEpoch.Add(1)
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	old := g.conversations[c.GetConversationID()]
-	changed := old != nil && eligible(old) && (!eligible(c) || peer(old) != peer(c) || old.GetDefaultOutgoingID() != c.GetDefaultOutgoingID())
-	// People joining or leaving a group don't pause everything, but the send
-	// baseline stays as it was until a verified lookup replaces it.
-	moved := old != nil && old.GetIsGroupChat() && roster(old) != roster(c)
-	if !changed && !moved && c.GetConversationID() != "" {
-		if g.conversations == nil {
-			g.conversations = map[string]*gmproto.Conversation{}
-		}
-		g.conversations[c.GetConversationID()] = c
-	}
-	return changed
+	return g.updateBaselineLocked(c, true)
 }
 
 func CanonicalEmoji(s string) string { return variationselector.FullyQualify(s) }
