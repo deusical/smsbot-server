@@ -48,6 +48,10 @@ type FileRepairer interface {
 	Repair(context.Context, transport.Conversation, string, media.File) (bool, error)
 }
 type Service struct {
+	focusMu     sync.Mutex
+	focusedConv string
+	focusedAt   time.Time
+	focusSeeded bool
 	focusKey    string
 	focusCursor string
 	focusRound  int
@@ -233,24 +237,56 @@ func (s *Service) Tick(ctx context.Context) {
 	}
 }
 
+// NoteFocus records in memory that conv was focused at at, so idle ticks skip
+// decrypting every conversation archive when nothing was viewed recently.
+func (s *Service) NoteFocus(conv string, at time.Time) {
+	if conv == "" || at.IsZero() {
+		return
+	}
+	s.focusMu.Lock()
+	if at.After(s.focusedAt) {
+		s.focusedConv = conv
+		s.focusedAt = at
+	}
+	s.focusMu.Unlock()
+}
+
+func (s *Service) hasRecentFocus(now time.Time) bool {
+	s.focusMu.Lock()
+	at := s.focusedAt
+	s.focusMu.Unlock()
+	if storeAt := s.Store.LastArchiveFocus(); storeAt.After(at) {
+		at = storeAt
+	}
+	return !at.IsZero() && now.Sub(at) < 2*time.Minute
+}
+
 func (s *Service) focusBatch(ctx context.Context) ([]store.AttachmentRecord, error) {
 	s.focusRound++
 	// Reserve every third turn for the background sweep.
 	if s.focusRound%3 == 0 {
 		return nil, nil
 	}
+	now := s.now()
+	if s.focusSeeded && !s.hasRecentFocus(now) {
+		return nil, nil
+	}
 	archives, err := s.Store.Archives()
 	if err != nil {
 		return nil, err
 	}
+	s.focusSeeded = true
 	var focus store.Archive
 	var focusedAt time.Time
 	for _, a := range archives {
 		at, err := time.Parse(time.RFC3339Nano, a.FocusAt)
-		if err == nil && time.Since(at) < 2*time.Minute && a.RefreshSince != "" && a.RefreshUntil != "" && at.After(focusedAt) {
+		if err == nil && now.Sub(at) < 2*time.Minute && a.RefreshSince != "" && a.RefreshUntil != "" && at.After(focusedAt) {
 			focus = a
 			focusedAt = at
 		}
+	}
+	if !focusedAt.IsZero() {
+		s.NoteFocus(focus.Conversation.ID, focusedAt)
 	}
 	if focus.Conversation.ID == "" {
 		return nil, nil

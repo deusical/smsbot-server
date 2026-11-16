@@ -370,6 +370,7 @@ func (svc *Service) RequestArchiveRefresh(ctx context.Context, conv, from, to st
 		return store.Archive{}, errors.New("archive_access_disabled")
 	}
 	from = since.UTC().Format(time.RFC3339Nano)
+	focusAt := svc.now().UTC()
 	wake := false
 	a, err := svc.Store.UpdateArchive(conv, settings.ArchiveRetentionDays, func(a *store.Archive, exists bool) error {
 		if !exists {
@@ -377,7 +378,7 @@ func (svc *Service) RequestArchiveRefresh(ctx context.Context, conv, from, to st
 		} else if a.Conversation.ParticipantID != c.ParticipantID {
 			return errors.New("archive_identity_changed")
 		}
-		a.FocusAt = svc.now().UTC().Format(time.RFC3339Nano)
+		a.FocusAt = focusAt.Format(time.RFC3339Nano)
 		currentSince, _ := store.ParseArchiveSince(a.RefreshSince)
 		currentUntil, _ := store.ParseArchiveSince(a.RefreshUntil)
 		if activeArchiveState(a.RefreshState) && !since.Before(currentSince) && (to == "" || !until.After(currentUntil)) {
@@ -400,8 +401,13 @@ func (svc *Service) RequestArchiveRefresh(ctx context.Context, conv, from, to st
 		wake = true
 		return nil
 	})
-	if err == nil && wake && svc.History != nil {
-		svc.History.Wake()
+	if err == nil {
+		if svc.Archive != nil {
+			svc.Archive.NoteFocus(conv, focusAt)
+		}
+		if wake && svc.History != nil {
+			svc.History.Wake()
+		}
 	}
 	return a, err
 }

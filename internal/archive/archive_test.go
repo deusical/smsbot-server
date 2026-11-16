@@ -849,3 +849,75 @@ func TestCollectRunsHourlyOrAfterMessageDeletionAndKeepsReferencedBlobs(t *testi
 	}
 	local.Close()
 }
+
+func TestFocusBatchSkipsFullArchiveDecryptWhenUnfocused(t *testing.T) {
+	t.Parallel()
+	s, manager := setup(t)
+	now := time.Now()
+	manager.Now = func() time.Time { return now }
+	seed(t, s, nil)
+	canary := transport.Conversation{ID: "canary", ParticipantID: "canary-peer", Writable: true}
+	if err := s.SaveArchive(store.Archive{Conversation: canary, Generation: 1, State: "running"}, 0); err != nil {
+		t.Fatal(err)
+	}
+
+	// First focusBatch seeds once from disk when nothing is focused.
+	if rows, err := manager.focusBatch(context.Background()); err != nil || len(rows) != 0 {
+		t.Fatalf("initial focusBatch: rows=%d err=%v", len(rows), err)
+	}
+
+	// Corrupting an unrelated archive row proves subsequent unfocused ticks do
+	// not call Store.Archives() (which decrypts every row and errors on corruption).
+	var validPayload string
+	if err := s.DB.QueryRow("SELECT payload FROM archive_conversations WHERE conversation='canary'").Scan(&validPayload); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DB.Exec("UPDATE archive_conversations SET payload='not-sealed' WHERE conversation='canary'"); err != nil {
+		t.Fatal(err)
+	}
+	for range 6 {
+		if rows, err := manager.focusBatch(context.Background()); err != nil || len(rows) != 0 {
+			t.Fatalf("idle focusBatch decrypted all archives: rows=%d err=%v", len(rows), err)
+		}
+	}
+
+	// Restore valid ciphertext, focus a viewed conversation, and verify it runs.
+	if _, err := s.DB.Exec("UPDATE archive_conversations SET payload=? WHERE conversation='canary'", validPayload); err != nil {
+		t.Fatal(err)
+	}
+	viewed := transport.Conversation{ID: "viewed", ParticipantID: "viewed-peer", Writable: true}
+	if err := s.SaveArchive(store.Archive{
+		Conversation: viewed,
+		Generation:   1,
+		State:        "running",
+		RefreshSince: now.Add(-time.Hour).UTC().Format(time.RFC3339Nano),
+		RefreshUntil: now.Add(time.Minute).UTC().Format(time.RFC3339Nano),
+		FocusAt:      now.UTC().Format(time.RFC3339Nano),
+	}, 0); err != nil {
+		t.Fatal(err)
+	}
+	f := media.File{Info: media.Info{ID: "vf", Size: 8}, RemoteID: "viewed-remote"}
+	if err := s.SaveObservedFiles(viewed.ID, "vmsg", "", "incoming", "", "phone", "", now, []media.File{f}); err != nil {
+		t.Fatal(err)
+	}
+	manager.NoteFocus(viewed.ID, now)
+	// Ensure focusRound is not on the 3rd-turn skip.
+	if (manager.focusRound+1)%3 == 0 {
+		_, _ = manager.focusBatch(context.Background())
+	}
+	rows, err := manager.focusBatch(context.Background())
+	if err != nil || len(rows) != 1 || rows[0].Conversation != viewed.ID {
+		t.Fatalf("focused focusBatch did not return viewed batch: rows=%+v err=%v", rows, err)
+	}
+
+	// Once the 2-minute focus window expires, full decrypts stop again.
+	now = now.Add(2*time.Minute + time.Second)
+	if _, err := s.DB.Exec("UPDATE archive_conversations SET payload='not-sealed' WHERE conversation='canary'"); err != nil {
+		t.Fatal(err)
+	}
+	for range 6 {
+		if rows, err := manager.focusBatch(context.Background()); err != nil || len(rows) != 0 {
+			t.Fatalf("expired focusBatch still decrypted all archives: rows=%d err=%v", len(rows), err)
+		}
+	}
+}

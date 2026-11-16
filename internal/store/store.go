@@ -22,6 +22,7 @@ type Store struct {
 	Vault            *vault.Vault
 	Path             string
 	messageDeletions atomic.Uint64
+	lastFocusNano    atomic.Int64
 }
 
 // MessageDeletionSequence increments whenever messages are deleted from the
