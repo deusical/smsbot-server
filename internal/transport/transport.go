@@ -101,6 +101,21 @@ type Transport interface {
 	Ready() bool
 }
 
+// SessionState reports whether the transport's paired session is up, ignoring
+// brief message-stream rollovers. Sending still requires Ready().
+type SessionState interface {
+	SessionUp() bool
+}
+
+// SessionUp reports whether t's session is up, falling back to Ready when t
+// does not distinguish stream rollovers from session outages.
+func SessionUp(t Transport) bool {
+	if s, ok := t.(SessionState); ok {
+		return s.SessionUp()
+	}
+	return t != nil && t.Ready()
+}
+
 var ErrUnavailable = errors.New("phone connection unavailable")
 var ErrLookupFailed = errors.New("conversation lookup failed")
 var ErrIneligibleConversation = errors.New("ineligible_conversation")

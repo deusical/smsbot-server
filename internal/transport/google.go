@@ -26,10 +26,12 @@ import (
 type Google struct {
 	recovery         recoveryControl
 	recoveryWake     chan struct{}
-	recoveryProbe    func(context.Context) error // offline fault injection; nil in production
-	recoveryInterval time.Duration               // zero means 1s; tests only
-	saveInterval     time.Duration               // zero means 30s; tests only
-	connected        func() bool                 // offline fault injection; nil in production
+	recoveryProbe    func(context.Context) error                                  // offline fault injection; nil in production
+	recoveryInterval time.Duration                                                // zero means 1s; tests only
+	saveInterval     time.Duration                                                // zero means 30s; tests only
+	connected        func() bool                                                  // offline fault injection; nil in production
+	getConversation  func(context.Context, string) (*gmproto.Conversation, error) // offline fault injection; nil in production
+	lookupPause      time.Duration                                                // zero means lookupRetryPause; tests only
 	fullMedia        fullMediaRequests
 	client           *libgm.Client
 	vault            *vault.Vault
@@ -241,8 +243,12 @@ func (g *Google) Close() error {
 	}
 	return g.Save()
 }
+func (g *Google) SessionUp() bool {
+	return g.ready.Load() && !g.healthFailure.Load() && !g.overflow.Load()
+}
+
 func (g *Google) Ready() bool {
-	return g.ready.Load() && !g.healthFailure.Load() && !g.overflow.Load() && g.clientConnected()
+	return g.SessionUp() && g.clientConnected()
 }
 
 func (g *Google) clientConnected() bool {

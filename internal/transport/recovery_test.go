@@ -305,4 +305,83 @@ func TestReconnectGraceIgnoresBriefBlipAndReportsSustainedDisconnect(t *testing.
 			t.Fatalf("unexpected diagnostic: %+v", emitted)
 		}
 	})
+
+	t.Run("lookup_failure_during_blip_keeps_session_up_until_grace_expires", func(t *testing.T) {
+		t.Parallel()
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		g := NewGoogle(nil, "")
+		g.ready.Store(true)
+		g.recoveryInterval = 5 * time.Millisecond
+		g.lookupPause = time.Millisecond
+		g.getConversation = func(context.Context, string) (*gmproto.Conversation, error) {
+			return nil, errors.New("synthetic transient lookup failure")
+		}
+
+		tick1 := make(chan struct{})
+		var tick1Closed atomic.Bool
+		var allowSustainedDrop atomic.Bool
+		var runChecks atomic.Int32
+		g.connected = func() bool {
+			n := int(runChecks.Add(1))
+			if tick1Closed.CompareAndSwap(false, true) {
+				close(tick1)
+			}
+			if !allowSustainedDrop.Load() {
+				// Stay within grace (< disconnectGraceTicks) while the lookup runs;
+				// reset once if the scheduler stalls before allowSustainedDrop is set.
+				return n%disconnectGraceTicks == 0
+			}
+			return false
+		}
+
+		dropped := make(chan AuthDiagnostic, 1)
+		g.Diagnostic = func(d AuthDiagnostic) {
+			if d.Event == "stream_disconnected" {
+				select {
+				case dropped <- d:
+				default:
+				}
+				cancel()
+			}
+		}
+
+		var interruptions, pauses atomic.Int32
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			g.Run(ctx, func(Incoming) {}, func() { pauses.Add(1) }, func(string, string, string, string) {}, func() error {
+				interruptions.Add(1)
+				return nil
+			})
+		}()
+
+		<-tick1
+		_, err := g.LookupConversation(context.Background(), "c1")
+		if !errors.Is(err, ErrLookupFailed) || errors.Is(err, ErrUnavailable) {
+			t.Fatalf("blip lookup returned %v, want ErrLookupFailed", err)
+		}
+		if g.healthFailure.Load() || !g.ready.Load() || !g.SessionUp() || interruptions.Load() != 0 || pauses.Load() != 0 {
+			t.Fatalf("blip lookup bypassed grace: healthFailure=%v ready=%v sessionUp=%v interruptions=%d pauses=%d",
+				g.healthFailure.Load(), g.ready.Load(), g.SessionUp(), interruptions.Load(), pauses.Load())
+		}
+
+		allowSustainedDrop.Store(true)
+		<-done
+		select {
+		case d := <-dropped:
+			if d.Success {
+				t.Fatalf("unexpected success diagnostic: %+v", d)
+			}
+		default:
+			t.Fatal("sustained disconnect did not emit stream_disconnected")
+		}
+		if !g.healthFailure.Load() || g.ready.Load() || g.SessionUp() || interruptions.Load() != 1 || pauses.Load() != 0 {
+			t.Fatalf("sustained disconnect state wrong: healthFailure=%v ready=%v sessionUp=%v interruptions=%d pauses=%d",
+				g.healthFailure.Load(), g.ready.Load(), g.SessionUp(), interruptions.Load(), pauses.Load())
+		}
+		if _, err := g.LookupConversation(context.Background(), "c1"); !errors.Is(err, ErrUnavailable) {
+			t.Fatalf("post-drop lookup returned %v, want ErrUnavailable", err)
+		}
+	})
 }

@@ -57,26 +57,149 @@ func TestFetchConversationStopsWaitingWhenCancelled(t *testing.T) {
 
 func TestLookupFailureOnlyDropsThePhoneWhenTheConnectionIsAtFault(t *testing.T) {
 	cases := []struct {
-		name      string
-		err       error
-		connected bool
-		reason    string
-		hard      bool
-		offline   bool
+		name    string
+		err     error
+		reason  string
+		hard    bool
+		offline bool
 	}{
-		{"one unanswered lookup while connected", errors.New("transient"), true, "", false, false},
-		{"connection is down", errors.New("transient"), false, "reconnecting", false, true},
-		{"phone did not answer in time", context.DeadlineExceeded, true, "reconnecting", false, true},
-		{"login problem", events.ErrInvalidCredentials, true, "login_required", true, true},
+		{"one unanswered lookup leaves stream grace in charge", errors.New("transient"), "", false, false},
+		{"phone did not answer in time", context.DeadlineExceeded, "reconnecting", false, true},
+		{"login problem", events.ErrInvalidCredentials, "login_required", true, true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			reason, hard, offline := lookupFailure(c.err, c.connected)
+			reason, hard, offline := lookupFailure(c.err)
 			if reason != c.reason || hard != c.hard || offline != c.offline {
 				t.Fatalf("got %q %v %v", reason, hard, offline)
 			}
 		})
 	}
+}
+
+func TestLookupConversationDuringStreamRolloverAndSessionFailures(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	// Transports that do not implement SessionState fall back to Ready().
+	if SessionUp(nil) {
+		t.Fatal("nil transport reported SessionUp")
+	}
+	f := NewFixture()
+	if !SessionUp(f) {
+		t.Fatal("online fixture did not report SessionUp")
+	}
+	f.Online = false
+	if SessionUp(f) {
+		t.Fatal("offline fixture reported SessionUp")
+	}
+
+	// Stream rollover gap: session is up (ready && !healthFailure && !overflow),
+	// while the long-polling stream is momentarily disconnected (!Ready()).
+	t.Run("transient_failure_during_stream_gap_keeps_session_up", func(t *testing.T) {
+		t.Parallel()
+		g := NewGoogle(nil, "")
+		g.ready.Store(true)
+		g.lookupPause = time.Millisecond
+		g.connected = func() bool { return false }
+		calls := 0
+		g.getConversation = func(context.Context, string) (*gmproto.Conversation, error) {
+			calls++
+			return nil, errors.New("synthetic transient lookup error")
+		}
+		if !g.SessionUp() || !SessionUp(g) || g.Ready() {
+			t.Fatalf("unexpected readiness before lookup: SessionUp=%v Ready=%v", g.SessionUp(), g.Ready())
+		}
+		_, err := g.LookupConversation(ctx, "c1")
+		if !errors.Is(err, ErrLookupFailed) || errors.Is(err, ErrUnavailable) {
+			t.Fatalf("rollover lookup error = %v, want ErrLookupFailed", err)
+		}
+		if calls != 2 {
+			t.Fatalf("fetchConversation calls = %d, want 2", calls)
+		}
+		if g.healthFailure.Load() || !g.ready.Load() || !g.SessionUp() {
+			t.Fatalf("rollover lookup failure marked phone offline: healthFailure=%v ready=%v sessionUp=%v",
+				g.healthFailure.Load(), g.ready.Load(), g.SessionUp())
+		}
+	})
+
+	t.Run("lookup_succeeds_during_stream_gap", func(t *testing.T) {
+		t.Parallel()
+		g := NewGoogle(nil, "")
+		g.ready.Store(true)
+		g.lookupPause = time.Millisecond
+		g.connected = func() bool { return false }
+		calls := 0
+		g.getConversation = func(context.Context, string) (*gmproto.Conversation, error) {
+			calls++
+			if calls == 1 {
+				return nil, errors.New("synthetic transient")
+			}
+			return individual("c1"), nil
+		}
+		conv, err := g.LookupConversation(ctx, "c1")
+		if err != nil || conv.ID != "c1" || conv.ParticipantID != "peer" || !conv.Writable {
+			t.Fatalf("rollover lookup failed: conv=%+v err=%v", conv, err)
+		}
+		if !g.SessionUp() || g.healthFailure.Load() || !g.ready.Load() {
+			t.Fatal("successful rollover lookup altered session health")
+		}
+	})
+
+	t.Run("credential_error_notes_hard_failure", func(t *testing.T) {
+		t.Parallel()
+		g := NewGoogle(nil, "")
+		g.ready.Store(true)
+		g.lookupPause = time.Millisecond
+		g.connected = func() bool { return false }
+		g.getConversation = func(context.Context, string) (*gmproto.Conversation, error) {
+			return nil, events.ErrInvalidCredentials
+		}
+		_, err := g.LookupConversation(ctx, "c1")
+		if !errors.Is(err, ErrUnavailable) {
+			t.Fatalf("credential failure returned %v, want ErrUnavailable", err)
+		}
+		if !g.healthFailure.Load() || g.ready.Load() || g.SessionUp() || g.ConnectionStatus().State != "login_required" {
+			t.Fatalf("credential failure did not mark login_required: healthFailure=%v ready=%v status=%+v",
+				g.healthFailure.Load(), g.ready.Load(), g.ConnectionStatus())
+		}
+	})
+
+	t.Run("deadline_exceeded_notes_reconnecting_failure", func(t *testing.T) {
+		t.Parallel()
+		g := NewGoogle(nil, "")
+		g.ready.Store(true)
+		g.lookupPause = time.Millisecond
+		g.connected = func() bool { return true }
+		g.getConversation = func(context.Context, string) (*gmproto.Conversation, error) {
+			return nil, context.DeadlineExceeded
+		}
+		_, err := g.LookupConversation(ctx, "c1")
+		if !errors.Is(err, ErrUnavailable) {
+			t.Fatalf("timeout returned %v, want ErrUnavailable", err)
+		}
+		if !g.healthFailure.Load() || g.ready.Load() || g.SessionUp() || g.ConnectionStatus().State != "reconnecting" {
+			t.Fatalf("timeout did not mark reconnecting: healthFailure=%v ready=%v status=%+v",
+				g.healthFailure.Load(), g.ready.Load(), g.ConnectionStatus())
+		}
+	})
+
+	t.Run("session_down_rejects_up_front_with_unavailable", func(t *testing.T) {
+		t.Parallel()
+		g := NewGoogle(nil, "")
+		g.ready.Store(true)
+		g.connected = func() bool { return true }
+		g.noteFailure("reconnecting", false)
+		called := false
+		g.getConversation = func(context.Context, string) (*gmproto.Conversation, error) {
+			called = true
+			return individual("c1"), nil
+		}
+		_, err := g.LookupConversation(ctx, "c1")
+		if !errors.Is(err, ErrUnavailable) || called {
+			t.Fatalf("session-down lookup returned %v (called=%v), want ErrUnavailable without phone call", err, called)
+		}
+	})
 }
 
 func TestLookupErrorsDistinguishUnreadyTransportFromFailedRead(t *testing.T) {

@@ -28,15 +28,15 @@ func fetchConversation(ctx context.Context, id string, pause time.Duration, get 
 }
 
 // lookupFailure decides what a failed conversation lookup says about the
-// connection. One conversation the phone did not answer, while the connection is
+// connection. One conversation the phone did not answer, while the session is
 // otherwise up, must not take the whole phone offline: that stopped every send
-// until reconnection. A login problem, a dropped connection or a phone that did
-// not answer in time still do.
-func lookupFailure(err error, connected bool) (reason string, hard, markOffline bool) {
+// until reconnection. A login problem or a phone that did not answer in time
+// still do; brief stream rollovers are left to Google.Run's disconnect grace.
+func lookupFailure(err error) (reason string, hard, markOffline bool) {
 	switch {
 	case credentialError(err):
 		return "login_required", true, true
-	case !connected, errors.Is(err, context.DeadlineExceeded):
+	case errors.Is(err, context.DeadlineExceeded):
 		return "reconnecting", false, true
 	}
 	return "", false, false
