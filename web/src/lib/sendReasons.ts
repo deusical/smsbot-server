@@ -52,6 +52,15 @@ const taskCodes: Record<string, string> = {
   task_inputs_unavailable: "The input file from the previous step isn't available",
   task_output_unavailable: "The worker didn't return a finished file",
   execution_expired: "The request ran out of time before it could finish",
+  budget_exceeded_or_unknown:
+    "Daily AI spending limit reached, or an earlier request's cost wasn't reported",
+  provider_empty_answer: "The AI model returned an empty answer",
+  provider_token_limit_empty:
+    "The AI model ran out of output tokens before writing an answer",
+  model_unavailable: "The selected AI model isn't in the model catalog",
+  provider_key_missing: "No API key is configured for the selected AI provider",
+  generation_unsupported:
+    "The selected AI model doesn't support these generation settings",
 };
 
 /** A job's result for display: the refusal in words when known, else its code. */

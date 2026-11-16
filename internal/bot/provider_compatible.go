@@ -186,6 +186,52 @@ func (p *OpenAICompatible) Generate(ctx context.Context, key string, plan store.
 	return result, nil
 }
 
+func (p *OpenAICompatible) ChatComplete(ctx context.Context, key string, req ChatRequest) (ChatResponse, error) {
+	body := map[string]any{
+		"model":      req.Model,
+		"messages":   req.Messages,
+		"max_tokens": req.MaxTokens,
+	}
+	if len(req.Tools) > 0 {
+		body["tools"] = req.Tools
+	}
+	if req.ToolChoice != "" {
+		body["tool_choice"] = req.ToolChoice
+	}
+	if req.Temperature != nil {
+		body["temperature"] = *req.Temperature
+	}
+	if req.ReasoningEffort != "" && req.ReasoningEffort != "default" {
+		if contains(req.ModelInfo.Parameters, "reasoning_effort") {
+			effort := req.ReasoningEffort
+			if effort == "off" {
+				effort = "none"
+			}
+			body["reasoning_effort"] = effort
+		} else {
+			reasoning := map[string]any{"exclude": true}
+			if req.ReasoningEffort == "off" {
+				reasoning["enabled"] = false
+			} else {
+				reasoning["effort"] = req.ReasoningEffort
+			}
+			body["reasoning"] = reasoning
+		}
+	}
+	b, err := p.request(ctx, "/chat/completions", key, body)
+	if err != nil {
+		return ChatResponse{}, err
+	}
+	resp, err := parseChatResponse(b)
+	if err != nil {
+		return ChatResponse{}, err
+	}
+	if resp.Model == "" {
+		resp.Model = req.Model
+	}
+	return resp, nil
+}
+
 func (p *OpenAICompatible) Models(ctx context.Context) ([]Model, error) {
 	b, err := p.request(ctx, "/models", p.key, nil)
 	if err != nil {

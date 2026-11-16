@@ -74,6 +74,8 @@ function validate(c: Configuration): string {
       return `${label}: names start with a lowercase letter and use a–z, 0–9, _ or - (24 max).`;
     if (names.has(command.name)) return `${label} is defined twice.`;
     names.add(command.name);
+    if ((command.description ?? "").length > 200)
+      return `${label}: description must be 200 characters or fewer.`;
     if (command.kind === "pipeline") {
       if (!command.pipeline?.steps.length)
         return `${label} needs at least a reply step.`;

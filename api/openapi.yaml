@@ -1774,6 +1774,11 @@ components:
         cost: &id004
           type: number
         requested_reasoning: *id002
+        used_tools:
+          type: array
+          description: Configured command names (such as !download) invoked as tools during an AI step. Command names only; never message content or arguments.
+          items:
+            type: string
         reason:
           type: string
           pattern: '^[a-z_]{1,40}$'
@@ -1885,6 +1890,9 @@ components:
               type: string
             memory:
               type: boolean
+            tools:
+              type: boolean
+              description: Expose other enabled commands allowed in the conversation as callable tools during AI generation. Defaults to true for the canonical ask command.
             generation:
               $ref: '#/components/schemas/Generation'
             preset: {type: string, enum: [veryfast, faster, fast, medium, slow], default: medium}
@@ -1913,7 +1921,10 @@ components:
         name:
           type: string
           pattern: ^[a-z][a-z0-9_-]{0,23}$
-        description: *id002
+        description:
+          type: string
+          maxLength: 200
+          description: Optional description of what the command does. Passed to AI steps with tools enabled so the model knows when to invoke it; when blank, a description is derived from the command's steps.
         instructions: *id002
         type:
           type: string
@@ -1938,6 +1949,9 @@ components:
           items: *id002
         generation:
           $ref: '#/components/schemas/Generation'
+        tools:
+          type: boolean
+          description: Legacy/template AI setting corresponding to settings.tools.
       required:
       - name
       - type
@@ -2022,6 +2036,11 @@ components:
         pipeline; later edits apply only to new requests. Invalid pipelines are
         rejected with 400 {error: invalid_pipeline, step, port, reason}.
       properties:
+        format:
+          type: integer
+          enum: [1]
+        trigger:
+          type: string
         execution_minutes:
           type: integer
           minimum: 0
@@ -2126,6 +2145,12 @@ components:
         size:
           type: integer
           minimum: 0
+        preview_only:
+          type: boolean
+        archive_state:
+          type: string
+        archive_error:
+          type: string
     AttachmentUpload:
       type: object
       additionalProperties: false

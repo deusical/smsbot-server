@@ -203,7 +203,7 @@ func TestCommandModulesAndPipelineErrors(t *testing.T) {
 	}
 	w := req(s, "POST", "/api/v1/command-pipeline", `{"name":"ask","type":"ai","memory":true,"instructions":"Hi"}`, "fixture-client", "")
 	var converted bot.Pipeline
-	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &converted) != nil || len(converted.Steps) != 4 || converted.Steps[1].Module != "context.thread" {
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &converted) != nil || len(converted.Steps) != 4 || converted.Steps[1].Module != "context.thread" || !strings.Contains(string(converted.Steps[2].Settings), `"tools":true`) {
 		t.Fatal("template steps unavailable", w.Code, w.Body.String())
 	}
 	if w = req(s, "POST", "/api/v1/command-pipeline", `{"name":"x","type":"shell"}`, "fixture-client", ""); w.Code != 400 {
@@ -224,5 +224,18 @@ func TestCommandModulesAndPipelineErrors(t *testing.T) {
 	var e map[string]string
 	if w.Code != 400 || json.Unmarshal(w.Body.Bytes(), &e) != nil || e["error"] != "invalid_pipeline" || e["step"] != "video" || e["port"] != "url" || e["reason"] == "" {
 		t.Fatal("pipeline error not explained", w.Code, w.Body.String())
+	}
+
+	c.Settings.DefaultModel = "fixture/model"
+	c.Commands = []bot.Command{
+		{Name: "ask", Type: "ai", Enabled: true, Memory: true, Instructions: "Assist"},
+		{Name: "hello", Type: "fixed", Enabled: true, Description: "打招呼命令", Instructions: "Hi {input}"},
+	}
+	raw, _ = json.Marshal(c)
+	if w = req(s, "PUT", "/api/v1/config", string(raw), "fixture-client", ""); w.Code != 200 {
+		t.Fatal("tool config rejected", w.Code, w.Body.String())
+	}
+	if w = req(s, "POST", "/api/v1/playground", `{"command":"ask","input":"hello"}`, "fixture-client", ""); w.Code != 200 {
+		t.Fatal("playground failed for tool-enabled ask", w.Code, w.Body.String())
 	}
 }

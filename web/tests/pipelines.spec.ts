@@ -247,3 +247,83 @@ test("converting an AI command to steps keeps its reply threads", async ({
     await page.request.put("/api/v1/config", { headers, data: current });
   }
 });
+
+test("assistant command enables tools out of the box and lists enabled commands", async ({
+  page,
+}) => {
+  await login(page);
+  const headers = { Origin: new URL(page.url()).origin };
+  const original = (await (
+    await page.request.get("/api/v1/config")
+  ).json()) as Configuration;
+  const hadAsk = original.commands.find((c) => c.name === "ask");
+  try {
+    const seeded = structuredClone(original);
+    seeded.settings.default_model = seeded.settings.default_model || "fixture/model";
+    seeded.commands = [
+      ...seeded.commands.filter(
+        (c) => c.name !== "ask" && c.name !== "hello_tool",
+      ),
+      {
+        name: "hello_tool",
+        description: "Send a friendly greeting",
+        instructions: "Hello {input}!",
+        type: "fixed",
+        enabled: true,
+        model: "",
+        profile_id: "",
+        memory: false,
+        approval: false,
+        allowed_conversations: [],
+      },
+    ];
+    expect(
+      (await page.request.put("/api/v1/config", { headers, data: seeded })).ok(),
+    ).toBe(true);
+
+    await page.getByRole("button", { name: "Commands", exact: true }).click();
+    await page.getByRole("button", { name: "New", exact: true }).click();
+    await page.getByRole("menuitem", { name: /AI assistant/ }).click();
+    await page.getByRole("switch", { name: "Enabled", exact: true }).click();
+    await page.getByRole("button", { name: "Save changes" }).click();
+    await expect(page.getByRole("status")).toContainText("Changes saved");
+
+    const answerStep = page.getByRole("listitem", { name: "Step 3: answer" });
+    await expect(answerStep).toContainText("tools on");
+    await answerStep.locator(".step-toggle").click();
+
+    const toolsSwitch = answerStep.getByRole("switch", {
+      name: "Use other commands as tools",
+    });
+    await expect(toolsSwitch).toBeChecked();
+    await expect(answerStep).toContainText("Can use !hello_tool");
+
+    // Toggling off and back on returns to the saved state cleanly.
+    await toolsSwitch.click();
+    await expect(toolsSwitch).not.toBeChecked();
+    await toolsSwitch.click();
+    await expect(toolsSwitch).toBeChecked();
+    await expect(
+      page.getByRole("region", { name: "Unsaved changes" }),
+    ).toHaveCount(0);
+
+    await page.getByLabel("Preview input").fill("say hi");
+    await page.getByRole("button", { name: "Preview", exact: true }).click();
+    await expect(
+      page
+        .getByRole("status")
+        .filter({ hasText: "Simulated AI response. No provider request was made." }),
+    ).toBeVisible();
+  } finally {
+    const current = (await (
+      await page.request.get("/api/v1/config")
+    ).json()) as Configuration;
+    current.commands = current.commands.filter(
+      (c) => c.name !== "ask" && c.name !== "hello_tool",
+    );
+    if (hadAsk) current.commands.unshift(hadAsk);
+    current.settings.default_model = original.settings.default_model;
+    await page.request.put("/api/v1/config", { headers, data: current });
+  }
+});
+

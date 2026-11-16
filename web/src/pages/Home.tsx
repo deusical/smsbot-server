@@ -1,4 +1,10 @@
-import type { Conversation, InboxSettings, Job, State } from "../lib/api";
+import type {
+  Conversation,
+  InboxSettings,
+  Job,
+  Pipeline,
+  State,
+} from "../lib/api";
 import { connectionSummary } from "../lib/connection";
 import { ActivityFeed } from "./Activity";
 import { Icon } from "../components/Icon";
@@ -23,7 +29,12 @@ export function Home({
   inbox: InboxSettings | null;
   jobs: Job[];
   conversations: Conversation[];
-  commands: { name: string; enabled: boolean; type: string }[];
+  commands: {
+    name: string;
+    enabled: boolean;
+    type: string;
+    pipeline?: Pipeline;
+  }[];
   busy: boolean;
   act: (fn: () => Promise<unknown>, refreshAfter?: boolean) => Promise<void>;
   onToggle: () => void;
@@ -210,11 +221,18 @@ export function Home({
                   !{n}
                 </code>
               ))}
-              {enabled.map((c) => (
-                <code key={c.name} className={"bang " + c.type}>
-                  !{c.name}
-                </code>
-              ))}
+              {enabled.map((c) => {
+                const kind = c.pipeline?.steps.some(
+                  (s) => s.module === "ai.chat",
+                )
+                  ? "ai"
+                  : c.type;
+                return (
+                  <code key={c.name} className={"bang " + kind}>
+                    !{c.name}
+                  </code>
+                );
+              })}
               {commands.length > enabled.length && (
                 <small className="muted">
                   {commands.length - enabled.length} off

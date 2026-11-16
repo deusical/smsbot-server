@@ -125,6 +125,7 @@ type aiSettings struct {
 	ProfileID    string      `json:"profile_id"`
 	Instructions string      `json:"instructions"`
 	Generation   *Generation `json:"generation,omitempty"`
+	Tools        *bool       `json:"tools,omitempty"`
 }
 
 // aiState is what an AI step fixed at acceptance.
@@ -137,6 +138,8 @@ type aiState struct {
 	File         *store.FileRef  `json:"file,omitempty"`
 	History      []store.Turn    `json:"history,omitempty"`
 	Conversation string          `json:"conversation"`
+	Tools        []toolSnapshot  `json:"tools,omitempty"`
+	Agent        *agentState     `json:"agent,omitempty"`
 }
 
 // resolveAI picks the model, instructions and generation settings the way a
@@ -192,7 +195,7 @@ func aiChatModule() module {
 	}
 	return module{
 		Definition: ModuleDefinition{
-			ID: "ai.chat", Version: 1, Title: "AI answer", Description: "Asks the AI model, optionally continuing a conversation.",
+			ID: "ai.chat", Version: 2, Title: "AI answer", Description: "Asks the AI model, optionally continuing a conversation.",
 			Inputs: []Port{
 				{Name: "prompt", Title: "Prompt", Types: []string{typeText}, Required: true},
 				{Name: "file", Title: "File", Types: []string{typeFile}},
@@ -207,6 +210,7 @@ func aiChatModule() module {
 				"instructions": {Type: "string", Title: "Instructions", UI: "multiline", Default: "", Maximum: bound(12000)},
 				"model":        {Type: "string", Title: "Model", UI: "model", Default: "", Maximum: bound(200)},
 				"profile_id":   {Type: "string", Title: "Profile", UI: "profile", Default: "", Maximum: bound(80)},
+				"tools":        {Type: "boolean", Title: "Use other commands as tools", UI: "tools", Default: false},
 				"generation": {Type: "object", Title: "Generation", UI: "generation", Properties: map[string]SettingsSchema{
 					"reasoning":     {Type: "string", Title: "Reasoning", Default: "default", Enum: []string{"default", "off", "minimal", "low", "medium", "high", "xhigh", "max"}},
 					"answer_length": {Type: "string", Title: "Answer length", Default: "short", Enum: []string{"short", "standard", "detailed"}},
@@ -232,6 +236,9 @@ func aiChatModule() module {
 					return nil, err
 				}
 			}
+			if set.Tools != nil && !*set.Tools {
+				set.Tools = nil
+			}
 			return json.Marshal(set)
 		},
 		Admit: func(a *runCtx, s *cmdflow.Step) (bool, error) {
@@ -246,6 +253,11 @@ func aiChatModule() module {
 			}
 			st := aiState{Model: model, Instructions: instructions, Conversation: "none"}
 			st.Generation, _ = json.Marshal(g)
+			var set aiSettings
+			_ = s.Decode(&set)
+			if set.Tools != nil && *set.Tools {
+				st.Tools = snapshotCommandTools(e, *a.cfg, a.cmd.Name, a.m.ConversationID)
+			}
 			if v, ok := s.In("context"); ok {
 				st.Conversation = valueContext(v)
 			}
@@ -290,7 +302,7 @@ func aiChatModule() module {
 				st.History = history
 				st.Instructions += note
 			}
-			if p.Shared && turnStep(s.Steps()) == s.ID {
+			if !a.subTool && p.Shared && turnStep(s.Steps()) == s.ID {
 				// One conversation among several people: each question says who
 				// asked it. Other AI steps (translating, extracting) don't need it.
 				st.Input = askerLabel(*p) + ": " + st.Input
@@ -313,7 +325,7 @@ func aiChatModule() module {
 				if f, ok := s.In("file"); ok {
 					st.File = valueFile(f)
 				}
-				if r.p.Shared && turnStep(s.Steps()) == s.ID {
+				if !r.subTool && r.p.Shared && turnStep(s.Steps()) == s.ID {
 					st.Input = askerLabel(*r.p) + ": " + st.Input
 					st.Instructions += "\nThis conversation is shared by a group chat. Each question starts with who asked it; answer the one who asked."
 				}
@@ -336,13 +348,18 @@ func aiChatModule() module {
 				}
 			}
 			call := aiCall{Step: s.ID, Model: st.Model, Instructions: st.Instructions, Generation: st.Generation, Input: st.Input, File: st.File}
-			// The answer is recorded in the step before the plan is saved, so
-			// approval asked for after generating never regenerates it.
-			return yielded(e.generateReply(r.ctx, r.j, r.p, r.cfg, call, history, func(text string) {
+			commit := func(text string) {
 				s.Out("text", textValue(text))
 				s.Out("context", contextValue(st.Conversation))
 				s.Status = cmdflow.StatusDone
-			}))
+			}
+			if r.subTool {
+				return e.runSubToolAI(r, st, commit)
+			}
+			if len(st.Tools) > 0 {
+				return yielded(e.runAgentStep(r.ctx, r.j, r.p, r.cfg, s, &st, history, commit))
+			}
+			return yielded(e.generateReply(r.ctx, r.j, r.p, r.cfg, call, history, commit))
 		},
 		Simulate: func(c *runCtx, s *cmdflow.Step) (cmdflow.Outcome, error) {
 			sim := c.sim
@@ -363,6 +380,34 @@ func aiChatModule() module {
 			s.Out("context", contextValue(kind))
 			return cmdflow.Done(), nil
 		},
+	}
+}
+
+func upgradeAIChatSteps(p *Pipeline) {
+	threads := map[string]bool{}
+	for _, s := range p.Steps {
+		if s.Module == "context.thread" {
+			threads[s.ID] = true
+		}
+	}
+	for i := range p.Steps {
+		s := &p.Steps[i]
+		if s.Module != "ai.chat" || s.Version != 1 {
+			continue
+		}
+		s.Version = 2
+		from, _, _ := strings.Cut(s.Inputs["context"], ".")
+		if !threads[from] {
+			continue
+		}
+		var set aiSettings
+		if len(s.Settings) > 0 && json.Unmarshal(s.Settings, &set) != nil {
+			continue
+		}
+		if set.Tools == nil {
+			set.Tools = boolPtr(true)
+			s.Settings, _ = json.Marshal(set)
+		}
 	}
 }
 

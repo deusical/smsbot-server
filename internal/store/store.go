@@ -50,6 +50,7 @@ type Job struct {
 	ReasoningTokens    int      `json:"reasoning_tokens,omitempty"`
 	Cost               *float64 `json:"cost,omitempty"`
 	RequestedReasoning string   `json:"requested_reasoning,omitempty"`
+	UsedTools          []string `json:"used_tools,omitempty"`
 	// Reason is the transport's fixed code for a definite non-submission,
 	// such as "sim_missing", for requests finished since reasons were kept.
 	Reason string `json:"reason,omitempty"`
@@ -63,6 +64,12 @@ type Plan struct {
 	// ExecutionDeadline bounds a long-running job from acceptance to send; a job
 	// without one must send within two minutes of its message.
 	ExecutionDeadline string `json:"execution_deadline,omitempty"`
+	// ApprovalDeadline bounds post-generation approval when a job finishes work
+	// and enters awaiting_approval.
+	ApprovalDeadline string `json:"approval_deadline,omitempty"`
+	// UsedTools tracks configured command names invoked as tools so pre-send
+	// checks re-verify them against live configuration.
+	UsedTools []string `json:"used_tools,omitempty"`
 	// FilesUploaded marks the reply's files as uploaded by the background lane.
 	FilesUploaded bool          `json:"download_uploaded,omitempty"`
 	Thread        *AIThreadPlan `json:"thread,omitempty"`
@@ -530,7 +537,7 @@ func (s *Store) Recover() error {
 	return e
 }
 func (s *Store) Jobs() ([]Job, error) {
-	rows, e := s.DB.Query("SELECT j.id,j.conversation,j.command,j.state,j.created,j.txn,j.code,coalesce(u.model,''),coalesce(u.prompt_tokens,0),coalesce(u.completion_tokens,0),coalesce(u.reasoning_tokens,0),u.cost,coalesce((SELECT json_extract(value,'$') FROM settings WHERE key='requested_reasoning:'||j.id),'') ,coalesce(w.stage,''),coalesce((SELECT json_extract(value,'$') FROM settings WHERE key='send_reason:'||j.id),'') FROM jobs j LEFT JOIN usage u ON u.job=j.id LEFT JOIN job_work w ON w.job=j.id ORDER BY j.created DESC LIMIT 200")
+	rows, e := s.DB.Query("SELECT j.id,j.conversation,j.command,j.state,j.created,j.txn,j.code,coalesce(u.model,''),coalesce(u.prompt_tokens,0),coalesce(u.completion_tokens,0),coalesce(u.reasoning_tokens,0),u.cost,coalesce((SELECT json_extract(value,'$') FROM settings WHERE key='requested_reasoning:'||j.id),'') ,coalesce(w.stage,''),coalesce((SELECT json_extract(value,'$') FROM settings WHERE key='send_reason:'||j.id),''),coalesce((SELECT value FROM settings WHERE key='used_tools:'||j.id),'') FROM jobs j LEFT JOIN usage u ON u.job=j.id LEFT JOIN job_work w ON w.job=j.id ORDER BY j.created DESC LIMIT 200")
 	if e != nil {
 		return nil, e
 	}
@@ -538,8 +545,12 @@ func (s *Store) Jobs() ([]Job, error) {
 	list := []Job{}
 	for rows.Next() {
 		var j Job
-		if e = rows.Scan(&j.ID, &j.ConversationID, &j.Command, &j.State, &j.CreatedAt, &j.TransactionID, &j.Code, &j.Model, &j.PromptTokens, &j.CompletionTokens, &j.ReasoningTokens, &j.Cost, &j.RequestedReasoning, &j.PreparationStage, &j.Reason); e != nil {
+		var rawTools string
+		if e = rows.Scan(&j.ID, &j.ConversationID, &j.Command, &j.State, &j.CreatedAt, &j.TransactionID, &j.Code, &j.Model, &j.PromptTokens, &j.CompletionTokens, &j.ReasoningTokens, &j.Cost, &j.RequestedReasoning, &j.PreparationStage, &j.Reason, &rawTools); e != nil {
 			return nil, e
+		}
+		if rawTools != "" {
+			_ = json.Unmarshal([]byte(rawTools), &j.UsedTools)
 		}
 		list = append(list, j)
 	}

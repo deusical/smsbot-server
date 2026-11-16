@@ -112,7 +112,7 @@ type Provider interface {
 type SimulatedProvider struct{}
 
 func (SimulatedProvider) Models(context.Context) ([]Model, error) {
-	return []Model{{ID: "fixture/model", Name: "Synthetic model", Parameters: []string{"temperature", "reasoning"}, HasReasoning: true, ReasoningEfforts: nil, PricingKnown: true}}, nil
+	return []Model{{ID: "fixture/model", Name: "Synthetic model", Parameters: []string{"temperature", "reasoning", "tools"}, HasReasoning: true, ReasoningEfforts: nil, PricingKnown: true}}, nil
 }
 func (SimulatedProvider) Generate(ctx context.Context, key string, p store.Plan, h []store.Turn, m Model, image *Attachment) (Result, error) {
 	if err := ctx.Err(); err != nil {
@@ -274,6 +274,45 @@ func (p *OpenRouter) Generate(ctx context.Context, key string, plan store.Plan, 
 	}
 	return result, nil
 }
+func (p *OpenRouter) ChatComplete(ctx context.Context, key string, req ChatRequest) (ChatResponse, error) {
+	body := map[string]any{
+		"model":      req.Model,
+		"messages":   req.Messages,
+		"max_tokens": req.MaxTokens,
+		"provider":   map[string]any{"require_parameters": true},
+	}
+	if len(req.Tools) > 0 {
+		body["tools"] = req.Tools
+	}
+	if req.ToolChoice != "" {
+		body["tool_choice"] = req.ToolChoice
+	}
+	if req.Temperature != nil {
+		body["temperature"] = *req.Temperature
+	}
+	if req.ReasoningEffort != "" && req.ReasoningEffort != "default" {
+		r := map[string]any{"exclude": true}
+		if req.ReasoningEffort == "off" {
+			r["enabled"] = false
+		} else {
+			r["effort"] = req.ReasoningEffort
+		}
+		body["reasoning"] = r
+	}
+	b, err := p.request(ctx, "/chat/completions", key, body)
+	if err != nil {
+		return ChatResponse{}, err
+	}
+	resp, err := parseChatResponse(b)
+	if err != nil {
+		return ChatResponse{}, err
+	}
+	if resp.Model == "" {
+		resp.Model = req.Model
+	}
+	return resp, nil
+}
+
 func (p *OpenRouter) Models(ctx context.Context) ([]Model, error) {
 	b, err := p.request(ctx, "/models", "", nil)
 	if err != nil {

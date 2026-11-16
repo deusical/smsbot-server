@@ -200,6 +200,7 @@ const question = (require: boolean): PipelineStep => ({
 const answer = (
   instructions: string,
   context: string | null,
+  tools?: boolean,
 ): PipelineStep => ({
   id: "answer",
   module: "ai.chat",
@@ -208,7 +209,7 @@ const answer = (
     file: "question.file",
     ...(context ? { context: context + ".context" } : {}),
   },
-  settings: { instructions },
+  settings: tools ? { instructions, tools: true } : { instructions },
 });
 
 /** Starting points for new commands; each is ordinary steps. */
@@ -228,7 +229,7 @@ export const starters = {
     steps: [
       question(true),
       { id: "conversation", module: "context.thread" },
-      answer(instructions, "conversation"),
+      answer(instructions, "conversation", true),
       {
         id: "reply",
         module: "reply",

@@ -121,7 +121,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if s.Fixture && r.URL.Path == "/api/v1/fixture/incoming" {
 		limit = math.MaxInt64
 	}
-	if r.URL.Path == "/api/v1/inbox/settings" {
+	if r.URL.Path == "/api/v1/inbox/settings" || r.URL.Path == "/api/v1/command-pipeline" || r.URL.Path == "/api/v1/playground" {
 		limit = 256 * 1024
 	}
 	if r.URL.Path == "/api/v1/config" || r.URL.Path == "/api/v1/recipes/import" {

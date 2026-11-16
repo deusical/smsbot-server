@@ -88,10 +88,15 @@ type backupUsage struct {
 }
 
 func safeBackupSetting(key string) bool {
-	return key == "paused" || key == "retention_days" || key == "bot_config" || key == "model_catalog" || reasoningSetting.MatchString(key)
+	return key == "paused" || key == "retention_days" || key == "bot_config" || key == "model_catalog" || reasoningSetting.MatchString(key) || usedToolsSetting.MatchString(key) || sendReasonSetting.MatchString(key)
 }
 
-var reasoningSetting = regexp.MustCompile(`^requested_reasoning:[a-f0-9]{64}$`)
+var (
+	reasoningSetting  = regexp.MustCompile(`^requested_reasoning:[a-f0-9]{64}$`)
+	usedToolsSetting  = regexp.MustCompile(`^used_tools:[a-f0-9]{64}$`)
+	sendReasonSetting = regexp.MustCompile(`^send_reason:[a-f0-9]{64}$`)
+	toolNamePattern   = regexp.MustCompile(`^![a-z][a-z0-9_-]{0,23}$`)
+)
 
 // ExportBackup returns authenticated ciphertext, readable only with this vault's
 // key. Credentials, provider keys, browser sessions and Google pairing are absent.
@@ -106,7 +111,7 @@ func (s *Store) ExportBackup() ([]byte, error) {
 	if e = tx.QueryRow("PRAGMA user_version").Scan(&b.Schema); e != nil {
 		return nil, e
 	}
-	rows, e := tx.Query("SELECT key,value FROM settings WHERE key IN ('paused','retention_days','bot_config','model_catalog') OR key LIKE 'requested_reasoning:%'")
+	rows, e := tx.Query("SELECT key,value FROM settings WHERE key IN ('paused','retention_days','bot_config','model_catalog') OR key LIKE 'requested_reasoning:%' OR key LIKE 'used_tools:%' OR key LIKE 'send_reason:%'")
 	if e != nil {
 		return nil, e
 	}
@@ -412,6 +417,23 @@ func (s *Store) RestoreBackup(data []byte) error {
 			var effort string
 			if json.Unmarshal([]byte(v), &effort) != nil || !strings.Contains("|default|off|minimal|low|medium|high|xhigh|max|", "|"+effort+"|") {
 				return errors.New("invalid requested reasoning metadata")
+			}
+		}
+		if usedToolsSetting.MatchString(k) {
+			var tools []string
+			if json.Unmarshal([]byte(v), &tools) != nil || len(tools) > 100 {
+				return errors.New("invalid used tools metadata")
+			}
+			for _, name := range tools {
+				if !toolNamePattern.MatchString(name) {
+					return errors.New("invalid used tools metadata")
+				}
+			}
+		}
+		if sendReasonSetting.MatchString(k) {
+			var reason string
+			if json.Unmarshal([]byte(v), &reason) != nil || !reasonCode.MatchString(reason) {
+				return errors.New("invalid send reason metadata")
 			}
 		}
 		if k == "bot_config" {

@@ -124,6 +124,19 @@ func (s *Store) Retention(days int) (int64, error) {
 	if _, e = tx.Exec("UPDATE jobs SET plan='' WHERE plan!='' AND julianday(created)<julianday(?) AND state NOT IN ('queued','generating','processing','awaiting_approval','submitting')", cutoff); e != nil {
 		return 0, e
 	}
+	prunedJobs := "SELECT id FROM jobs WHERE julianday(created)<julianday(?) AND state NOT IN ('queued','generating','processing','awaiting_approval','submitting') AND id NOT IN (SELECT id FROM jobs ORDER BY created DESC LIMIT 200)"
+	if _, e = tx.Exec("DELETE FROM job_work WHERE job IN ("+prunedJobs+") AND (cancel_sent!=0 OR stage IN ('','complete','receiving','waiting_upload','uploading','ready','failed','expired','cancelled'))", cutoff); e != nil {
+		return 0, e
+	}
+	if _, e = tx.Exec("DELETE FROM job_steps WHERE job IN ("+prunedJobs+")", cutoff); e != nil {
+		return 0, e
+	}
+	if _, e = tx.Exec("DELETE FROM usage_steps WHERE job IN ("+prunedJobs+")", cutoff); e != nil {
+		return 0, e
+	}
+	if _, e = tx.Exec("DELETE FROM settings WHERE (key LIKE 'used_tools:%' OR key LIKE 'requested_reasoning:%' OR key LIKE 'send_reason:%') AND substr(key, instr(key, ':')+1) IN ("+prunedJobs+")", cutoff); e != nil {
+		return 0, e
+	}
 	if _, e = tx.Exec("DELETE FROM memory WHERE julianday(expires)<=julianday('now')"); e != nil {
 		return 0, e
 	}

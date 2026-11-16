@@ -295,7 +295,12 @@ func (e *Engine) Approve(id string) error {
 		return errors.New("approval_unavailable")
 	}
 	at, err := time.Parse(time.RFC3339Nano, j.CreatedAt)
-	if err != nil || e.now().Sub(at) > 2*time.Minute {
+	expired := err != nil || e.now().Sub(at) > 2*time.Minute
+	if err == nil && p.ApprovalDeadline != "" {
+		deadline, derr := time.Parse(time.RFC3339Nano, p.ApprovalDeadline)
+		expired = derr != nil || !e.now().Before(deadline)
+	}
+	if expired {
 		e.Store.Complete(id, "expired", "approval_expired")
 		return errors.New("approval_expired")
 	}
@@ -851,7 +856,16 @@ func (e *Engine) check(ctx context.Context, j store.Job, p store.Plan, mode look
 		if !ok || !allowed(cmd, j.ConversationID) {
 			return cfg, "command_unavailable", nil
 		}
-		if cmd.Approval && !p.Approved {
+		for _, used := range p.UsedTools {
+			tcmd, _, _, _, tok := resolve(cfg, strings.TrimPrefix(used, "!"))
+			if !tok || !allowed(tcmd, j.ConversationID) {
+				return cfg, "command_unavailable", nil
+			}
+			if tcmd.Approval && !p.Approved && !agentInProgress(p) {
+				return cfg, "approval_required", nil
+			}
+		}
+		if (cmd.Approval || p.Approval) && !p.Approved {
 			return cfg, "approval_required", nil
 		}
 	}
@@ -874,6 +888,12 @@ func pollsWorker(p store.Plan) bool {
 		}
 		if m.Immediate {
 			continue
+		}
+		if s.Module == "ai.chat" && len(s.State) > 0 {
+			var st aiState
+			if json.Unmarshal(s.State, &st) == nil && st.Agent != nil && st.Agent.SubRun != nil {
+				return pollsWorker(store.Plan{Pipeline: st.Agent.SubRun})
+			}
 		}
 		return m.RetryClass == "idempotent-poll"
 	}
@@ -1107,9 +1127,14 @@ func (e *Engine) generateReply(ctx context.Context, j store.Job, p *store.Plan, 
 		if code == "approval_required" {
 			p.Approval = true
 			p.Approved = false
+			p.ApprovalDeadline = e.approvalWindow(*p)
 			_, err = e.Store.Transition(j.ID, "generating", "awaiting_approval")
 		} else {
-			err = e.Store.Complete(j.ID, "cancelled", code)
+			state := "cancelled"
+			if code == "stale" || code == "execution_expired" {
+				state = "expired"
+			}
+			err = e.Store.Complete(j.ID, state, code)
 		}
 		return true, err
 	}
@@ -1228,7 +1253,7 @@ func (e *Engine) submit(ctx context.Context, j store.Job, p store.Plan, cfg Conf
 	if p.Thread != nil && p.Thread.ReplyWire != "" {
 		if sender, ok := e.Transport.(transport.ReplySender); ok {
 			threadReply = true
-			receipt, senderr = sender.SendReply(sendctx, j.ConversationID, txn, p.Reply, p.Thread.ReplyWire, nil)
+			receipt, senderr = sender.SendReply(sendctx, j.ConversationID, txn, p.Reply, p.Thread.ReplyWire, p.Attachments)
 		} else {
 			senderr = transport.ErrNotSubmitted
 		}
@@ -1238,7 +1263,13 @@ func (e *Engine) submit(ctx context.Context, j store.Job, p store.Plan, cfg Conf
 		// the same persisted outbound intent and transaction.
 		if errors.Is(senderr, transport.ErrNotSubmitted) {
 			threadReply = false
-			receipt, senderr = e.Transport.Send(sendctx, j.ConversationID, txn, p.Reply)
+			if len(p.Attachments) > 0 {
+				if sender, ok := e.Transport.(transport.FileSender); ok {
+					receipt, senderr = sender.SendFiles(sendctx, j.ConversationID, txn, p.Reply, p.Attachments)
+				}
+			} else {
+				receipt, senderr = e.Transport.Send(sendctx, j.ConversationID, txn, p.Reply)
+			}
 		}
 	} else if p.ReplyTarget != "" {
 		if sender, ok := e.Transport.(transport.ReplySender); ok {
@@ -1364,9 +1395,18 @@ func (e *Engine) Playground(name, input string) (map[string]any, error) {
 		return map[string]any{"text": "Paired replies are sent in full, subject to the character limit.", "model": "Local", "simulated": true}, nil
 	}
 	// Preview a copy only. Imported/disabled commands stay disabled on disk.
+	hasExact := false
 	for i := range cfg.Commands {
 		if cfg.Commands[i].Name == name {
 			cfg.Commands[i].Enabled = true
+			hasExact = true
+		}
+	}
+	if !hasExact && (name == "a" || name == "deepseek") {
+		for i := range cfg.Commands {
+			if cfg.Commands[i].Name == "ask" {
+				cfg.Commands[i].Enabled = true
+			}
 		}
 	}
 	cmd, model, _, _, ok := resolve(cfg, name)
