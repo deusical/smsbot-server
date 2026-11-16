@@ -773,3 +773,151 @@ func TestViewedOriginalPriorityKeepsBackgroundProgress(t *testing.T) {
 		t.Fatal("focus starved background originals", host.openedIDs)
 	}
 }
+
+func TestCollectRunsHourlyOrAfterMessageDeletionAndKeepsReferencedBlobs(t *testing.T) {
+	t.Parallel()
+	s, manager := setup(t)
+	now := time.Now()
+	manager.Now = func() time.Time { return now }
+
+	keepFile := media.File{Info: media.Info{ID: "keep", Size: 8}, RemoteID: "keep-source"}
+	seed(t, s, []media.File{keepFile})
+
+	expiringConv := transport.Conversation{ID: "expiring", ParticipantID: "expiring-peer", Writable: true}
+	if err := s.SaveArchive(store.Archive{Conversation: expiringConv, Generation: 1, State: "running"}, 1); err != nil {
+		t.Fatal(err)
+	}
+	expireFile := media.File{Info: media.Info{ID: "expire", Size: 8}, RemoteID: "expire-source"}
+	if err := s.SaveObservedFiles(expiringConv.ID, "old-msg", "", "incoming", "", "phone", "", now.Add(-48*time.Hour), []media.File{expireFile}); err != nil {
+		t.Fatal(err)
+	}
+
+	manager.Host = &fileHost{s: s, data: []byte("original")}
+	manager.Tick(context.Background())
+	manager.Tick(context.Background())
+
+	kept, err := s.Attachment("chat", store.Hash("chat\x00message"), "keep")
+	if err != nil || kept.BlobID == "" {
+		t.Fatal("kept original not saved", err)
+	}
+	expiring, err := s.Attachment(expiringConv.ID, store.Hash(expiringConv.ID+"\x00old-msg"), "expire")
+	if err != nil || expiring.BlobID == "" {
+		t.Fatal("expiring original not saved", err)
+	}
+
+	orphan, _ := manager.blobPath(store.ID())
+	if err := os.WriteFile(orphan, []byte("orphan"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Ticks at 2m, 15m, and 59m must skip Collect while no deletions happened.
+	for _, d := range []time.Duration{2 * time.Minute, 15 * time.Minute, 59 * time.Minute} {
+		now = time.Now().Add(d)
+		manager.Tick(context.Background())
+		if _, err := os.Stat(orphan); err != nil {
+			t.Fatalf("Collect ran before hourly interval at %v: %v", d, err)
+		}
+	}
+
+	// Hourly tick removes unreferenced orphan while keeping both referenced blobs.
+	now = time.Now().Add(61 * time.Minute)
+	manager.Tick(context.Background())
+	if _, err := os.Stat(orphan); !os.IsNotExist(err) {
+		t.Fatalf("hourly Collect did not remove orphan: %v", err)
+	}
+	keepPath, _ := manager.blobPath(kept.BlobID)
+	expirePath, _ := manager.blobPath(expiring.BlobID)
+	if _, err := os.Stat(keepPath); err != nil {
+		t.Fatal("referenced blob deleted", err)
+	}
+	if _, err := os.Stat(expirePath); err != nil {
+		t.Fatal("referenced expiring blob deleted before retention", err)
+	}
+
+	// Deleting messages via retention triggers Collect on the next 3s tick.
+	if err := s.ArchiveRetention(); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(3 * time.Second)
+	manager.Tick(context.Background())
+	if _, err := os.Stat(expirePath); !os.IsNotExist(err) {
+		t.Fatalf("post-retention tick did not collect newly orphaned blob: %v", err)
+	}
+	local, err := manager.OpenLocal(kept)
+	if err != nil {
+		t.Fatal("referenced blob unreadable after post-retention Collect", err)
+	}
+	local.Close()
+}
+
+func TestFocusBatchSkipsFullArchiveDecryptWhenUnfocused(t *testing.T) {
+	t.Parallel()
+	s, manager := setup(t)
+	now := time.Now()
+	manager.Now = func() time.Time { return now }
+	seed(t, s, nil)
+	canary := transport.Conversation{ID: "canary", ParticipantID: "canary-peer", Writable: true}
+	if err := s.SaveArchive(store.Archive{Conversation: canary, Generation: 1, State: "running"}, 0); err != nil {
+		t.Fatal(err)
+	}
+
+	// First focusBatch seeds once from disk when nothing is focused.
+	if rows, err := manager.focusBatch(context.Background()); err != nil || len(rows) != 0 {
+		t.Fatalf("initial focusBatch: rows=%d err=%v", len(rows), err)
+	}
+
+	// Corrupting an unrelated archive row proves subsequent unfocused ticks do
+	// not call Store.Archives() (which decrypts every row and errors on corruption).
+	var validPayload string
+	if err := s.DB.QueryRow("SELECT payload FROM archive_conversations WHERE conversation='canary'").Scan(&validPayload); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DB.Exec("UPDATE archive_conversations SET payload='not-sealed' WHERE conversation='canary'"); err != nil {
+		t.Fatal(err)
+	}
+	for range 6 {
+		if rows, err := manager.focusBatch(context.Background()); err != nil || len(rows) != 0 {
+			t.Fatalf("idle focusBatch decrypted all archives: rows=%d err=%v", len(rows), err)
+		}
+	}
+
+	// Restore valid ciphertext, focus a viewed conversation, and verify it runs.
+	if _, err := s.DB.Exec("UPDATE archive_conversations SET payload=? WHERE conversation='canary'", validPayload); err != nil {
+		t.Fatal(err)
+	}
+	viewed := transport.Conversation{ID: "viewed", ParticipantID: "viewed-peer", Writable: true}
+	if err := s.SaveArchive(store.Archive{
+		Conversation: viewed,
+		Generation:   1,
+		State:        "running",
+		RefreshSince: now.Add(-time.Hour).UTC().Format(time.RFC3339Nano),
+		RefreshUntil: now.Add(time.Minute).UTC().Format(time.RFC3339Nano),
+		FocusAt:      now.UTC().Format(time.RFC3339Nano),
+	}, 0); err != nil {
+		t.Fatal(err)
+	}
+	f := media.File{Info: media.Info{ID: "vf", Size: 8}, RemoteID: "viewed-remote"}
+	if err := s.SaveObservedFiles(viewed.ID, "vmsg", "", "incoming", "", "phone", "", now, []media.File{f}); err != nil {
+		t.Fatal(err)
+	}
+	manager.NoteFocus(viewed.ID, now)
+	// Ensure focusRound is not on the 3rd-turn skip.
+	if (manager.focusRound+1)%3 == 0 {
+		_, _ = manager.focusBatch(context.Background())
+	}
+	rows, err := manager.focusBatch(context.Background())
+	if err != nil || len(rows) != 1 || rows[0].Conversation != viewed.ID {
+		t.Fatalf("focused focusBatch did not return viewed batch: rows=%+v err=%v", rows, err)
+	}
+
+	// Once the 2-minute focus window expires, full decrypts stop again.
+	now = now.Add(2*time.Minute + time.Second)
+	if _, err := s.DB.Exec("UPDATE archive_conversations SET payload='not-sealed' WHERE conversation='canary'"); err != nil {
+		t.Fatal(err)
+	}
+	for range 6 {
+		if rows, err := manager.focusBatch(context.Background()); err != nil || len(rows) != 0 {
+			t.Fatalf("expired focusBatch still decrypted all archives: rows=%d err=%v", len(rows), err)
+		}
+	}
+}

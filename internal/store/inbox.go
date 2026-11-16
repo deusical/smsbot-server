@@ -114,11 +114,14 @@ func (s *Store) Retention(days int) (int64, error) {
 		return 0, e
 	}
 	defer tx.Rollback()
+	// Keep julianday(...) comparisons: jobs.created and memory.expires mix
+	// variable-precision RFC3339Nano with fixed 9-digit UTC backups, and archive
+	// restores accept any RFC3339Nano messages.at without normalizing width/zone.
 	result, e := tx.Exec("DELETE FROM messages WHERE julianday(at)<julianday(?) AND conversation NOT IN (SELECT conversation FROM archive_conversations UNION SELECT conversation FROM archive_pending)", cutoff)
 	if e != nil {
 		return 0, e
 	}
-	if _, e = tx.Exec("UPDATE jobs SET plan='' WHERE julianday(created)<julianday(?) AND state NOT IN ('queued','generating','processing','awaiting_approval','submitting')", cutoff); e != nil {
+	if _, e = tx.Exec("UPDATE jobs SET plan='' WHERE plan!='' AND julianday(created)<julianday(?) AND state NOT IN ('queued','generating','processing','awaiting_approval','submitting')", cutoff); e != nil {
 		return 0, e
 	}
 	if _, e = tx.Exec("DELETE FROM memory WHERE julianday(expires)<=julianday('now')"); e != nil {
@@ -128,5 +131,11 @@ func (s *Store) Retention(days int) (int64, error) {
 	if e != nil {
 		return 0, e
 	}
-	return n, tx.Commit()
+	if e = tx.Commit(); e != nil {
+		return 0, e
+	}
+	if n > 0 {
+		s.noteMessageDeletion()
+	}
+	return n, nil
 }

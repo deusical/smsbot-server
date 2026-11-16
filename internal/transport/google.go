@@ -1,7 +1,9 @@
 package transport
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"io"
@@ -26,6 +28,7 @@ type Google struct {
 	recoveryWake     chan struct{}
 	recoveryProbe    func(context.Context) error // offline fault injection; nil in production
 	recoveryInterval time.Duration               // zero means 1s; tests only
+	saveInterval     time.Duration               // zero means 30s; tests only
 	connected        func() bool                 // offline fault injection; nil in production
 	fullMedia        fullMediaRequests
 	client           *libgm.Client
@@ -45,6 +48,8 @@ type Google struct {
 	overflowWake     chan struct{}
 	started          time.Time
 	saveMu           sync.Mutex
+	savedDigest      [32]byte
+	hasSavedDigest   bool
 	Diagnostic       func(AuthDiagnostic)
 	SendLog          func(SendDiagnostic)
 	// RequestLog, when set, receives every request the adapter sends to the phone.
@@ -144,10 +149,14 @@ func (g *Google) Save() error {
 	}
 	a := g.client.AuthData
 	a.CookiesLock.RLock()
-	defer a.CookiesLock.RUnlock()
 	b, e := json.Marshal(a)
+	a.CookiesLock.RUnlock()
 	if e != nil {
 		return errors.New("cannot serialize session")
+	}
+	sum := sha256.Sum256(b)
+	if g.hasSavedDigest && sum == g.savedDigest {
+		return nil
 	}
 	encoded, e := g.vault.Seal("google-session", b)
 	if e != nil {
@@ -156,7 +165,12 @@ func (g *Google) Save() error {
 	if e = os.WriteFile(g.path+".tmp", []byte(encoded), 0600); e != nil {
 		return errors.New("cannot save session")
 	}
-	return os.Rename(g.path+".tmp", g.path)
+	if e = os.Rename(g.path+".tmp", g.path); e != nil {
+		return e
+	}
+	g.savedDigest = sum
+	g.hasSavedDigest = true
+	return nil
 }
 func (g *Google) Connect(ctx context.Context) error {
 	ctx = WithPhonePurpose(ctx, "readiness")
@@ -175,6 +189,12 @@ func (g *Google) Connect(ctx context.Context) error {
 	// Earlier versions cached conversation details here; nothing reads them now.
 	_ = os.Remove(g.path + ".hints")
 	g.attach(&auth)
+	if initial, err := json.Marshal(&auth); err == nil && bytes.Equal(initial, b) {
+		g.saveMu.Lock()
+		g.savedDigest = sha256.Sum256(initial)
+		g.hasSavedDigest = true
+		g.saveMu.Unlock()
+	}
 	g.started = time.Now()
 	deadline, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()

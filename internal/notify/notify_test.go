@@ -300,3 +300,63 @@ func TestAlertsNameAnUnknownConversationPlainly(t *testing.T) {
 		t.Fatalf("sent %v", *out)
 	}
 }
+
+func TestZeroSubscriptionsSkipsWorkAndKeepsCursorCurrent(t *testing.T) {
+	t.Parallel()
+	n, _, out, now := setup(t)
+	ctx := context.Background()
+
+	if err := n.Tick(ctx); err != nil {
+		t.Fatal(err)
+	}
+	incoming(t, n.Store, "old-msg-1", "chat-a", "Old while unsubscribed", *now)
+	incoming(t, n.Store, "old-msg-2", "chat-a", "Second old while unsubscribed", *now)
+	if _, err := n.Store.DB.Exec("INSERT INTO jobs VALUES('old-fail','chat-a','!ask','failed','2026-01-01T00:00:00Z','','err','')"); err != nil {
+		t.Fatal(err)
+	}
+	if err := n.Tick(ctx); err != nil {
+		t.Fatal(err)
+	}
+	latest, err := n.Store.LatestMessageChange()
+	if err != nil || latest == 0 || n.cursor != latest {
+		t.Fatalf("cursor not kept current without subscribers: cursor=%d latest=%d err=%v", n.cursor, latest, err)
+	}
+	if len(n.notified) != 0 || len(n.jobs) != 0 {
+		t.Fatalf("message/alert work ran with zero subscriptions: notified=%d jobs=%d", len(n.notified), len(n.jobs))
+	}
+
+	// Subscribing later must not send old messages or old failed-job alerts.
+	sub := device(t, n.Store, "phone", store.DefaultNotificationPrefs())
+	if err := n.Tick(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(*out) != 0 {
+		t.Fatalf("old events sent after subscribing: %+v", *out)
+	}
+
+	// New messages and alerts arriving after subscription are delivered.
+	incoming(t, n.Store, "fresh-msg", "chat-a", "Fresh after subscribe", *now)
+	if _, err := n.Store.DB.Exec("INSERT INTO jobs VALUES('new-approval','chat-a','!ask','awaiting_approval','2026-01-01T00:00:02Z','','','')"); err != nil {
+		t.Fatal(err)
+	}
+	if err := n.Tick(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(*out) != 2 {
+		t.Fatalf("expected fresh message and alert, got %+v", *out)
+	}
+
+	// Removing the last subscription returns to idle cursor-only tracking.
+	*out = nil
+	if _, err := n.Store.DeletePushSubscription(sub.ID); err != nil {
+		t.Fatal(err)
+	}
+	incoming(t, n.Store, "after-unsub", "chat-a", "After unsubscribe", *now)
+	if err := n.Tick(ctx); err != nil {
+		t.Fatal(err)
+	}
+	latest, _ = n.Store.LatestMessageChange()
+	if n.cursor != latest || len(n.notified) != 0 || len(n.jobs) != 0 || len(*out) != 0 {
+		t.Fatalf("did not return to idle tracking: cursor=%d latest=%d notified=%d jobs=%d out=%+v", n.cursor, latest, len(n.notified), len(n.jobs), *out)
+	}
+}
