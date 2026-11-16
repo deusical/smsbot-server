@@ -1148,3 +1148,240 @@ func TestVideoSafetyCodesAndDeadlinesStillCancelOrExpire(t *testing.T) {
 		})
 	}
 }
+
+type sessionRolloverTransport struct {
+	*transport.Fixture
+	readyFn   func() bool
+	sessionFn func() bool
+	lookupFn  func(context.Context, string) (transport.Conversation, error)
+}
+
+func (s *sessionRolloverTransport) Ready() bool {
+	if s.readyFn != nil {
+		return s.readyFn()
+	}
+	return s.Fixture.Ready()
+}
+
+func (s *sessionRolloverTransport) SessionUp() bool {
+	if s.sessionFn != nil {
+		return s.sessionFn()
+	}
+	return true
+}
+
+func (s *sessionRolloverTransport) LookupConversation(ctx context.Context, id string) (transport.Conversation, error) {
+	if s.lookupFn != nil {
+		return s.lookupFn(ctx, id)
+	}
+	return fixtureConversation(ctx, id)
+}
+
+func TestStreamRolloverGapBacksOffWithoutCancellingUnsentWork(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	t.Run("check_rollover_gap_retries_and_never_sends_while_unready", func(t *testing.T) {
+		t.Parallel()
+		e, f := setup(t)
+		arm(t, e)
+		if err := e.Store.Enroll("demo-sms", "demo-sms-peer"); err != nil {
+			t.Fatal(err)
+		}
+		now := time.Now()
+		e.now = func() time.Time { return now }
+
+		m1 := incoming()
+		m1.ID, m1.At = "rollover-1", now
+		if ok, err := e.Accept(ctx, m1); !ok || err != nil {
+			t.Fatal("accept m1", ok, err)
+		}
+		id1 := store.Hash(m1.ConversationID + "\x00" + m1.ID)
+
+		m2 := transport.Incoming{ID: "rollover-2", ConversationID: "demo-sms", ParticipantID: "demo-sms-peer", Text: "!ping", At: now}
+		if ok, err := e.Accept(ctx, m2); !ok || err != nil {
+			t.Fatal("accept m2", ok, err)
+		}
+		id2 := store.Hash(m2.ConversationID + "\x00" + m2.ID)
+
+		// Simulate the stream rolling over right after nextReady's initial Ready()
+		// check, so Engine.check observes !Ready() while SessionUp() is still true.
+		var readyCalls atomic.Int32
+		var streamConnected atomic.Bool
+		tr := &sessionRolloverTransport{
+			Fixture: f,
+			readyFn: func() bool {
+				if streamConnected.Load() {
+					return true
+				}
+				return readyCalls.Add(1) == 1
+			},
+			sessionFn: func() bool { return true },
+		}
+		useTransport(e, tr)
+
+		err := e.Dispatch(ctx)
+		if !errors.Is(err, transport.ErrLookupFailed) || errors.Is(err, transport.ErrUnavailable) {
+			t.Fatalf("check rollover gap returned %v, want ErrLookupFailed", err)
+		}
+		if stateOf(t, e, id1) != "queued" || stateOf(t, e, id2) != "queued" || len(f.Sent) != 0 {
+			t.Fatalf("check rollover gap cancelled or sent jobs: j1=%s j2=%s sent=%d", stateOf(t, e, id1), stateOf(t, e, id2), len(f.Sent))
+		}
+		// Immediate retry during backoff is skipped cleanly.
+		readyCalls.Store(0)
+		if err := e.Dispatch(ctx); err != nil || len(f.Sent) != 0 {
+			t.Fatalf("preflight backoff did not hold: err=%v sent=%d", err, len(f.Sent))
+		}
+
+		// Once stream reconnects and backoff expires, both jobs send.
+		streamConnected.Store(true)
+		f.Online = true
+		now = now.Add(2 * time.Second)
+		if err := e.Dispatch(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if err := e.Dispatch(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if stateOf(t, e, id1) != "submitted" || stateOf(t, e, id2) != "submitted" || len(f.Sent) != 2 {
+			t.Fatalf("jobs did not send after rollover ended: j1=%s j2=%s sent=%d", stateOf(t, e, id1), stateOf(t, e, id2), len(f.Sent))
+		}
+	})
+
+	t.Run("lookup_error_during_rollover_gap_maps_to_lookup_failed", func(t *testing.T) {
+		t.Parallel()
+		e, f := setup(t)
+		arm(t, e)
+		now := time.Now()
+		e.now = func() time.Time { return now }
+
+		m := incoming()
+		m.ID, m.At = "lookup-rollover-1", now
+		if ok, err := e.Accept(ctx, m); !ok || err != nil {
+			t.Fatal("accept", ok, err)
+		}
+		id := store.Hash(m.ConversationID + "\x00" + m.ID)
+
+		var streamConnected atomic.Bool
+		streamConnected.Store(true)
+		var sessionUp atomic.Bool
+		sessionUp.Store(true)
+		tr := &sessionRolloverTransport{
+			Fixture:   f,
+			readyFn:   func() bool { return streamConnected.Load() },
+			sessionFn: func() bool { return sessionUp.Load() },
+			lookupFn: func(context.Context, string) (transport.Conversation, error) {
+				// Stream drops briefly mid-lookup while session stays up.
+				streamConnected.Store(false)
+				return transport.Conversation{}, transport.ErrLookupFailed
+			},
+		}
+		useTransport(e, tr)
+
+		err := e.Dispatch(ctx)
+		if !errors.Is(err, transport.ErrLookupFailed) || errors.Is(err, transport.ErrUnavailable) {
+			t.Fatalf("dispatch lookup during rollover returned %v, want ErrLookupFailed", err)
+		}
+		if stateOf(t, e, id) != "queued" || len(f.Sent) != 0 {
+			t.Fatalf("job state after rollover lookup = %s, sent=%d", stateOf(t, e, id), len(f.Sent))
+		}
+
+		// Ingest lookup failing mid-rollover also maps to ErrLookupFailed, not ErrUnavailable.
+		streamConnected.Store(true)
+		m2 := incoming()
+		m2.ID, m2.At = "lookup-rollover-ingest", now
+		_, ingestErr := e.Ingest(ctx, m2)
+		if !errors.Is(ingestErr, transport.ErrLookupFailed) || errors.Is(ingestErr, transport.ErrUnavailable) {
+			t.Fatalf("ingest lookup during rollover returned %v, want ErrLookupFailed", ingestErr)
+		}
+
+		// When the session itself drops, the same lookup error maps to ErrUnavailable.
+		now = now.Add(5 * time.Second)
+		streamConnected.Store(true)
+		tr.lookupFn = func(context.Context, string) (transport.Conversation, error) {
+			streamConnected.Store(false)
+			sessionUp.Store(false)
+			return transport.Conversation{}, transport.ErrUnavailable
+		}
+		if err := e.Dispatch(ctx); !errors.Is(err, transport.ErrUnavailable) {
+			t.Fatalf("dispatch lookup with session down returned %v, want ErrUnavailable", err)
+		}
+	})
+
+	t.Run("check_with_session_down_cancels_as_transport_unavailable", func(t *testing.T) {
+		t.Parallel()
+		e, f := setup(t)
+		arm(t, e)
+		m := incoming()
+		if ok, err := e.Accept(ctx, m); !ok || err != nil {
+			t.Fatal("accept", ok, err)
+		}
+		id := store.Hash(m.ConversationID + "\x00" + m.ID)
+
+		var calls atomic.Int32
+		var sessionUp atomic.Bool
+		sessionUp.Store(true)
+		tr := &sessionRolloverTransport{
+			Fixture: f,
+			readyFn: func() bool {
+				if calls.Add(1) == 1 {
+					return true
+				}
+				sessionUp.Store(false)
+				return false
+			},
+			sessionFn: func() bool { return sessionUp.Load() },
+		}
+		useTransport(e, tr)
+		if err := e.Dispatch(ctx); err != nil {
+			t.Fatalf("check with session down returned %v, want nil after cancelling job", err)
+		}
+		jobs, err := e.Store.Jobs()
+		if err != nil || len(jobs) != 1 || jobs[0].ID != id || jobs[0].State != "cancelled" || jobs[0].Code != "transport_unavailable" {
+			t.Fatalf("expected cancelled/transport_unavailable, got %+v %v", jobs, err)
+		}
+	})
+}
+
+func TestLookupIDMismatchCancelsAsIdentityChangedWithoutRetry(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e, f := setup(t)
+	arm(t, e)
+	m := incoming()
+	if ok, err := e.Accept(ctx, m); !ok || err != nil {
+		t.Fatal("accept", ok, err)
+	}
+	id := store.Hash(m.ConversationID + "\x00" + m.ID)
+
+	var lookups atomic.Int32
+	useTransport(e, &lookupTransport{
+		Fixture: f,
+		lookup: func(context.Context, string) (transport.Conversation, error) {
+			lookups.Add(1)
+			return transport.Conversation{}, transport.ErrIneligibleConversation
+		},
+	})
+
+	if err := e.Dispatch(ctx); err != nil {
+		t.Fatalf("ineligible lookup returned %v, want nil", err)
+	}
+	if lookups.Load() != 1 {
+		t.Fatalf("lookups = %d, want 1", lookups.Load())
+	}
+	jobs, err := e.Store.Jobs()
+	if err != nil || len(jobs) != 1 || jobs[0].ID != id || jobs[0].State != "cancelled" || jobs[0].Code != "identity_changed" || len(f.Sent) != 0 {
+		t.Fatalf("expected cancelled/identity_changed, got %+v sent=%d err=%v", jobs, len(f.Sent), err)
+	}
+
+	// Incoming commands in an ID-mismatched conversation are declined cleanly without error or pause.
+	m2 := incoming()
+	m2.ID = "ineligible-incoming"
+	accepted, err := e.Ingest(ctx, m2)
+	if err != nil || accepted {
+		t.Fatalf("ingest on ineligible conversation: accepted=%v err=%v", accepted, err)
+	}
+	if paused, err := e.Store.Paused(); err != nil || paused {
+		t.Fatalf("ineligible conversation paused engine: paused=%v err=%v", paused, err)
+	}
+}

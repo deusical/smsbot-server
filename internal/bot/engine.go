@@ -100,14 +100,18 @@ const (
 	cachedLookup
 )
 
-// lookupError separates a lookup failure while the transport is still ready
-// (ErrLookupFailed, which backs off that job) from a lost connection
-// (ErrUnavailable, returned only when the transport reports not ready).
+func (e *Engine) sessionUp() bool {
+	return transport.SessionUp(e.Transport)
+}
+
+// lookupError separates a lookup failure while the transport session is still
+// up (ErrLookupFailed, which backs off that job) from a lost session
+// (ErrUnavailable, returned only when the session is down).
 func (e *Engine) lookupError(err error) error {
 	if err == nil {
 		return nil
 	}
-	if !e.Transport.Ready() {
+	if !e.sessionUp() {
 		return transport.ErrUnavailable
 	}
 	return transport.ErrLookupFailed
@@ -115,6 +119,9 @@ func (e *Engine) lookupError(err error) error {
 
 func (e *Engine) lookupConversation(ctx context.Context, id string) (transport.Conversation, error) {
 	c, err := transport.Lookup(ctx, e.Transport, id)
+	if errors.Is(err, transport.ErrIneligibleConversation) {
+		return transport.Conversation{ID: id}, nil
+	}
 	return c, e.lookupError(err)
 }
 
@@ -772,6 +779,9 @@ func (e *Engine) check(ctx context.Context, j store.Job, p store.Plan, mode look
 		return cfg, "paused", nil
 	}
 	if !e.Transport.Ready() {
+		if e.sessionUp() {
+			return cfg, "", transport.ErrLookupFailed
+		}
 		return cfg, "transport_unavailable", nil
 	}
 	at, err := time.Parse(time.RFC3339Nano, j.CreatedAt)
@@ -969,7 +979,7 @@ func (e *Engine) nextReady(ctx context.Context) (j store.Job, p store.Plan, cfg 
 	}
 	cfg, code, err := e.check(ctx, j, p, mode)
 	if err != nil {
-		if !e.Transport.Ready() {
+		if !e.sessionUp() {
 			return j, p, cfg, mode, false, transport.ErrUnavailable
 		}
 		e.backoffPreflight(j.ID)
