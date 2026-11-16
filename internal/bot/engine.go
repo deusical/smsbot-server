@@ -28,6 +28,9 @@ type Engine struct {
 	// WorkerPollDelay spaces polls of the download worker between stages;
 	// zero means one second.
 	WorkerPollDelay time.Duration
+	// WorkerCancelInterval spaces sweeps that deliver scope cancellations to
+	// workers; zero means three seconds (scaled when WorkerPollDelay < 1s).
+	WorkerCancelInterval time.Duration
 	// mu is the control lock shared with Collection: send decisions serialize
 	// with consent changes and protected commits.
 	mu              *sync.Mutex
@@ -37,6 +40,7 @@ type Engine struct {
 	pending         map[string]context.CancelFunc
 	downloadUploads map[string]downloadUpload
 	downloadWG      sync.WaitGroup
+	cancelNudge     chan struct{}
 }
 
 // New wires an engine without touching storage or starting work. control is
@@ -46,7 +50,7 @@ func New(s *store.Store, t transport.Transport, c *collection.Service, control *
 	if _, offline := t.(*transport.Fixture); offline {
 		provider = SimulatedProvider{}
 	}
-	return &Engine{Collection: c, Store: s, Transport: t, Provider: provider, mu: control, now: time.Now, pending: map[string]context.CancelFunc{}, downloadUploads: map[string]downloadUpload{}}
+	return &Engine{Collection: c, Store: s, Transport: t, Provider: provider, mu: control, now: time.Now, pending: map[string]context.CancelFunc{}, downloadUploads: map[string]downloadUpload{}, cancelNudge: make(chan struct{}, 1)}
 }
 
 // Init performs the engine's one-time startup work: offline fixture mode
@@ -77,6 +81,7 @@ func (e *Engine) CollectionSettingsSaved(s collection.Settings) {
 	for _, cancel := range e.pending {
 		cancel()
 	}
+	e.nudgeWorkerCancel()
 }
 
 // lookupMode tells check which phase a job is in. liveLookup asks the phone for
@@ -124,34 +129,45 @@ func (e *Engine) conversationForCheck(ctx context.Context, id string, mode looku
 
 func (e *Engine) Pause(value bool) error {
 	e.mu.Lock()
-	defer e.mu.Unlock()
 	if value {
 		for _, cancel := range e.pending {
 			cancel()
 		}
 	}
-	return e.Store.Pause(value)
+	err := e.Store.Pause(value)
+	e.mu.Unlock()
+	if value && err == nil {
+		e.nudgeWorkerCancel()
+	}
+	return err
 }
 
 // ConnectionInterrupted cancels unsent work without changing the owner's Live/Pause choice.
 // Submitted or uncertain intents retain their state and are never retried here.
 func (e *Engine) ConnectionInterrupted() error {
 	e.mu.Lock()
-	defer e.mu.Unlock()
 	for _, cancel := range e.pending {
 		cancel()
 	}
-	return e.Store.CancelUnsentJobs("connection_interrupted")
+	err := e.Store.CancelUnsentJobs("connection_interrupted")
+	e.mu.Unlock()
+	if err == nil {
+		e.nudgeWorkerCancel()
+	}
+	return err
 }
 
 func (e *Engine) Unenroll(id string) error {
 	e.mu.Lock()
-	defer e.mu.Unlock()
 	e.cancelRunning(id)
 	if err := e.Store.Unenroll(id); err != nil {
+		e.mu.Unlock()
 		return err
 	}
-	return e.Store.ClearMemory(id, "")
+	err := e.Store.ClearMemory(id, "")
+	e.mu.Unlock()
+	e.nudgeWorkerCancel()
+	return err
 }
 func (e *Engine) Enroll(id, peer string) error {
 	e.mu.Lock()
@@ -179,20 +195,26 @@ func (e *Engine) EnrollMember(conv, member, roster string) error {
 // UnenrollMember stops one member using the bot in a group.
 func (e *Engine) UnenrollMember(conv, member string) error {
 	e.mu.Lock()
-	defer e.mu.Unlock()
 	e.cancelRunning(conv)
-	return e.Store.UnenrollMember(conv, member)
+	err := e.Store.UnenrollMember(conv, member)
+	e.mu.Unlock()
+	if err == nil {
+		e.nudgeWorkerCancel()
+	}
+	return err
 }
 
 // SetGroupShared switches whether a group has one AI conversation for everyone.
 func (e *Engine) SetGroupShared(conv string, shared bool) error {
 	e.mu.Lock()
-	defer e.mu.Unlock()
 	e.cancelRunning(conv)
 	if err := e.Store.SetGroupShared(conv, shared); err != nil {
+		e.mu.Unlock()
 		return err
 	}
 	e.cancelClearedThreadRuns()
+	e.mu.Unlock()
+	e.nudgeWorkerCancel()
 	return nil
 }
 
@@ -200,9 +222,13 @@ func (e *Engine) SetGroupShared(conv string, shared bool) error {
 // the owner has looked at who is there now.
 func (e *Engine) ApproveGroup(conv, roster string, present []string) error {
 	e.mu.Lock()
-	defer e.mu.Unlock()
 	e.cancelRunning(conv)
-	return e.Store.ApproveGroup(conv, roster, present)
+	err := e.Store.ApproveGroup(conv, roster, present)
+	e.mu.Unlock()
+	if err == nil {
+		e.nudgeWorkerCancel()
+	}
+	return err
 }
 
 // enrolledFor reports whether the person a plan is for may still use the bot
@@ -239,11 +265,15 @@ func (e *Engine) validGroupMember(ctx context.Context, conv, member, roster stri
 }
 func (e *Engine) Cancel(id string) error {
 	e.mu.Lock()
-	defer e.mu.Unlock()
 	if cancel := e.pending[id]; cancel != nil {
 		cancel()
 	}
-	return e.Store.Cancel(id)
+	err := e.Store.Cancel(id)
+	e.mu.Unlock()
+	if err == nil {
+		e.nudgeWorkerCancel()
+	}
+	return err
 }
 func (e *Engine) Approve(id string) error {
 	e.mu.Lock()
@@ -940,6 +970,9 @@ func (e *Engine) nextReady(ctx context.Context) (j store.Job, p store.Plan, cfg 
 				state = "expired"
 			}
 			err = e.Store.Complete(j.ID, state, code)
+			if err == nil {
+				e.nudgeWorkerCancel()
+			}
 		}
 		return j, p, cfg, mode, false, err
 	}
@@ -1324,7 +1357,17 @@ func (e *Engine) Playground(name, input string) (map[string]any, error) {
 }
 func (e *Engine) Run(ctx context.Context, report func(error)) {
 	ctx, cancel := context.WithCancel(ctx)
-	defer func() { cancel(); e.downloadWG.Wait() }()
+	var sweepWG sync.WaitGroup
+	defer func() {
+		cancel()
+		sweepWG.Wait()
+		e.downloadWG.Wait()
+	}()
+	sweepWG.Add(1)
+	go func() {
+		defer sweepWG.Done()
+		e.runWorkerCancelSweep(ctx)
+	}()
 	ticker := time.NewTicker(250 * time.Millisecond)
 	defer ticker.Stop()
 	retention := time.NewTicker(time.Hour)

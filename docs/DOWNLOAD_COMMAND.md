@@ -60,10 +60,11 @@ address in. To stop and remove the task:
 ```
 
 Pass `-KeepDays N` (or `--keep-days N` directly to `download-worker.py`) to
-delete terminal job folders (`complete`, `failed`, or `expired`) under the
-output root whose `state.json` was modified or whose deadline passed more than
-`N` days ago. Cleanup runs at startup and hourly, and never touches active or
-non-terminal jobs. It is off by default so originals stay until you opt in.
+delete terminal job folders (`complete`, `failed`, `expired`, or `cancelled`) and
+past-deadline orphaned folders under the output root whose `state.json` was
+modified or whose deadline passed more than `N` days ago. Cleanup runs at startup
+and hourly, and never touches active jobs or non-terminal jobs whose deadline has
+not passed. It is off by default so originals stay until you opt in.
 
 To use it, open **Settings > Workers** on the dashboard, add the worker with its
 Tailscale address (`http://<100.x address>:8767/download`) and paste the contents of
@@ -186,8 +187,8 @@ of an earlier job of the same bot job (`scope`) on the same worker:
 ```
 
 Polls answer the stage (`queued`, a task's own progress stage such as
-`compressing`, then `complete`, `failed` or `expired`). A complete job also
-returns its outputs, and a failed one a short `code`:
+`compressing`, then `complete`, `failed`, `expired`, or `cancelled`). A complete
+job also returns its outputs, and a failed one a short `code`:
 
 ```json
 {"stage":"complete","protocol":4,"outputs":{"video":{"type":"video","handle":"<job>/video","size":18734211}}}
@@ -257,12 +258,16 @@ checkpoints are under the job ID directory. The token is outside source. Job
 folders written by older, encrypting workers (`*.enc` files) are no longer read;
 a poll for such a job starts it again, and the old folders can be deleted.
 
-Every poll renews a 300-second preparation lease. If the bot pauses, cancels, loses
-consent, or stops polling, the lease expires and stops running preparation.
+Every poll renews a 300-second preparation lease. When a bot job ends before
+worker preparation finishes (cancelled, paused, unenrolled, expired, or failed a
+check), SmsBot sends `POST /download/scopes/<scope>/cancel` to configured workers
+so active preparation stops within a second, marks the task `cancelled`, and frees
+the worker slot; if a worker is unreachable or the bot disappears, the 300-second
+lease expires and stops running preparation.
 Subprocesses are also stopped at the absolute deadline, or after 120 seconds
 without file growth or advancing encoder frames/media time (300 seconds for a
 download, which writes nothing while the page opens and the video is found). Stalled preparation
-fails; only lost leases leave resumable work. There is no promise that an upstream
+fails; only lost leases on uncancelled scopes leave resumable work. There is no promise that an upstream
 site's own network timeout or failure will disappear.
 
 **SmsBot restart still starts paused and cancels unsent jobs.** Retained worker
@@ -287,7 +292,8 @@ Worker responses never contain raw upstream errors, file titles or credentials.
 Upgrade the bot and the worker together. The worker accepts protocol 4 only.
 Anything else, including the old synchronous `POST /download`, is refused.
 Keep the bot endpoint flag ending in `/download`; the client appends
-`/jobs/<task job ID>` and `/jobs/<task job ID>/files/<name>`.
+`/jobs/<task job ID>`, `/jobs/<task job ID>/files/<name>`, and
+`/scopes/<bot job ID>/cancel`.
 
 Responses use `Cache-Control: no-store`. Authentication failures return 401;
 invalid input and preparation failures use sanitized responses. Temporary

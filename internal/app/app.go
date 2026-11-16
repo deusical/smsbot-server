@@ -79,6 +79,7 @@ func (a *Service) Accelerate(factor int) {
 	a.Collection.GapRecheck = 3 * time.Second / f
 	a.Notify.Interval /= f
 	a.Engine.WorkerPollDelay = time.Second / f
+	a.Engine.WorkerCancelInterval = 3 * time.Second / f
 }
 
 // Init runs one-time startup work in order: collection publishes consent and
