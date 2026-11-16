@@ -521,6 +521,103 @@ func TestAHaltingStepIsRecordedAsRun(t *testing.T) {
 	}
 }
 
+func TestReplyStepOnlyFinishesWhenSent(t *testing.T) {
+	t.Parallel()
+	e, fixture := setup(t)
+	arm(t, e)
+	c := DefaultConfiguration()
+	c.Commands = []Command{
+		{Name: "reviewed", Type: "fixed", Instructions: "Reviewed {input}", Approval: true, Enabled: true},
+		{Name: "echo", Type: "fixed", Instructions: "Echo {input}", Enabled: true},
+	}
+	if err := e.SetConfiguration(c); err != nil {
+		t.Fatal(err)
+	}
+	stepsFor := func(id string) []store.JobStep {
+		t.Helper()
+		jobs, err := e.Store.Jobs()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, j := range jobs {
+			if j.ID == id {
+				return j.Steps
+			}
+		}
+		t.Fatalf("job %s not found", id)
+		return nil
+	}
+
+	// Awaiting approval: text.template is done, reply is not done yet.
+	m := incoming()
+	m.ID = "step-approval"
+	m.Text = "!reviewed hi"
+	if ok, err := e.Accept(context.Background(), m); !ok || err != nil {
+		t.Fatal(ok, err)
+	}
+	approvalID := store.Hash(m.ConversationID + "\x00" + m.ID)
+	if st := stepsFor(approvalID); len(st) != 2 || !st[0].Done || st[1].Done {
+		t.Fatalf("reply marked done before approval: %+v", st)
+	}
+	if err := e.Approve(approvalID); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Dispatch(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if st := stepsFor(approvalID); !st[0].Done || !st[1].Done {
+		t.Fatalf("reply not marked done after submission: %+v", st)
+	}
+
+	// Refused send: reply stays not done.
+	fixture.Fail = "refused"
+	refused := incoming()
+	refused.ID = "step-refused"
+	refused.Text = "!echo hi"
+	if ok, err := e.Accept(context.Background(), refused); !ok || err != nil {
+		t.Fatal(ok, err)
+	}
+	refusedID := store.Hash(refused.ConversationID + "\x00" + refused.ID)
+	if err := e.Dispatch(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if stateOf(t, e, refusedID) != "failed" {
+		t.Fatalf("expected failed, got %s", stateOf(t, e, refusedID))
+	}
+	if st := stepsFor(refusedID); !st[0].Done || st[1].Done {
+		t.Fatalf("reply marked done after refused send: %+v", st)
+	}
+
+	// Uncertain send: reply stays not done until reconciled to delivered/read.
+	fixture.Fail = "unknown"
+	uncertain := incoming()
+	uncertain.ID = "step-uncertain"
+	uncertain.Text = "!echo hi"
+	if ok, err := e.Accept(context.Background(), uncertain); !ok || err != nil {
+		t.Fatal(ok, err)
+	}
+	uncertainID := store.Hash(uncertain.ConversationID + "\x00" + uncertain.ID)
+	if err := e.Dispatch(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if stateOf(t, e, uncertainID) != "unknown_submission" {
+		t.Fatalf("expected unknown_submission, got %s", stateOf(t, e, uncertainID))
+	}
+	if st := stepsFor(uncertainID); !st[0].Done || st[1].Done {
+		t.Fatalf("reply marked done on uncertain send: %+v", st)
+	}
+	var txn string
+	if err := e.Store.DB.QueryRow("SELECT txn FROM jobs WHERE id=?", uncertainID).Scan(&txn); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Reconcile(uncertain.ConversationID, txn, "delivered", ""); err != nil {
+		t.Fatal(err)
+	}
+	if st := stepsFor(uncertainID); !st[0].Done || !st[1].Done {
+		t.Fatalf("reply not marked done when reconciled to delivered: %+v", st)
+	}
+}
+
 func TestCJKTextRuneAndByteLimits(t *testing.T) {
 	t.Parallel()
 	okText := strings.Repeat("好", 5000)    // 5,000 runes, 15,000 UTF-8 bytes

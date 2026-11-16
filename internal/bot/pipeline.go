@@ -225,9 +225,10 @@ type simState struct {
 	model, text string
 }
 
-// planHost is SmsBot's side of a run. The reply text stays on the run. A file
-// is taken onto the plan so its bytes can be sealed apart from the run. A
-// halt stores its text on the step and drops any AI turn the plan had started.
+// planHost is SmsBot's side of a run. The reply text stays on the run. A
+// prepared file is staged on the plan so its bytes are sealed apart from the
+// run, and the reply resolves its reference into Attachments. A halt stores its
+// text on the step and drops any AI turn or staged files the plan had started.
 type planHost struct {
 	e *Engine
 	j store.Job
@@ -236,10 +237,20 @@ type planHost struct {
 
 func (h planHost) Effect(s *cmdflow.Step) error {
 	if v, ok := s.Take("file"); ok {
-		if f := valueMedia(v); f != nil {
-			h.p.Attachments = []media.File{*f}
+		var f *media.File
+		if v.Handle != "" {
+			if staged, found := h.p.StagedFile(v.Handle); found {
+				f = &staged
+			}
+		} else {
+			f = valueMedia(v)
 		}
+		if f == nil {
+			return cmdflow.ErrFailed
+		}
+		h.p.Attachments = []media.File{*f}
 	}
+	h.p.Staged = nil
 	return nil
 }
 
@@ -278,6 +289,7 @@ func haltPlan(p *store.Plan) {
 	p.Thread = nil
 	p.Context = nil
 	p.Attachments = nil
+	p.Staged = nil
 }
 
 // planReply is the text the dispatcher sends: a step that halted, else the
@@ -474,11 +486,6 @@ func valueFile(v cmdflow.Value) *store.FileRef {
 		return nil
 	}
 	return &f
-}
-
-func mediaValue(f *media.File) cmdflow.Value {
-	data, _ := json.Marshal(f)
-	return cmdflow.Value{Type: typeVideo, Data: data}
 }
 
 func valueMedia(v cmdflow.Value) *media.File {

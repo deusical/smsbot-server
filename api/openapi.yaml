@@ -1255,6 +1255,32 @@ paths:
             describe independent recent reconciliation backoff. Error values are sanitized codes.
             generation versions the import; refresh_generation (optional) versions the
             viewed-section check. Both are opaque counters.
+  /inbox/conversations/{id}/refresh:
+    parameters:
+    - name: id
+      in: path
+      required: true
+      schema: {type: string}
+    post:
+      summary: Re-check a viewed time span in an archived conversation
+      description: Queues or updates a bounded viewed-section check without replacing deep-import progress. Requires archive consent and matching participant identity; historical commands never run.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [since]
+              properties:
+                since: {type: string, format: date-time, description: 'RFC3339 lower bound of the viewed span'}
+                until: {type: string, format: date-time, description: 'RFC3339 upper bound; empty or omitted means now'}
+      responses:
+        '202': {description: Archive record with refresh_generation and viewed-span bounds}
+        '400': {description: Invalid bounded request}
+        '401': {description: Authentication required}
+        '403': {description: Access denied}
+        '409': {description: refresh_unavailable_or_invalid_range}
   /inbox/conversations/{id}/sync:
     parameters:
     - name: id
@@ -1727,6 +1753,7 @@ components:
           - submitted
           - delivered
           - read
+          - reaction_confirmed
           - cancelled
           - failed
           - expired
@@ -1926,26 +1953,6 @@ components:
       required:
       - id
       - name
-    DownloadWorkerRequestV2:
-      type: object
-      additionalProperties: false
-      description: Private token-authenticated loopback worker protocol, not an owner API route. Probe GET /download/capabilities before POST /download/jobs/{job}; see docs/DOWNLOAD_COMMAND.md. An outdated worker receives a legacy request using its defaults, with a sanitized service-log warning. Checkpoints never authorize submission.
-      required: [protocol, url, max_bytes, deadline, settings]
-      properties:
-        protocol: {type: integer, enum: [2]}
-        url: {type: string, format: uri}
-        max_bytes: {type: integer, minimum: 100000, maximum: 19999999}
-        deadline: {type: integer, description: Absolute Unix seconds; bounded by execution_minutes and at most one hour.}
-        settings:
-          type: object
-          additionalProperties: false
-          properties:
-            preset: {type: string, enum: [veryfast, faster, fast, medium, slow], default: medium}
-            passes: {type: integer, minimum: 1, maximum: 2, default: 2}
-            max_attempts: {type: integer, minimum: 1, maximum: 3, default: 3}
-            copy_if_fits: {type: boolean, default: true}
-            max_mb: {type: number, minimum: 0.1, maximum: 19.99, default: 19.99}
-            execution_minutes: {type: integer, minimum: 1, maximum: 60, default: 15}
     CommandKind:
       type: object
       properties:
@@ -1955,7 +1962,7 @@ components:
         version: {type: integer}
         threads: {type: boolean}
         retry_class: {type: string, enum: [none, idempotent-poll, local-repeatable]}
-        resource_class: {type: string, enum: [media, provider, upload]}
+        resource_class: {type: string, enum: [local, media, provider, upload]}
         schema:
           type: object
           description: Recursive form schema (type, properties, title, ui, default, minimum, maximum, effective_maximum, enum, unit). Effective bounds reflect host attachment limits. UI hints select multiline, model, profile and optional generation controls.
@@ -2264,7 +2271,6 @@ components:
           type: boolean
           default: true
           description: Mark a conversation read on the phone while the owner is viewing it. Omitted means on.
-          default: false
         automatic_replies:
           type: boolean
           default: true

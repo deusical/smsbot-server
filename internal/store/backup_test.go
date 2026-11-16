@@ -126,3 +126,65 @@ func TestBackupRejectsFutureSchemaTamperingAndRollsBack(t *testing.T) {
 		t.Fatal("partial restore")
 	}
 }
+
+func TestExportBackupExcludesAllJobPlansAndChecksPlanIntegrity(t *testing.T) {
+	t.Parallel()
+	source := inboxStore(t)
+	if _, err := source.Enqueue("rolling-queued", "fixture-chat", "!translate", Plan{
+		Participant: "fixture-peer",
+		Input:       "synthetic-secret-prompt",
+		Memory:      true,
+		Context:     []Turn{{Role: "user", Content: "synthetic-rolling-turn"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := source.Enqueue("approval-job", "fixture-chat", "!echo", Plan{
+		Participant: "fixture-peer",
+		Reply:       "synthetic-pending-reply",
+		Approval:    true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := source.Enqueue("submitting-job", "fixture-chat", "!ping", Plan{
+		Participant: "fixture-peer",
+		Reply:       "synthetic-submitting-reply",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := source.Submitting("submitting-job", "txn-1"); err != nil {
+		t.Fatal(err)
+	}
+	data, err := source.ExportBackup()
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain, err := source.Vault.Open("backup", string(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{"synthetic-secret-prompt", "synthetic-rolling-turn", "synthetic-pending-reply", "synthetic-submitting-reply"} {
+		if bytes.Contains(plain, []byte(secret)) {
+			t.Fatalf("backup leaked plan content %q", secret)
+		}
+	}
+	var snap backupSnapshot
+	if err := json.Unmarshal(plain, &snap); err != nil {
+		t.Fatal(err)
+	}
+	if len(snap.Jobs) != 3 {
+		t.Fatalf("got %d jobs, want 3", len(snap.Jobs))
+	}
+	for _, j := range snap.Jobs {
+		if j.Plan != "" {
+			t.Fatalf("job %s exported non-empty plan", j.ID)
+		}
+	}
+
+	// A corrupted plan in the database still fails export integrity checking.
+	if _, err := source.DB.Exec("UPDATE jobs SET plan='corrupt-ciphertext' WHERE id='rolling-queued'"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := source.ExportBackup(); err == nil {
+		t.Fatal("corrupted stored plan accepted by ExportBackup")
+	}
+}
