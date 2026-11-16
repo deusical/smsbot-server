@@ -69,11 +69,6 @@ func downloadURL(input string) string {
 // finished: the job is then still "generating" and the caller records the
 // step's output and calls finishWorkerStep. Otherwise dispatch ends here:
 // the job was deferred until its next poll, or completed as failed.
-func (e *Engine) pollWorker(ctx context.Context, j store.Job, p *store.Plan, poll func(ctx context.Context, deadline time.Time) (string, error)) (complete bool, err error) {
-	complete, _, err = e.pollWorkerStep(ctx, j, p, false, poll)
-	return complete, err
-}
-
 func (e *Engine) pollWorkerStep(ctx context.Context, j store.Job, p *store.Plan, subTool bool, poll func(ctx context.Context, deadline time.Time) (string, error)) (complete bool, failCode string, err error) {
 	if e.Tasks == nil {
 		if subTool {
@@ -139,13 +134,8 @@ func (e *Engine) finishWorkerStep(j store.Job) (bool, error) {
 	return !ok || err != nil, err
 }
 
-// sendableVideo turns the worker's verified MP4 into the reply's attachment,
+// sendableVideoStep turns the worker's verified MP4 into the reply's attachment,
 // after the job passes every check again.
-func (e *Engine) sendableVideo(ctx context.Context, j store.Job, p *store.Plan, data []byte, limit int64) (*media.File, bool, error) {
-	file, _, done, err := e.sendableVideoStep(ctx, j, p, false, data, limit)
-	return file, done, err
-}
-
 func (e *Engine) sendableVideoStep(ctx context.Context, j store.Job, p *store.Plan, subTool bool, data []byte, limit int64) (*media.File, string, bool, error) {
 	settings, err := e.Collection.Settings()
 	if err != nil {
