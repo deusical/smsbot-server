@@ -23,6 +23,7 @@ type taskWorker struct {
 	tasks map[string]int
 	down  atomic.Bool
 	mu    sync.Mutex
+	caps  int
 	posts map[string][]map[string]any
 	order []string
 }
@@ -45,6 +46,7 @@ func (w *taskWorker) serve(t *testing.T, tasks map[string]int) *httptest.Server 
 		parts := strings.Split(r.URL.Path, "/")
 		switch {
 		case strings.HasSuffix(r.URL.Path, "/capabilities"):
+			w.caps++
 			json.NewEncoder(rw).Encode(map[string]any{"protocol": 4, "protocols": []int{4}, "tasks": w.tasks})
 		case r.Method == "GET" && len(parts) == 6 && parts[4] == "files":
 			rw.Write([]byte("bytes-of-" + parts[5]))
@@ -81,6 +83,18 @@ func (w *taskWorker) jobs() []string {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return append([]string(nil), w.order...)
+}
+
+func (w *taskWorker) capabilitiesCount() int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.caps
+}
+
+func (w *taskWorker) setTasks(tasks map[string]int) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.tasks = tasks
 }
 
 func (w *taskWorker) first(job string) map[string]any {
@@ -361,5 +375,80 @@ func TestVideoCommandFailsWhenTheLaptopLeavesWithTheOriginal(t *testing.T) {
 	e.Store.DB.QueryRow("SELECT code FROM jobs WHERE id=?", id).Scan(&code)
 	if got := stateOf(t, e, id); got != "failed" || code != "worker_unavailable" || sent != 0 || len(local.jobs()) != 0 {
 		t.Fatal(got, code, sent, local.jobs())
+	}
+}
+
+func TestWorkerStatusCacheRefreshAndInvalidation(t *testing.T) {
+	t.Parallel()
+	tasks, laptop, local := taskRouter(t, map[string]int{"video.download": 1}, map[string]int{"video.compress": 1})
+	now := time.Date(2026, 11, 15, 12, 0, 0, 0, time.UTC)
+	var clockMu sync.Mutex
+	tasks.now = func() time.Time {
+		clockMu.Lock()
+		defer clockMu.Unlock()
+		return now
+	}
+	advance := func(d time.Duration) {
+		clockMu.Lock()
+		now = now.Add(d)
+		clockMu.Unlock()
+	}
+
+	ctx := context.Background()
+	first, err := tasks.Status(ctx)
+	if err != nil || len(first) != 2 || !first[0].Online || !first[1].Online || first[1].Tasks["video.download"] != 1 {
+		t.Fatalf("first status: %+v err=%v", first, err)
+	}
+	if local.capabilitiesCount() != 1 || laptop.capabilitiesCount() != 1 {
+		t.Fatalf("expected 1 probe each, got local=%d laptop=%d", local.capabilitiesCount(), laptop.capabilitiesCount())
+	}
+
+	// Mutating the returned slice or map never mutates the cached copy.
+	first[0].Online = false
+	first[1].Tasks["mutated"] = 99
+	laptop.setTasks(map[string]int{"video.download": 2})
+	advance(29 * time.Second)
+
+	cached, err := tasks.Status(ctx)
+	if err != nil || !cached[0].Online || cached[1].Tasks["video.download"] != 1 || cached[1].Tasks["mutated"] != 0 {
+		t.Fatalf("cached status: %+v err=%v", cached, err)
+	}
+	if local.capabilitiesCount() != 1 || laptop.capabilitiesCount() != 1 {
+		t.Fatalf("cache miss within TTL: local=%d laptop=%d", local.capabilitiesCount(), laptop.capabilitiesCount())
+	}
+
+	// RefreshStatus bypasses the cache immediately and updates the cached value.
+	refreshed, err := tasks.RefreshStatus(ctx)
+	if err != nil || refreshed[1].Tasks["video.download"] != 2 {
+		t.Fatalf("refreshed status: %+v err=%v", refreshed, err)
+	}
+	if local.capabilitiesCount() != 2 || laptop.capabilitiesCount() != 2 {
+		t.Fatalf("expected 2 probes after RefreshStatus: local=%d laptop=%d", local.capabilitiesCount(), laptop.capabilitiesCount())
+	}
+	afterRefresh, err := tasks.Status(ctx)
+	if err != nil || afterRefresh[1].Tasks["video.download"] != 2 || laptop.capabilitiesCount() != 2 {
+		t.Fatalf("status after refresh: %+v probes=%d err=%v", afterRefresh, laptop.capabilitiesCount(), err)
+	}
+
+	// After the 30 s TTL expires, Status probes again.
+	laptop.setTasks(map[string]int{"video.download": 3})
+	advance(30 * time.Second)
+	expired, err := tasks.Status(ctx)
+	if err != nil || expired[1].Tasks["video.download"] != 3 || laptop.capabilitiesCount() != 3 {
+		t.Fatalf("status after TTL: %+v probes=%d err=%v", expired, laptop.capabilitiesCount(), err)
+	}
+
+	// Saving workers invalidates the cache immediately.
+	laptop.setTasks(map[string]int{"video.download": 4})
+	cfg, err := tasks.Config()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tasks.Save(cfg, nil); err != nil {
+		t.Fatal(err)
+	}
+	afterSave, err := tasks.Status(ctx)
+	if err != nil || afterSave[1].Tasks["video.download"] != 4 || laptop.capabilitiesCount() != 4 {
+		t.Fatalf("status after save: %+v probes=%d err=%v", afterSave, laptop.capabilitiesCount(), err)
 	}
 }

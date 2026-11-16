@@ -1369,7 +1369,16 @@ paths:
         Workers run tasks for commands, such as video.download and video.compress. "local" is this
         server's own worker; the others run on other machines and are reached over Tailscale. The
         configuration is workers.json in the data directory, which can also be edited by hand.
-        Status probes every worker (about two seconds at most). Tokens are never returned.
+        Status probes every worker (about two seconds at most) and caches the result for about
+        30 seconds; pass refresh=1 to probe immediately. Tokens are never returned.
+      parameters:
+      - name: refresh
+        in: query
+        description: Optional. `1` bypasses the brief status cache and probes every worker immediately. Omit for ordinary reads.
+        schema:
+          type: string
+          enum:
+          - '1'
       responses:
         '200':
           description: Workers

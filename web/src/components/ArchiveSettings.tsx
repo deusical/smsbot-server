@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type Conversation } from "../lib/api";
 import { Field, Group, Notice, StatusPill, Switch } from "./ui";
 type Policy = { enabled: boolean; max_file_mb: number; quota_mb: number };
@@ -20,40 +20,59 @@ export function ArchiveSettings({ conversations }: { conversations: Conversation
     [format, setFormat] = useState("encrypted");
   const pending = useRef(false),
     epoch = useRef(0),
-    refreshing = useRef(false);
+    refreshing = useRef(false),
+    disposed = useRef(false),
+    checked = useRef(false);
+  const running = job?.state === "running";
+  const refresh = useCallback(async () => {
+    if (disposed.current || document.visibilityState === "hidden" || pending.current || refreshing.current) return;
+    refreshing.current = true;
+    checked.current = true;
+    const started = epoch.current;
+    try {
+      const result = await api<Job | null>("/inbox/archive/backup");
+      if (!disposed.current && started === epoch.current) setJob(result);
+    } catch {
+      if (!disposed.current && started === epoch.current) setError("Could not load archive export status.");
+    } finally {
+      refreshing.current = false;
+    }
+  }, []);
   useEffect(() => {
-    let disposed = false;
+    disposed.current = false;
     void api<Policy>("/inbox/archive/files/policy")
       .then((p) => {
-        if (!disposed) setPolicy(p);
+        if (!disposed.current) setPolicy(p);
       })
       .catch(() => {
-        if (!disposed) setError("Could not load file archive policy.");
+        if (!disposed.current) setError("Could not load file archive policy.");
       });
-    const refresh = async () => {
-      if (disposed || document.visibilityState === "hidden" || pending.current || refreshing.current) return;
-      refreshing.current = true;
-      const started = epoch.current;
-      try {
-        const result = await api<Job | null>("/inbox/archive/backup");
-        if (!disposed && started === epoch.current) setJob(result);
-      } catch {
-        if (!disposed && started === epoch.current) setError("Could not load archive export status.");
-      } finally {
-        refreshing.current = false;
+    void refresh();
+    return () => {
+      disposed.current = true;
+    };
+  }, [refresh]);
+  useEffect(() => {
+    let timer: ReturnType<typeof setInterval> | null = null;
+    const start = () => { if (!timer) timer = setInterval(() => void refresh(), 3000); };
+    const stop = () => { if (timer) { clearInterval(timer); timer = null; } };
+    const visible = () => {
+      if (document.visibilityState === "visible") {
+        if (running || !checked.current) void refresh();
+        if (running) start();
+      } else {
+        stop();
       }
     };
-    void refresh();
-    const timer = setInterval(() => void refresh(), 3000);
-    document.addEventListener("visibilitychange", refresh);
+    if (running && document.visibilityState !== "hidden") start();
+    document.addEventListener("visibilitychange", visible);
     return () => {
-      disposed = true;
-      clearInterval(timer);
-      document.removeEventListener("visibilitychange", refresh);
+      stop();
+      document.removeEventListener("visibilitychange", visible);
     };
-  }, []);
-  async function action(fn: () => Promise<void>) {
-    if (pending.current) return;
+  }, [running, refresh]);
+  async function action(fn: () => Promise<void>): Promise<boolean> {
+    if (pending.current) return false;
     pending.current = true;
     epoch.current++;
     setBusy(true);
@@ -61,8 +80,10 @@ export function ArchiveSettings({ conversations }: { conversations: Conversation
     setNotice("");
     try {
       await fn();
+      return true;
     } catch {
       setError("Archive operation failed. Check disk space and retry.");
+      return false;
     } finally {
       pending.current = false;
       setBusy(false);
@@ -194,6 +215,8 @@ export function ArchiveSettings({ conversations }: { conversations: Conversation
               onClick={() =>
                 void action(async () => {
                   await api("/inbox/archive/backup/cancel", "POST", {});
+                }).then((ok) => {
+                  if (ok) void refresh();
                 })
               }
             >

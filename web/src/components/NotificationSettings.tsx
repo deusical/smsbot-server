@@ -46,11 +46,17 @@ function summary(p: NotificationPrefs): string {
  */
 export function NotificationSettings({ conversations, notify }: { conversations: Conversation[]; notify: (text: string) => void }) {
   // The last answers show at once and a fresh copy loads quietly behind them.
-  const list = useResource<NotificationState>("notifications", () => api<NotificationState>("/notifications"), couldNotLoad);
+  const list = useResource<NotificationState>(
+    "notifications",
+    () => api<NotificationState>("/notifications"),
+    couldNotLoad,
+    { enabled: false },
+  );
   const here = useResource<{ id: string | null }>(
     "notifications-this-device",
     async () => ({ id: (await thisDevice())?.id ?? null }),
     couldNotLoad,
+    { enabled: false },
   );
   const state = list.data;
   const mine = here.data ? here.data.id : null;
@@ -59,16 +65,29 @@ export function NotificationSettings({ conversations, notify }: { conversations:
   const [name, setName] = useState(deviceName);
   const [editing, setEditing] = useState("");
   const unsupported = pushUnsupported();
+  const mounted = useRef(true);
+  const refreshingAll = useRef<Promise<void> | null>(null);
 
   const setMine = (id: string | null) => here.set({ id });
   const load = () => list.refresh();
   // Looking up this device tells the server it is still here, so list again after.
-  const refreshAll = async () => {
-    await here.refresh();
-    if (!pushUnsupported()) await list.refresh();
+  const refreshAll = () => {
+    if (refreshingAll.current) return refreshingAll.current;
+    const run = (async () => {
+      await here.refresh();
+      if (mounted.current) await list.refresh();
+    })().finally(() => {
+      refreshingAll.current = null;
+    });
+    refreshingAll.current = run;
+    return run;
   };
   useEffect(() => {
+    mounted.current = true;
     void refreshAll();
+    return () => {
+      mounted.current = false;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -119,7 +138,7 @@ export function NotificationSettings({ conversations, notify }: { conversations:
         ) : checking ? (
           here.error ? (
             <Notice tone="bad" role="alert">
-              Couldn’t check whether this device is on. <button type="button" className="small ghost" onClick={() => void here.refresh()}>Try again</button>
+              Couldn’t check whether this device is on. <button type="button" className="small ghost" onClick={() => void refreshAll()}>Try again</button>
             </Notice>
           ) : (
             <LoadingState what="this device" />

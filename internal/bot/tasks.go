@@ -163,12 +163,17 @@ type Tasks struct {
 	Probe time.Duration
 	now   func() time.Time
 
-	mu      sync.Mutex
-	stamp   time.Time
-	loaded  bool
-	cfg     WorkerConfig
-	workers map[string]*HTTPDownloader
+	mu          sync.Mutex
+	stamp       time.Time
+	loaded      bool
+	cfg         WorkerConfig
+	workers     map[string]*HTTPDownloader
+	statusGen   uint64
+	statusAt    time.Time
+	statusCache []WorkerStatus
 }
+
+const statusCacheTTL = 30 * time.Second
 
 func tokenKey(name string) string { return "worker_token:" + name }
 
@@ -227,6 +232,9 @@ func (t *Tasks) current() (WorkerConfig, map[string]*HTTPDownloader, error) {
 		workers[w.Name] = &HTTPDownloader{Endpoint: w.Endpoint, Token: token, Remote: remote}
 	}
 	t.cfg, t.workers, t.stamp, t.loaded = cfg, workers, stamp, true
+	t.statusGen++
+	t.statusCache = nil
+	t.statusAt = time.Time{}
 	return cfg, workers, nil
 }
 
@@ -294,6 +302,9 @@ func (t *Tasks) Save(cfg WorkerConfig, tokens map[string]string) error {
 	}
 	t.mu.Lock()
 	t.loaded = false // reload even if the clock didn't move the file's time
+	t.statusGen++
+	t.statusCache = nil
+	t.statusAt = time.Time{}
 	t.mu.Unlock()
 	return nil
 }
@@ -307,12 +318,48 @@ type WorkerStatus struct {
 	Tasks    map[string]int `json:"tasks"`
 }
 
-// Status probes every worker, local first.
+func cloneStatus(in []WorkerStatus) []WorkerStatus {
+	out := make([]WorkerStatus, len(in))
+	for i, s := range in {
+		tasks := make(map[string]int, len(s.Tasks))
+		for k, v := range s.Tasks {
+			tasks[k] = v
+		}
+		s.Tasks = tasks
+		out[i] = s
+	}
+	return out
+}
+
+// Status returns every worker's status, local first, serving a recent probe
+// from cache for statusCacheTTL.
 func (t *Tasks) Status(ctx context.Context) ([]WorkerStatus, error) {
+	return t.status(ctx, false)
+}
+
+// RefreshStatus probes every worker immediately, bypassing and updating the
+// status cache.
+func (t *Tasks) RefreshStatus(ctx context.Context) ([]WorkerStatus, error) {
+	return t.status(ctx, true)
+}
+
+func (t *Tasks) status(ctx context.Context, refresh bool) ([]WorkerStatus, error) {
 	cfg, workers, err := t.current()
 	if err != nil {
 		return nil, err
 	}
+	t.mu.Lock()
+	if !refresh && t.statusCache != nil && t.clock().Sub(t.statusAt) < statusCacheTTL {
+		cached := cloneStatus(t.statusCache)
+		t.mu.Unlock()
+		return cached, nil
+	}
+	if refresh {
+		t.statusGen++
+	}
+	gen := t.statusGen
+	t.mu.Unlock()
+
 	list := []WorkerStatus{}
 	if t.Local != nil {
 		list = append(list, WorkerStatus{Name: LocalWorker, Token: true})
@@ -336,6 +383,14 @@ func (t *Tasks) Status(ctx context.Context) ([]WorkerStatus, error) {
 		}(&list[i])
 	}
 	wg.Wait()
+	if ctx.Err() == nil {
+		t.mu.Lock()
+		if t.statusGen == gen {
+			t.statusCache = cloneStatus(list)
+			t.statusAt = t.clock()
+		}
+		t.mu.Unlock()
+	}
 	return list, nil
 }
 

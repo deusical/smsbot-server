@@ -79,6 +79,9 @@ func (s *Store) SavePushSubscription(p PushSubscription) (PushSubscription, erro
 		if p.Label == "" {
 			p.Label = old.Label
 		}
+		if p.ID == old.ID && p.Endpoint == old.Endpoint && p.P256dh == old.P256dh && p.Auth == old.Auth && p.Label == old.Label {
+			return p, nil
+		}
 	} else {
 		p.Created = time.Now().UTC().Format(time.RFC3339)
 		p.Prefs = DefaultNotificationPrefs()

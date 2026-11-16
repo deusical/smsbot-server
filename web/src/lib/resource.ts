@@ -37,7 +37,7 @@ export type Resource<T> = {
   refreshing: boolean;
   /** Why the last attempt failed. With data, the page keeps showing it. */
   error: string;
-  refresh: () => Promise<void>;
+  refresh: (fresh?: boolean) => Promise<void>;
   /** Replace the kept copy, for example with the answer to a save. */
   set: (value: T) => void;
 };
@@ -49,7 +49,7 @@ export type Resource<T> = {
  */
 export function useResource<T>(
   key: string,
-  load: () => Promise<T>,
+  load: (fresh: boolean) => Promise<T>,
   describe: (e: unknown) => string,
   { enabled = true }: { enabled?: boolean } = {},
 ): Resource<T> {
@@ -62,32 +62,41 @@ export function useResource<T>(
   explain.current = describe;
   const alive = useRef(true);
   const inFlight = useRef<Promise<void> | null>(null);
+  const inFlightFresh = useRef(false);
   const current = useRef(key);
   current.current = key;
 
-  const refresh = useCallback(() => {
-    if (inFlight.current) return inFlight.current;
-    const forKey = key;
-    setRefreshing(true);
-    const run = loader
-      .current()
-      .then((data) => {
-        storeResource(forKey, data);
-        if (alive.current && current.current === forKey) {
-          setEntry({ data, at: Date.now() });
-          setError("");
-        }
-      })
-      .catch((e) => {
-        if (alive.current && current.current === forKey) setError(explain.current(e));
-      })
-      .finally(() => {
-        inFlight.current = null;
-        if (alive.current) setRefreshing(false);
-      });
-    inFlight.current = run;
-    return run;
-  }, [key]);
+  const refresh = useCallback(
+    (fresh = false): Promise<void> => {
+      if (inFlight.current) {
+        if (!fresh || inFlightFresh.current) return inFlight.current;
+        return inFlight.current.then(() => refresh(true));
+      }
+      const forKey = key;
+      inFlightFresh.current = fresh;
+      setRefreshing(true);
+      const run = loader
+        .current(fresh)
+        .then((data) => {
+          storeResource(forKey, data);
+          if (alive.current && current.current === forKey) {
+            setEntry({ data, at: Date.now() });
+            setError("");
+          }
+        })
+        .catch((e) => {
+          if (alive.current && current.current === forKey) setError(explain.current(e));
+        })
+        .finally(() => {
+          inFlight.current = null;
+          inFlightFresh.current = false;
+          if (alive.current) setRefreshing(false);
+        });
+      inFlight.current = run;
+      return run;
+    },
+    [key],
+  );
 
   useEffect(() => {
     alive.current = true;

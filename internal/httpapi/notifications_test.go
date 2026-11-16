@@ -94,7 +94,22 @@ func TestNotificationDevicesHaveTheirOwnSettings(t *testing.T) {
 	if w := ownerRequest(s, "POST", "/api/v1/notifications/devices", `{"endpoint":"https://fcm.googleapis.com/fcm/send/phone","keys":{"p256dh":"k","auth":"a"},"label":"","existing_only":true}`); w.Code != 404 {
 		t.Fatal("removed device re-registered by lookup", w.Code)
 	}
-	if w := ownerRequest(s, "POST", "/api/v1/notifications/devices", `{"endpoint":"https://fcm.googleapis.com/fcm/send/desktop","keys":{"p256dh":"k2","auth":"a2"},"label":"","existing_only":true}`); w.Code != 200 || !strings.Contains(w.Body.String(), "Legion") {
+	var before string
+	if err := s.Store.DB.QueryRow("SELECT payload FROM push_subscriptions WHERE id=?", desktop.ID).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	if w := ownerRequest(s, "POST", "/api/v1/notifications/devices", `{"endpoint":"https://fcm.googleapis.com/fcm/send/desktop","keys":{"p256dh":"synthetic-key","auth":"synthetic-auth"},"label":"","existing_only":true}`); w.Code != 200 || !strings.Contains(w.Body.String(), "Legion") {
 		t.Fatal("existing device lookup", w.Code, w.Body.String())
+	}
+	var unchanged string
+	if err := s.Store.DB.QueryRow("SELECT payload FROM push_subscriptions WHERE id=?", desktop.ID).Scan(&unchanged); err != nil || unchanged != before {
+		t.Fatal("unchanged existing_only lookup rewrote push subscription", err)
+	}
+	if w := ownerRequest(s, "POST", "/api/v1/notifications/devices", `{"endpoint":"https://fcm.googleapis.com/fcm/send/desktop","keys":{"p256dh":"k2","auth":"a2"},"label":"","existing_only":true}`); w.Code != 200 || !strings.Contains(w.Body.String(), "Legion") {
+		t.Fatal("existing device key refresh", w.Code, w.Body.String())
+	}
+	var rotated string
+	if err := s.Store.DB.QueryRow("SELECT payload FROM push_subscriptions WHERE id=?", desktop.ID).Scan(&rotated); err != nil || rotated == before {
+		t.Fatal("rotated keys were not saved", err)
 	}
 }
