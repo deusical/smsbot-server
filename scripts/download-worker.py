@@ -8,6 +8,7 @@ Subprocess output and HTTP bodies are never logged. The worker never sends
 anything; only the bot does.
 """
 import argparse
+import errno
 import importlib.util
 import ipaddress
 import re
@@ -20,7 +21,9 @@ from pathlib import Path
 import secrets
 import shutil
 import signal
+import socket
 import subprocess
+import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -34,6 +37,7 @@ DOWNLOAD_STALL_SECONDS = 300
 LEASE_SECONDS = 300
 TERMINAL_STAGES = frozenset(("complete", "failed", "expired", "cancelled"))
 CLEANUP_INTERVAL_SECONDS = 3600
+EXIT_ADDR_NOT_AVAILABLE = 75
 
 
 DEFAULT_SETTINGS = {"preset": "medium", "passes": 2, "max_attempts": 3,
@@ -686,20 +690,17 @@ def positive_days(value):
     return days
 
 
+def is_addr_not_available(error):
+    return isinstance(error, OSError) and (
+        error.errno == errno.EADDRNOTAVAIL or getattr(error, "winerror", None) == 10049
+    )
+
+
 def create_server(root, token, port, output_root=None, bind="127.0.0.1", tasks=None, slots=1, keep_days=None):
-    jobs = Jobs(root, output_root, tasks, slots)
+    address = (bind_address(bind), port)
+    jobs = None
+    pid_file = None
     stop_cleanup = threading.Event()
-    if keep_days is not None:
-        jobs.cleanup_old_jobs(keep_days)
-
-        def cleanup_loop():
-            while not stop_cleanup.wait(CLEANUP_INTERVAL_SECONDS):
-                try:
-                    jobs.cleanup_old_jobs(keep_days)
-                except Exception:
-                    pass
-
-        threading.Thread(target=cleanup_loop, daemon=True).start()
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):
@@ -801,14 +802,51 @@ def create_server(root, token, port, output_root=None, bind="127.0.0.1", tasks=N
             self.send_error(410, "async_download_required")
 
     class WorkerServer(ThreadingHTTPServer):
+        allow_reuse_address = os.name != "nt"
+
+        def server_bind(self):
+            if os.name == "nt" and hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+                self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+            super().server_bind()
+
         def server_close(self):
             stop_cleanup.set()
+            if pid_file is not None:
+                try:
+                    if pid_file.read_text(encoding="ascii").strip() == str(os.getpid()):
+                        pid_file.unlink(missing_ok=True)
+                except OSError:
+                    pass
             super().server_close()
 
-    return WorkerServer((bind_address(bind), port), Handler)
+    server = WorkerServer(address, Handler, bind_and_activate=False)
+    try:
+        server.server_bind()
+        jobs = Jobs(root, output_root, tasks, slots)
+        target_pid_file = jobs.directory / "worker.pid"
+        pid_tmp = jobs.directory / f"worker.pid.{os.getpid()}.tmp"
+        pid_tmp.write_text(f"{os.getpid()}\n", encoding="ascii")
+        pid_tmp.replace(target_pid_file)
+        pid_file = target_pid_file
+        if keep_days is not None:
+            jobs.cleanup_old_jobs(keep_days)
+
+            def cleanup_loop():
+                while not stop_cleanup.wait(CLEANUP_INTERVAL_SECONDS):
+                    try:
+                        jobs.cleanup_old_jobs(keep_days)
+                    except Exception:
+                        pass
+
+            threading.Thread(target=cleanup_loop, daemon=True).start()
+        server.server_activate()
+    except BaseException:
+        server.server_close()
+        raise
+    return server
 
 
-if __name__ == "__main__":
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--output-root", type=Path)
@@ -821,7 +859,7 @@ if __name__ == "__main__":
                              "to serve a SmsBot running on another machine")
     parser.add_argument("--keep-days", type=positive_days, default=None,
                         help="delete terminal job folders older than N days (default: off)")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     try:
         bind_address(args.bind)
     except ValueError as e:
@@ -837,8 +875,24 @@ if __name__ == "__main__":
     worker_token = args.token_file.read_text(encoding="ascii").strip()
     if len(worker_token) < 32:
         raise SystemExit("Invalid worker token file.")
-    print(f"Download worker ready on {args.bind}:{args.port}; originals remain in the configured downloads folder.", flush=True)
     tasks = load_tasks(Path(__file__).parent)
+    try:
+        server = create_server(args.root.resolve(), worker_token, args.port, output_root=args.output_root,
+                               bind=args.bind, tasks=tasks, slots=args.slots, keep_days=args.keep_days)
+    except OSError as e:
+        if is_addr_not_available(e):
+            print(f"Bind address {args.bind} is not available yet.", file=sys.stderr, flush=True)
+            raise SystemExit(EXIT_ADDR_NOT_AVAILABLE)
+        raise
+    print(f"Download worker ready on {args.bind}:{server.server_port}; originals remain in the configured downloads folder.", flush=True)
     print("Tasks: " + ", ".join(f"{n}@{t['version']}" for n, t in sorted(tasks.items())), flush=True)
-    create_server(args.root.resolve(), worker_token, args.port, output_root=args.output_root,
-                  bind=args.bind, tasks=tasks, slots=args.slots, keep_days=args.keep_days).serve_forever()
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+
+
+if __name__ == "__main__":
+    main()
