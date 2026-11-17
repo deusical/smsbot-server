@@ -1,13 +1,24 @@
 import { useEffect, useRef, useState } from "react";
 import { api, ApiError, type History, type Message } from "./api";
+import { deepEqual } from "./equal";
 import type { ThreadScroll } from "./useThreadScroll";
 
 type Changes = { messages: Message[]; deleted?: string[]; cursor: number; more: boolean };
 
-const byTime = (a: Message, b: Message) =>
-  Date.parse(a.at) - Date.parse(b.at) || a.id.localeCompare(b.id);
-const merge = (previous: Message[], next: Message[]) =>
-  [...new Map([...previous, ...next].map((m) => [m.id, m])).values()].sort(byTime);
+function sortMessagesByTime(items: Message[]): Message[] {
+  return items
+    .map((m) => ({ m, at: Date.parse(m.at) || 0 }))
+    .sort((a, b) => a.at - b.at || (a.m.id < b.m.id ? -1 : a.m.id > b.m.id ? 1 : 0))
+    .map((entry) => entry.m);
+}
+function merge(previous: Message[], next: Message[]) {
+  const m = new Map(previous.map((old) => [old.id, old]));
+  for (const item of next) {
+    const old = m.get(item.id);
+    if (!old || !deepEqual(old, item)) m.set(item.id, item);
+  }
+  return sortMessagesByTime([...m.values()]);
+}
 const matchesQuery = (m: Message, query: string) =>
   !query ||
   (m.text + "\n" + (m.attachments ?? []).map((a) => a.name).join("\n"))
@@ -88,11 +99,21 @@ export function useConversationMessages({ conversationId, base, query, changeFee
       if (generation === request.current && !next && changeCursor.current === null && result.change_cursor !== undefined)
         changeCursor.current = result.change_cursor;
       if (generation === request.current) {
-        const keepBottom = !append || viewport.nearBottom();
-        viewport.capture({ prepend: !!next, keepBottom });
-        if (append && !next && !keepBottom && result.messages.some((m) => !messagesRef.current.some((old) => old.id === m.id)))
-          viewport.noteNew();
-        setMessages((previous) => merge(append ? previous : [], result.messages));
+        const current = messagesRef.current;
+        const nextList = merge(append ? current : [], result.messages);
+        const unchanged =
+          append &&
+          nextList.length === current.length &&
+          nextList.every((m, i) => m === current[i]);
+        if (!unchanged) {
+          const keepBottom = !append || viewport.nearBottom();
+          viewport.capture({ prepend: !!next, keepBottom });
+          if (append && !next && !keepBottom) {
+            const oldIds = new Set(current.map((old) => old.id));
+            if (result.messages.some((m) => !oldIds.has(m.id))) viewport.noteNew();
+          }
+          setMessages(nextList);
+        }
         setCursor((previous) => (append && !next ? previous : result.next_cursor || ""));
         setError("");
       }
@@ -116,25 +137,36 @@ export function useConversationMessages({ conversationId, base, query, changeFee
     let finish!: () => void;
     changesDone.current = new Promise<void>((resolve) => { finish = resolve; });
     try {
+      let current = messagesRef.current;
       for (let i = 0; i < 10; i++) {
         const result: Changes = await api<Changes>(`${base}/changes?after=${changeCursor.current}`);
         if (generation !== request.current) return;
-        if (result.messages.length) {
-          const bottom = viewport.nearBottom();
-          viewport.capture({ prepend: false, keepBottom: bottom });
-          if (!bottom && result.messages.some((m) => !messagesRef.current.some((old) => old.id === m.id))) viewport.noteNew();
-        }
-        if (result.messages.length || result.deleted?.length)
-          setMessages((old) => {
-            const map = new Map(old.map((m) => [m.id, m]));
-            for (const id of result.deleted ?? []) map.delete(id);
-            // Return changes even when an edit stops matching search, so it can be removed.
-            for (const m of result.messages) {
-              if (matchesQuery(m, query)) map.set(m.id, m);
-              else map.delete(m.id);
+        if (result.messages.length || result.deleted?.length) {
+          const map = new Map(current.map((m) => [m.id, m]));
+          for (const id of result.deleted ?? []) map.delete(id);
+          // Return changes even when an edit stops matching search, so it can be removed.
+          let hasNewMatching = false;
+          for (const m of result.messages) {
+            if (!matchesQuery(m, query)) {
+              map.delete(m.id);
+              continue;
             }
-            return [...map.values()].sort(byTime);
-          });
+            const prev = map.get(m.id);
+            if (!prev) hasNewMatching = true;
+            if (!prev || !deepEqual(prev, m)) map.set(m.id, m);
+          }
+          const nextList = sortMessagesByTime([...map.values()]);
+          const changed =
+            nextList.length !== current.length ||
+            nextList.some((m, idx) => m !== current[idx]);
+          if (changed) {
+            const bottom = viewport.nearBottom();
+            viewport.capture({ prepend: false, keepBottom: bottom });
+            if (!bottom && hasNewMatching) viewport.noteNew();
+            current = nextList;
+            setMessages(nextList);
+          }
+        }
         changeCursor.current = result.cursor;
         setError("");
         if (!result.more) break;

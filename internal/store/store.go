@@ -191,7 +191,9 @@ func (s *Store) migrate() error {
 
 const jobIndexes = `CREATE INDEX IF NOT EXISTS jobs_state_created ON jobs(state,created);
 CREATE INDEX IF NOT EXISTS jobs_created ON jobs(created);
-CREATE INDEX IF NOT EXISTS jobs_open_plan ON jobs(created) WHERE plan!='';`
+CREATE INDEX IF NOT EXISTS jobs_open_plan ON jobs(created) WHERE plan!='';
+CREATE INDEX IF NOT EXISTS jobs_conversation_txn ON jobs(conversation,txn);
+CREATE INDEX IF NOT EXISTS message_alias_message ON message_alias(message);`
 
 // messageMetaChange puts a message on the change feed when anything a dashboard
 // shows from its metadata changes: delivery status, who sent it (origin) and who

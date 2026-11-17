@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   api,
   inboxAllows,
@@ -58,14 +58,26 @@ export function ConversationsPage({
   const searchBox = useRef<HTMLInputElement>(null);
   const { markSeen, isUnread } = useSeen();
   const typing = useTyping(!!state?.capabilities.includes("typing") && !!inbox?.enabled);
-  const visible = sortConversations(conversations).filter(
-    (c) =>
-      (filter === "all" ||
-        (filter === "enrolled" && c.enrolled) ||
-        (filter === "available" && !c.enrolled && !c.group && c.writable)) &&
-      `${c.label} ${c.protocol}`.toLowerCase().includes(search.toLowerCase()),
+  const sorted = useMemo(() => sortConversations(conversations), [conversations]);
+  const enrolledCount = useMemo(
+    () => conversations.reduce((n, c) => n + (c.enrolled ? 1 : 0), 0),
+    [conversations],
   );
-  const current = conversations.find((c) => c.id === selected);
+  const visible = useMemo(() => {
+    const q = search.toLowerCase();
+    return sorted.filter(
+      (c) =>
+        (filter === "all" ||
+          (filter === "enrolled" && c.enrolled) ||
+          (filter === "available" && !c.enrolled && !c.group && c.writable)) &&
+        (!q || `${c.label} ${c.protocol}`.toLowerCase().includes(q)),
+    );
+  }, [sorted, filter, search]);
+  const current = useMemo(
+    () => conversations.find((c) => c.id === selected),
+    [conversations, selected],
+  );
+  const handleBack = useCallback(() => onSelect(""), [onSelect]);
   const open = (c: Conversation) => c.archived || c.enrolled || inboxAllows(inbox, c);
   // An open conversation counts as read, including messages that arrive while it is open.
   useEffect(() => markSeen(current), [current?.id, current?.last_message_at]);
@@ -103,33 +115,36 @@ export function ConversationsPage({
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, []);
-  const toggle = async (c: Conversation) => {
-    if (togglingRef.current.has(c.id)) return;
-    togglingRef.current.add(c.id);
-    const next = !c.enrolled;
-    setToggling((prev) => ({ ...prev, [c.id]: true }));
-    try {
-      if (next) {
-        await api("/enrollment", "POST", {
-          conversation_id: c.id,
-          participant_id: c.participant_id,
+  const toggle = useCallback(
+    async (c: Conversation) => {
+      if (togglingRef.current.has(c.id)) return;
+      togglingRef.current.add(c.id);
+      const next = !c.enrolled;
+      setToggling((prev) => ({ ...prev, [c.id]: true }));
+      try {
+        if (next) {
+          await api("/enrollment", "POST", {
+            conversation_id: c.id,
+            participant_id: c.participant_id,
+          });
+        } else {
+          await api(`/enrollment/${encodeURIComponent(c.id)}`, "DELETE");
+        }
+        onPatchConversation(c.id, { enrolled: next });
+      } catch (e) {
+        onError(e);
+        onRefresh();
+      } finally {
+        togglingRef.current.delete(c.id);
+        setToggling((prev) => {
+          const copy = { ...prev };
+          delete copy[c.id];
+          return copy;
         });
-      } else {
-        await api(`/enrollment/${encodeURIComponent(c.id)}`, "DELETE");
       }
-      onPatchConversation(c.id, { enrolled: next });
-    } catch (e) {
-      onError(e);
-      onRefresh();
-    } finally {
-      togglingRef.current.delete(c.id);
-      setToggling((prev) => {
-        const copy = { ...prev };
-        delete copy[c.id];
-        return copy;
-      });
-    }
-  };
+    },
+    [onPatchConversation, onError, onRefresh],
+  );
   const enrollSwitch = (c: Conversation, compact: boolean) => (
     <Switch
       label={compact ? `Bot replies for ${c.label}` : "Bot replies"}
@@ -138,6 +153,32 @@ export function ConversationsPage({
       disabled={!!toggling[c.id] || c.group || !c.writable}
       onChange={() => void toggle(c)}
     />
+  );
+  const currentToggling = current ? !!toggling[current.id] : false;
+  const threadEnrollControl = useMemo(() => {
+    if (!current) return undefined;
+    if (current.group) {
+      return (
+        <GroupBot
+          conversation={current}
+          onPatchConversation={onPatchConversation}
+          onRefresh={onRefresh}
+          onError={onError}
+        />
+      );
+    }
+    return (
+      <Switch
+        label="Bot replies"
+        checked={current.enrolled}
+        disabled={currentToggling || current.group || !current.writable}
+        onChange={() => void toggle(current)}
+      />
+    );
+  }, [current, currentToggling, onPatchConversation, onRefresh, onError, toggle]);
+  const threadInbox = useMemo(
+    () => (current && inboxAllows(inbox, current) ? inbox : undefined),
+    [current, inbox],
   );
   return (
     <div className={"messenger" + (current ? " has-thread" : "")}>
@@ -170,7 +211,7 @@ export function ConversationsPage({
               {
                 value: "enrolled",
                 label: "Bot on",
-                count: conversations.filter((c) => c.enrolled).length,
+                count: enrolledCount,
               },
               { value: "available", label: "Bot off" },
             ]}
@@ -275,24 +316,13 @@ export function ConversationsPage({
           <ConversationHistory
             key={current.id}
             conversation={current}
-            inbox={inboxAllows(inbox, current) ? inbox : undefined}
+            inbox={threadInbox}
             state={state}
             busy={busy}
             act={act}
-            enrollControl={
-              current.group ? (
-                <GroupBot
-                  conversation={current}
-                  onPatchConversation={onPatchConversation}
-                  onRefresh={onRefresh}
-                  onError={onError}
-                />
-              ) : (
-                enrollSwitch(current, false)
-              )
-            }
+            enrollControl={threadEnrollControl}
             typing={typing.has(current.id)}
-            onBack={() => onSelect("")}
+            onBack={handleBack}
             onResume={onResume}
           />
         ) : (

@@ -9,6 +9,7 @@ import {
   type Model,
 } from "./api";
 import { peekResource, storeResource } from "./resource";
+import { deepEqual } from "./equal";
 
 /** What one settings load returns, kept so a refresh starts with it. */
 type Loaded = {
@@ -62,8 +63,7 @@ export function failure(e: unknown) {
     : "Could not reach the server.";
 }
 
-const same = (a: unknown, b: unknown) =>
-  JSON.stringify(a) === JSON.stringify(b);
+const same = deepEqual;
 
 /** Returns a reason the draft cannot be saved, or "" when it looks valid. */
 function validate(c: Configuration): string {
@@ -113,6 +113,7 @@ export function useWorkspace(
   signedIn: boolean,
   inboxSaved: InboxSettings | null,
   onInboxSaved: (s: InboxSettings) => void,
+  needsCatalog = true,
 ) {
   const [config, setConfig] = useState<Configuration | null>(null),
     [saved, setSaved] = useState<Configuration | null>(null),
@@ -132,16 +133,34 @@ export function useWorkspace(
   );
   const lastInbox = useRef(inboxSaved);
   const [loads, setLoads] = useState(0);
+  const configLoadedAt = useRef(-1);
+  const catalogLoadedAt = useRef(-1);
   const savedRef = useRef(saved);
   savedRef.current = saved;
   useEffect(() => {
     if (!signedIn) {
       setConfig(null);
       setSaved(null);
+      setModels([]);
+      setOpenRouterConfigured(false);
+      setCompatible({ base_url: "https://api.openai.com/v1", configured: false });
+      setLoadError("");
+      setSaveError("");
+      setLoadedAt(null);
       setInboxDraft(null);
+      setRefreshing(false);
       lastInbox.current = null;
+      configLoadedAt.current = -1;
+      catalogLoadedAt.current = -1;
       return;
     }
+    const fetchConfig = configLoadedAt.current < loads || !savedRef.current;
+    const fetchCatalog = needsCatalog && catalogLoadedAt.current < loads;
+    if (!fetchConfig && !fetchCatalog) {
+      setRefreshing(false);
+      return;
+    }
+    const targetLoad = loads;
     let active = true;
     let retry: ReturnType<typeof setTimeout> | undefined;
     // Show what was loaded before right away, while a fresh copy loads. It is
@@ -157,29 +176,43 @@ export function useWorkspace(
     }
     setRefreshing(true);
     Promise.all([
-      api<Configuration>("/config"),
-      api<Model[]>("/models"),
-      api<{ configured: boolean }>("/provider-key"),
-      api<CompatibleProviderStatus>("/compatible-provider"),
+      fetchConfig ? api<Configuration>("/config") : Promise.resolve(null),
+      fetchCatalog ? api<Model[]>("/models") : Promise.resolve(null),
+      fetchCatalog
+        ? api<{ configured: boolean }>("/provider-key")
+        : Promise.resolve(null),
+      fetchCatalog
+        ? api<CompatibleProviderStatus>("/compatible-provider")
+        : Promise.resolve(null),
     ])
       .then(([c, m, k, p]) => {
         if (!active) return;
-        const value = normalize(c);
-        // A reload that lands after the user starts typing must not erase the draft.
         const previous = savedRef.current;
-        setSaved(value);
-        setConfig((draft) =>
-          draft && previous && !same(draft, previous) ? draft : value,
-        );
-        setModels(m ?? []);
-        setOpenRouterConfigured(k.configured);
-        setCompatible(p);
+        const value = c ? normalize(c) : previous!;
+        if (c) {
+          configLoadedAt.current = targetLoad;
+          // A reload that lands after the user starts typing must not erase the draft.
+          setSaved(value);
+          setConfig((draft) =>
+            draft && previous && !same(draft, previous) ? draft : value,
+          );
+        }
+        if (fetchCatalog && m !== null && k !== null && p !== null) {
+          catalogLoadedAt.current = targetLoad;
+          setModels(m ?? []);
+          setOpenRouterConfigured(k.configured);
+          setCompatible(p);
+          storeResource<Loaded>(keptKey, {
+            config: value,
+            models: m ?? [],
+            openRouterConfigured: k.configured,
+            compatible: p,
+          });
+        } else if (c) {
+          keepConfig(value);
+        }
         setLoadError("");
         setLoadedAt(Date.now());
-        storeResource<Loaded>(
-          keptKey,
-          { config: value, models: m ?? [], openRouterConfigured: k.configured, compatible: p },
-        );
       })
       .catch((e) => {
         if (!active) return;
@@ -195,7 +228,7 @@ export function useWorkspace(
       active = false;
       clearTimeout(retry);
     };
-  }, [signedIn, loads]);
+  }, [signedIn, loads, needsCatalog]);
   // Polling may update the saved inbox version, but must not erase an open draft.
   useEffect(() => {
     const previous = lastInbox.current;

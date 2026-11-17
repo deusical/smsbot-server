@@ -117,13 +117,15 @@ export function modelName(model: Model) {
     : model.name;
 }
 
+const emptyFavorites: string[] = [];
+
 /** Searchable model combobox; favorites float to the top and can be starred inline. */
 export function ModelPicker({
   label,
   value,
   models,
   onChange,
-  favorites = [],
+  favorites = emptyFavorites,
   onToggleFavorite,
   defaultLabel,
   hint,
@@ -144,20 +146,34 @@ export function ModelPicker({
   const root = useRef<HTMLDivElement>(null),
     input = useRef<HTMLInputElement>(null);
   const selected = models.find((m) => m.id === value);
+  const indexed = useMemo(
+    () =>
+      open
+        ? models.map((m) => ({
+            model: m,
+            key: `${m.name} ${m.id} ${m.provider ?? ""}`.toLowerCase(),
+          }))
+        : [],
+    [open, models],
+  );
+  const favSet = useMemo(() => new Set(favorites), [favorites]);
   const matches = useMemo(() => {
+    if (!open) return [];
     const q = search.toLowerCase();
-    const found = models.filter((m) =>
-      `${m.name} ${m.id} ${m.provider ?? ""}`.toLowerCase().includes(q),
-    );
-    found.sort(
-      (a, b) => +favorites.includes(b.id) - +favorites.includes(a.id),
-    );
+    const found = q
+      ? indexed.filter((x) => x.key.includes(q)).map((x) => x.model)
+      : models.slice();
+    if (favSet.size > 0) {
+      found.sort((a, b) => +favSet.has(b.id) - +favSet.has(a.id));
+    }
     return found.slice(0, 80);
-  }, [models, search, favorites]);
-  const options: { id: string; label: string; model?: Model }[] = [
-    ...(defaultLabel !== undefined ? [{ id: "", label: defaultLabel }] : []),
-    ...matches.map((m) => ({ id: m.id, label: modelName(m), model: m })),
-  ];
+  }, [open, indexed, models, search, favSet]);
+  const options: { id: string; label: string; model?: Model }[] = open
+    ? [
+        ...(defaultLabel !== undefined ? [{ id: "", label: defaultLabel }] : []),
+        ...matches.map((m) => ({ id: m.id, label: modelName(m), model: m })),
+      ]
+    : [];
   useEffect(() => {
     if (!open) return;
     const close = (e: MouseEvent) => {
@@ -251,10 +267,10 @@ export function ModelPicker({
                   <button
                     type="button"
                     className={
-                      "star" + (favorites.includes(o.id) ? " on" : "")
+                      "star" + (favSet.has(o.id) ? " on" : "")
                     }
                     aria-label={
-                      (favorites.includes(o.id) ? "Unfavorite " : "Favorite ") +
+                      (favSet.has(o.id) ? "Unfavorite " : "Favorite ") +
                       o.label
                     }
                     onClick={(e) => {
@@ -265,7 +281,7 @@ export function ModelPicker({
                     <Icon
                       name="star"
                       size={15}
-                      filled={favorites.includes(o.id)}
+                      filled={favSet.has(o.id)}
                     />
                   </button>
                 )}

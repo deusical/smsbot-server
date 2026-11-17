@@ -1685,6 +1685,10 @@ components:
         conversations_revision:
           type: string
           description: Owner-only counter that changes when the phone reports activity, a message is saved, or local conversation state (enrollment, shared group AI, collection consent) changes; the dashboard refetches its conversation list only when it changes.
+        inbox_revision:
+          type: integer
+          minimum: 0
+          description: Current revision of `/inbox/settings`, letting the dashboard skip re-reading inbox preferences while unchanged.
         inbox_capture_gap:
           type: boolean
           description: Owner-only pending history-verification warning; ranges are not confirmed outages or proof of missing messages.

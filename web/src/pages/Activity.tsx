@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { type Conversation, type Job } from "../lib/api";
 import { moduleTitle, useModules } from "../lib/modules";
 import { Icon } from "../components/Icon";
@@ -87,8 +87,11 @@ export function ActivityFeed({
     pendingStates.includes(j.state) || j.state === "submitting";
   const current = (j: Job) =>
     running(j) ? j.steps?.find((s) => !s.done) : undefined;
-  const label = (id: string) =>
-    conversations.find((c) => c.id === id)?.label ?? "Unknown conversation";
+  const labelMap = useMemo(
+    () => new Map(conversations.map((c) => [c.id, c.label])),
+    [conversations],
+  );
+  const label = (id: string) => labelMap.get(id) ?? "Unknown conversation";
   return (
     <ul className={"feed" + (compact ? " compact" : "")}>
       {jobs.map((j) => {
@@ -297,18 +300,52 @@ export function ActivityPage({
 }) {
   const [filter, setFilter] = useState<Filter>("all"),
     [search, setSearch] = useState("");
-  const label = (id: string) =>
-    conversations.find((c) => c.id === id)?.label ?? "";
-  const shown = jobs.filter(
-    (j) =>
-      matches(j, filter) &&
-      `${j.command} ${label(j.conversation_id)} ${stateLabel(j.state)} ${j.code ?? ""} ${(j.used_tools ?? []).join(" ")} ${jobResult(j)}`
-        .toLowerCase()
-        .includes(search.toLowerCase()),
+  const labelMap = useMemo(
+    () => new Map(conversations.map((c) => [c.id, c.label])),
+    [conversations],
   );
-  const known = jobs.filter((j) => j.cost !== undefined),
-    unknown = jobs.filter((j) => j.model && j.cost === undefined).length;
-  const count = (f: Filter) => jobs.filter((j) => matches(j, f)).length;
+  const summary = useMemo(() => {
+    let review = 0,
+      pending = 0,
+      complete = 0,
+      attention = 0,
+      uncertain = 0,
+      knownCount = 0,
+      spend = 0,
+      unknown = 0;
+    for (const j of jobs) {
+      if (j.state === "awaiting_approval") review++;
+      if (pendingStates.includes(j.state)) pending++;
+      if (completedStates.includes(j.state)) complete++;
+      if (stateTone(j.state) === "bad") attention++;
+      if (j.state === "unknown_submission") uncertain++;
+      if (j.cost !== undefined) {
+        knownCount++;
+        spend += j.cost;
+      } else if (j.model) {
+        unknown++;
+      }
+    }
+    return {
+      counts: { all: jobs.length, review, pending, complete, attention },
+      uncertain,
+      knownCount,
+      spend,
+      unknown,
+    };
+  }, [jobs]);
+  const shown = useMemo(() => {
+    const q = search.toLowerCase();
+    return jobs.filter(
+      (j) =>
+        matches(j, filter) &&
+        (!q ||
+          `${j.command} ${labelMap.get(j.conversation_id) ?? ""} ${stateLabel(j.state)} ${j.code ?? ""} ${(j.used_tools ?? []).join(" ")} ${jobResult(j)}`
+            .toLowerCase()
+            .includes(q)),
+    );
+  }, [jobs, filter, search, labelMap]);
+  const count = (f: Filter) => summary.counts[f];
   return (
     <div className="page-stack">
       <div className="metric-strip activity-metrics">
@@ -318,9 +355,7 @@ export function ActivityPage({
         </div>
         <div className="metric">
           <span>Uncertain</span>
-          <strong>
-            {jobs.filter((j) => j.state === "unknown_submission").length}
-          </strong>
+          <strong>{summary.uncertain}</strong>
         </div>
         <div className="metric">
           <span>Requests loaded</span>
@@ -329,13 +364,11 @@ export function ActivityPage({
         <div className="metric">
           <span>Reported spend</span>
           <strong>
-            {known.length
-              ? "$" + known.reduce((t, j) => t + j.cost!, 0).toFixed(4)
-              : "—"}
+            {summary.knownCount ? "$" + summary.spend.toFixed(4) : "—"}
           </strong>
-          {unknown > 0 && (
+          {summary.unknown > 0 && (
             <small>
-              {unknown} request{unknown === 1 ? "" : "s"} with unavailable cost
+              {summary.unknown} request{summary.unknown === 1 ? "" : "s"} with unavailable cost
             </small>
           )}
         </div>

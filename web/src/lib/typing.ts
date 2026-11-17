@@ -35,9 +35,14 @@ export function useTyping(enabled: boolean): ReadonlySet<string> {
     };
     void poll();
     const timer = setInterval(() => void poll(), 2000);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void poll();
+    };
+    document.addEventListener("visibilitychange", onVisible);
     return () => {
       stopped = true;
       clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
     };
   }, [enabled]);
   return ids;

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"github.com/deusical/smsbot-server/internal/media"
 	"github.com/deusical/smsbot-server/internal/transport"
+	"strings"
 	"time"
 )
 
@@ -216,21 +217,134 @@ func (s *Store) saveInteraction(tx *sql.Tx, conv, id string, v *transport.Messag
 	}
 	return nil
 }
+
+func placeholders(n int) string {
+	return strings.TrimSuffix(strings.Repeat("?,", n), ",")
+}
+
 func (s *Store) EnrichMessages(conv string, messages []Message) error {
-	for n := range messages {
-		m := &messages[n]
-		v, err := s.Interaction(conv, m.ID)
-		if err != nil {
+	if len(messages) == 0 {
+		return nil
+	}
+	args := make([]any, 0, len(messages)+1)
+	args = append(args, conv)
+	for i := range messages {
+		args = append(args, messages[i].ID)
+	}
+	rows, err := s.DB.Query(`SELECT i.message,i.payload FROM message_interactions i JOIN messages m ON m.id=i.message WHERE m.conversation=? AND m.id IN (`+placeholders(len(messages))+`)`, args...)
+	if err != nil {
+		return err
+	}
+	interactions := make(map[string]*transport.MessageInteraction, len(messages))
+	for rows.Next() {
+		var id, enc string
+		if err = rows.Scan(&id, &enc); err != nil {
+			rows.Close()
 			return err
 		}
+		v, openErr := s.OpenInteraction(id, enc)
+		if openErr != nil {
+			rows.Close()
+			return openErr
+		}
+		interactions[id] = v
+	}
+	if err = rows.Close(); err != nil {
+		return err
+	}
+	if err = rows.Err(); err != nil {
+		return err
+	}
+	if len(interactions) == 0 {
+		for n := range messages {
+			messages[n].Protocol = "unknown"
+		}
+		return nil
+	}
+
+	targetArgs := make([]any, 0, len(interactions))
+	hashToID := make(map[string]string, len(interactions))
+	aliasArgs := []any{conv}
+	seenAlias := map[string]bool{}
+	var wantAliases []string
+	for id, v := range interactions {
+		h := Hash(conv + "\x00" + id)
+		if _, dup := hashToID[h]; !dup {
+			hashToID[h] = id
+			targetArgs = append(targetArgs, h)
+		}
+		if v.ReplyTo != "" {
+			a := Hash(conv + "\x00" + v.ReplyTo)
+			if !seenAlias[a] {
+				seenAlias[a] = true
+				wantAliases = append(wantAliases, a)
+				aliasArgs = append(aliasArgs, a)
+			}
+		}
+	}
+
+	pendingByID := map[string]string{}
+	if len(targetArgs) > 0 {
+		mRows, mErr := s.DB.Query(`SELECT a.target,a.job FROM interaction_intents a JOIN jobs j ON j.id=a.job WHERE a.target IN (`+placeholders(len(targetArgs))+`) AND j.state IN ('queued','generating','submitting','submitted','unknown_submission')`, targetArgs...)
+		if mErr != nil {
+			return mErr
+		}
+		for mRows.Next() {
+			var target, job string
+			if err = mRows.Scan(&target, &job); err != nil {
+				mRows.Close()
+				return err
+			}
+			if id := hashToID[target]; id != "" && pendingByID[id] == "" {
+				pendingByID[id] = job
+			}
+		}
+		if err = mRows.Close(); err != nil {
+			return err
+		}
+		if err = mRows.Err(); err != nil {
+			return err
+		}
+	}
+
+	type quotedInfo struct {
+		id, direction, text string
+	}
+	quotesByAlias := map[string]quotedInfo{}
+	if len(wantAliases) > 0 {
+		qRows, qErr := s.DB.Query(`SELECT a.alias,m.id,m.direction,m.payload FROM messages m JOIN message_alias a ON a.message=m.id WHERE m.conversation=? AND a.alias IN (`+placeholders(len(wantAliases))+`)`, aliasArgs...)
+		if qErr != nil {
+			return qErr
+		}
+		for qRows.Next() {
+			var alias, qid, dir, payload string
+			if err = qRows.Scan(&alias, &qid, &dir, &payload); err != nil {
+				qRows.Close()
+				return err
+			}
+			b, openErr := s.Vault.Open("message:"+qid, payload)
+			if openErr != nil {
+				qRows.Close()
+				return openErr
+			}
+			quotesByAlias[alias] = quotedInfo{id: qid, direction: dir, text: string(b)}
+		}
+		if err = qRows.Close(); err != nil {
+			return err
+		}
+		if err = qRows.Err(); err != nil {
+			return err
+		}
+	}
+
+	for n := range messages {
+		m := &messages[n]
+		v := interactions[m.ID]
 		if v == nil {
 			m.Protocol = "unknown"
 			continue
 		}
-		m.PendingAction, err = s.ActiveMutation(conv, m.ID)
-		if err != nil {
-			return err
-		}
+		m.PendingAction = pendingByID[m.ID]
 		m.Protocol = v.Protocol
 		if m.Direction == "incoming" {
 			m.Sender = v.Sender
@@ -248,21 +362,18 @@ func (s *Store) EnrichMessages(conv string, messages []Message) error {
 		if v.ReplyTo != "" {
 			q := &Quote{Text: "Original message unavailable"}
 			m.Quote = q
-			id, direction, body, ok, err := s.QuotedMessage(conv, v.ReplyTo)
-			if err != nil {
-				return err
-			}
+			found, ok := quotesByAlias[Hash(conv+"\x00"+v.ReplyTo)]
 			if !ok {
 				continue
 			}
-			text := []rune(body)
+			text := []rune(found.text)
 			if len(text) > 180 {
 				text = append(text[:180], '…')
 			}
 			if len(text) == 0 {
 				text = []rune("Attachment")
 			}
-			*q = Quote{ID: id, Text: string(text), Direction: direction, Available: true}
+			*q = Quote{ID: found.id, Text: string(text), Direction: found.direction, Available: true}
 		}
 	}
 	return nil

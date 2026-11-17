@@ -99,4 +99,45 @@ describe("useDashboard", () => {
     expect(result.current.session.signedIn).toBe(false);
     expect(result.current.dashboard.jobs).toEqual([]);
   });
+
+  it("skips unchanged inbox settings on idle polls and keeps object references stable without re-rendering", async () => {
+    let inboxRev = 1;
+    let renders = 0;
+    handler = (url) => {
+      if (url.endsWith("/state")) return json(state("r1", { inbox_revision: inboxRev }));
+      if (url.endsWith("/inbox/settings")) return json({ enabled: true, revision: inboxRev, conversations: [] });
+      if (url.endsWith("/activity")) return json([{ id: "j1", conversation_id: "c1", command: "!ping", state: "submitted", created_at: "2026-11-16T00:00:00Z" }]);
+      return json({ conversations: [{ id: "c1", label: "Alice", participant_id: "p1", protocol: "RCS", group: false, writable: true, enrolled: true }], next_cursor: "" });
+    };
+    const { result } = renderHook(() => {
+      renders++;
+      const session = useSession();
+      const dashboard = useDashboard(session, () => {});
+      return { dashboard };
+    });
+    await settle();
+    expect(calls.filter((u) => u.endsWith("/inbox/settings"))).toHaveLength(1);
+    const snapState = result.current.dashboard.state;
+    const snapInbox = result.current.dashboard.inbox;
+    const snapJobs = result.current.dashboard.jobs;
+    const snapConvs = result.current.dashboard.conversations;
+    const firstCheck = result.current.dashboard.getChecked();
+    const rendersAfterInitial = renders;
+
+    // Three idle 3-second polls: zero /inbox/settings calls, zero re-renders, identical references.
+    await act(async () => { await vi.advanceTimersByTimeAsync(9000); });
+    expect(calls.filter((u) => u.endsWith("/inbox/settings"))).toHaveLength(1);
+    expect(result.current.dashboard.state).toBe(snapState);
+    expect(result.current.dashboard.inbox).toBe(snapInbox);
+    expect(result.current.dashboard.jobs).toBe(snapJobs);
+    expect(result.current.dashboard.conversations).toBe(snapConvs);
+    expect(renders).toBe(rendersAfterInitial);
+    expect(result.current.dashboard.getChecked()!.getTime()).toBeGreaterThan(firstCheck!.getTime());
+
+    // Bumping inbox_revision on /state fetches /inbox/settings once.
+    inboxRev = 2;
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+    expect(calls.filter((u) => u.endsWith("/inbox/settings"))).toHaveLength(2);
+    expect(result.current.dashboard.inbox?.revision).toBe(2);
+  });
 });

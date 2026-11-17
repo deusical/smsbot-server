@@ -187,6 +187,7 @@ func (svc *Service) LocalArchiveAttachment(conv, message, attachment string) (me
 		if legacy, _ := svc.legacyGooglePreview(conv, message, file); legacy {
 			return media.File{}, errors.New("original_requires_refresh")
 		}
+		file.ReadLimit = settings.FileLimits().FileBytes()
 	}
 	return file, err
 }

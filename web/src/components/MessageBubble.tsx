@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { memo, type ReactNode } from "react";
 import type { Message } from "../lib/api";
 import type { Pending } from "../lib/pendingSends";
 import { MessageAttachment, PendingFile } from "./Attachments";
@@ -12,7 +12,7 @@ const statusLabels: Record<string, string> = { submitted: "Sent", delivered: "De
 const statusLabel = (status: string) => statusLabels[status] ?? status;
 
 /** One saved message: quote, files, text, sender, time, edit and status. */
-export function MessageBubble({
+export const MessageBubble = memo(function MessageBubble({
   message: m,
   label,
   base,
@@ -82,10 +82,10 @@ export function MessageBubble({
       {actions}
     </div>
   );
-}
+});
 
 /** A message on its way: sending, sent, or failed with its safe next steps. */
-export function PendingBubble({
+export const PendingBubble = memo(function PendingBubble({
   pending: p,
   label,
   canSend,
@@ -96,9 +96,9 @@ export function PendingBubble({
   pending: Pending;
   label: string;
   canSend: boolean;
-  onRetry: () => void;
-  onEdit: () => void;
-  onDismiss: () => void;
+  onRetry: (p: Pending) => void;
+  onEdit: (p: Pending) => void;
+  onDismiss: (key: string) => void;
 }) {
   return (
     <div className="message-group pending-send">
@@ -127,15 +127,15 @@ export function PendingBubble({
             {/* Only an intent the server deduplicates may be retried; a definite
                 non-send may be edited; an uncertain one is never resent here. */}
             {p.failure === "unconfirmed" && (
-              <button type="button" className="small primary" disabled={!canSend} title={canSend ? undefined : "Sending is unavailable right now"} onClick={onRetry}>Retry sending</button>
+              <button type="button" className="small primary" disabled={!canSend} title={canSend ? undefined : "Sending is unavailable right now"} onClick={() => onRetry(p)}>Retry sending</button>
             )}
             {p.failure === "not_sent" && (
-              <button type="button" className="small" onClick={onEdit}>Edit and resend</button>
+              <button type="button" className="small" onClick={() => onEdit(p)}>Edit and resend</button>
             )}
-            <button type="button" className="small ghost" onClick={onDismiss}>Dismiss</button>
+            <button type="button" className="small ghost" onClick={() => onDismiss(p.key)}>Dismiss</button>
           </div>
         )}
       </div>
     </div>
   );
-}
+});

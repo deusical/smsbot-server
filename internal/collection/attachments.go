@@ -75,11 +75,13 @@ func (svc *Service) InboxAttachmentContent(ctx context.Context, conv, message, a
 	if preview && len(file.PreviewData) > 0 {
 		data = file.PreviewData
 	}
+	fetchedFromPhone := repaired
 	if len(data) == 0 {
 		source, ok := svc.Transport.(transport.FileSource)
 		if !ok {
 			return media.Info{}, nil, errors.New("attachment_unavailable")
 		}
+		fetchedFromPhone = true
 		data, err = source.DownloadFile(ctx, file)
 		if err != nil && preview && strings.HasPrefix(file.MIME, "image/") && file.ThumbnailID != "" && ctx.Err() == nil {
 			thumbnail := file
@@ -95,9 +97,12 @@ func (svc *Service) InboxAttachmentContent(ctx context.Context, conv, message, a
 			return media.Info{}, nil, err
 		}
 	}
-	verified, err := svc.lookup(ctx, conv)
-	if err != nil || verified.ParticipantID != c.ParticipantID {
-		return media.Info{}, nil, errors.New("conversation_identity_changed")
+	verified := c
+	if fetchedFromPhone {
+		verified, err = svc.lookup(ctx, conv)
+		if err != nil || verified.ParticipantID != c.ParticipantID {
+			return media.Info{}, nil, errors.New("conversation_identity_changed")
+		}
 	}
 	svc.mu.Lock()
 	defer svc.mu.Unlock()

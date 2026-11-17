@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { createRoot } from "react-dom/client";
-import { ApiError } from "./lib/api";
+import { ApiError, type State } from "./lib/api";
 import { connectionLabel } from "./lib/connection";
 import { useDashboard } from "./lib/useDashboard";
 import { useSession } from "./lib/useSession";
@@ -27,6 +27,34 @@ import {
 import "./styles/index.css";
 
 type Toast = { id: number; text: string };
+
+/** Isolates the 3-second "Last checked" timestamp so idle polls do not re-render the workspace. */
+function RailLinkState({
+  state,
+  subscribe,
+  getSnapshot,
+}: {
+  state: State | null;
+  subscribe: (fn: () => void) => () => void;
+  getSnapshot: () => Date | null;
+}) {
+  const lastUpdated = useSyncExternalStore(subscribe, getSnapshot);
+  return (
+    <span
+      className={"link-state " + (state?.transport_ready ? "ready" : "down")}
+      title={
+        lastUpdated
+          ? "Last checked " + lastUpdated.toLocaleTimeString()
+          : undefined
+      }
+    >
+      <span className="dot" />
+      {state?.transport_ready
+        ? "Phone connected"
+        : connectionLabel(state?.connection_state)}
+    </span>
+  );
+}
 
 function App() {
   // Each page has its own URL, so the browser's Back and Forward move between them.
@@ -60,11 +88,16 @@ function App() {
   const dashboardReset = useRef<() => void>(() => {});
   const dashboard = useDashboard(session, endSession);
   dashboardReset.current = dashboard.reset;
-  const { state, jobs, conversations, inbox, error, setError, lastUpdated } = dashboard;
-  const workspace = useWorkspace(signedIn, inbox, (s) => {
-    dashboard.setInbox(s);
-    void dashboard.refresh();
-  });
+  const { state, jobs, conversations, inbox, error, setError, loaded } = dashboard;
+  const workspace = useWorkspace(
+    signedIn,
+    inbox,
+    (s) => {
+      dashboard.setInbox(s);
+      void dashboard.refresh();
+    },
+    page === "Commands" || page === "Settings",
+  );
   usePendingFollower(signedIn);
   const dirty = workspace.dirty;
   const reportError = useCallback(
@@ -181,22 +214,33 @@ function App() {
     navigator.serviceWorker?.addEventListener("message", onMessage);
     return () => navigator.serviceWorker?.removeEventListener("message", onMessage);
   }, [signedIn]);
-  async function act(fn: () => Promise<unknown>, refreshAfter = true) {
-    setBusy(true);
-    setError("");
-    try {
-      await fn();
-      if (refreshAfter) await dashboard.refresh();
-    } catch (e) {
-      reportError(e);
-    } finally {
-      setBusy(false);
-    }
-  }
-  async function togglePaused() {
-    if (!state) return;
-    await act(() => dashboard.setPaused(!state.paused), false);
-  }
+  const act = useCallback(
+    async (fn: () => Promise<unknown>, refreshAfter = true) => {
+      setBusy(true);
+      setError("");
+      try {
+        await fn();
+        if (refreshAfter) await dashboard.refresh();
+      } catch (e) {
+        reportError(e);
+      } finally {
+        setBusy(false);
+      }
+    },
+    [dashboard.refresh, reportError, setError],
+  );
+  const stateRefForToggle = useRef(state);
+  stateRefForToggle.current = state;
+  const togglePaused = useCallback(async () => {
+    const cur = stateRefForToggle.current;
+    if (!cur) return;
+    await act(() => dashboard.setPaused(!cur.paused), false);
+  }, [act, dashboard.setPaused]);
+  const handleResume = useCallback(() => void togglePaused(), [togglePaused]);
+  const handleRefreshConversations = useCallback(() => {
+    dashboard.invalidateList();
+    void dashboard.refresh();
+  }, [dashboard.invalidateList, dashboard.refresh]);
   async function signOut() {
     await act(async () => {
       await session.signOut();
@@ -306,19 +350,11 @@ function App() {
           ))}
         </nav>
         <div className="rail-foot">
-          <span
-            className={
-              "link-state " + (state?.transport_ready ? "ready" : "down")
-            }
-            title={
-              lastUpdated
-                ? "Last checked " + lastUpdated.toLocaleTimeString()
-                : undefined
-            }
-          >
-            <span className="dot" />
-            {state?.transport_ready ? "Phone connected" : connectionLabel(state?.connection_state)}
-          </span>
+          <RailLinkState
+            state={state}
+            subscribe={dashboard.subscribeChecked}
+            getSnapshot={dashboard.getChecked}
+          />
         </div>
       </aside>
       <main className="workspace" id="workspace">
@@ -394,18 +430,15 @@ function App() {
             busy={busy}
             act={act}
             onPatchConversation={dashboard.patchConversation}
-            onRefresh={() => {
-              dashboard.invalidateList();
-              void dashboard.refresh();
-            }}
+            onRefresh={handleRefreshConversations}
             onError={reportError}
             selected={selected}
             onSelect={selectConversation}
             partial={dashboard.discoveryPartial}
             canLoadMore={!!inbox?.enabled && !!dashboard.conversationCursor}
             onLoadMore={loadMoreConversations}
-            onResume={() => void togglePaused()}
-            loaded={lastUpdated !== null}
+            onResume={handleResume}
+            loaded={loaded}
             loadError={error}
           />
         )}
@@ -422,7 +455,7 @@ function App() {
             conversations={conversations}
             onApprove={dashboard.approveJob}
             onCancel={dashboard.cancelJob}
-            loaded={lastUpdated !== null}
+            loaded={loaded}
             loadError={error}
           />
         )}

@@ -134,7 +134,7 @@ type AttachmentRecord struct {
 }
 
 func (s *Store) AttachmentBatch(ctx context.Context, after string, limit int) ([]AttachmentRecord, error) {
-	return s.attachmentRecords(ctx, "SELECT m.id,m.conversation,a.payload FROM messages m JOIN message_attachments a ON a.message=m.id JOIN archive_conversations c ON c.conversation=m.conversation WHERE m.id>? ORDER BY m.id LIMIT ?", after, limit)
+	return s.attachmentRecords(ctx, "SELECT m.id,m.conversation,a.payload FROM message_attachments a JOIN messages m ON m.id=a.message JOIN archive_conversations c ON c.conversation=m.conversation WHERE a.message>? ORDER BY a.message LIMIT ?", after, limit)
 }
 func (s *Store) AttachmentRangeBatch(ctx context.Context, conv, from, to, after string, limit int) ([]AttachmentRecord, error) {
 	since, err := time.Parse(time.RFC3339Nano, from)

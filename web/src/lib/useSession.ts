@@ -16,11 +16,17 @@ export function useSession() {
     () => !!window.matchMedia?.("(display-mode: standalone)")?.matches,
   );
   const generation = useRef(0);
+  const signedInRef = useRef(false);
   /** The server accepted the session cookie. */
-  const confirm = useCallback(() => setSignedIn(true), []);
+  const confirm = useCallback(() => {
+    if (signedInRef.current) return;
+    signedInRef.current = true;
+    setSignedIn(true);
+  }, []);
   /** Ends the session locally and clears sensitive in-memory state. */
   const end = useCallback(() => {
     generation.current++;
+    signedInRef.current = false;
     clearSeen();
     clearPending();
     setSignedIn(false);

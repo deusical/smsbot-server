@@ -1,5 +1,16 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+  type RefObject,
+} from "react";
 import { MessageActions } from "../components/MessageActions";
 import { Composer } from "../components/Composer";
 import { Icon } from "../components/Icon";
@@ -15,7 +26,7 @@ import {
   type Message,
   type State,
 } from "../lib/api";
-import { removePending, usePending, useSubmittedSignal } from "../lib/pendingSends";
+import { removePending, usePending, useSubmittedSignal, type Pending } from "../lib/pendingSends";
 import { useComposer } from "../lib/useComposer";
 import { useConversationMessages } from "../lib/useConversationMessages";
 import { useReadReceipts } from "../lib/useReadReceipts";
@@ -33,20 +44,43 @@ type Props = {
   onBack?: () => void;
   onResume?: () => void;
 };
+
+let dayStartMs = 0;
+let dayEndMs = 0;
+let currentYear = 0;
+let currentTzOffset = 0;
+const dayCache = new Map<string, string>();
 function dayLabel(iso: string) {
-  const d = new Date(iso),
-    today = new Date();
-  const days = Math.round(
-    (new Date(today.toDateString()).getTime() - new Date(d.toDateString()).getTime()) / 86400000,
-  );
-  if (days === 0) return "Today";
-  if (days === 1) return "Yesterday";
-  return d.toLocaleDateString([], {
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-    year: d.getFullYear() === today.getFullYear() ? undefined : "numeric",
-  });
+  const now = Date.now();
+  const tz = new Date(now).getTimezoneOffset();
+  if (now < dayStartMs || now >= dayEndMs || tz !== currentTzOffset) {
+    const today = new Date(now);
+    currentYear = today.getFullYear();
+    currentTzOffset = tz;
+    dayStartMs = new Date(currentYear, today.getMonth(), today.getDate()).getTime();
+    dayEndMs = new Date(currentYear, today.getMonth(), today.getDate() + 1).getTime();
+    dayCache.clear();
+  } else if (dayCache.size > 2000) {
+    dayCache.clear();
+  }
+  const hit = dayCache.get(iso);
+  if (hit !== undefined) return hit;
+  const d = new Date(iso);
+  const msgDayStart = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const days = Math.round((dayStartMs - msgDayStart) / 86400000);
+  const label =
+    days === 0
+      ? "Today"
+      : days === 1
+        ? "Yesterday"
+        : d.toLocaleDateString([], {
+            weekday: "short",
+            month: "short",
+            day: "numeric",
+            year: d.getFullYear() === currentYear ? undefined : "numeric",
+          });
+  dayCache.set(iso, label);
+  return label;
 }
 // Consecutive messages from the same sender read as one run: tighter spacing,
 // with the small inner corner continuing down the run.
@@ -57,23 +91,183 @@ const senderName = (c: Conversation, m: Message) =>
   c.group && m.direction === "incoming"
     ? (c.members?.find((p) => p.id === m.sender)?.name || "Someone")
     : undefined;
-const joins = (a: Message | undefined, b: Message) =>
+const joinsSameDay = (a: Message | undefined, b: Message) =>
   !!a &&
   a.direction === b.direction &&
   (a.origin ?? "") === (b.origin ?? "") &&
   (a.sender ?? "") === (b.sender ?? "") &&
-  dayLabel(a.at) === dayLabel(b.at) &&
   Math.abs(Date.parse(b.at) - Date.parse(a.at)) < 10 * 60000;
+
+type ComposerBridge = {
+  reply: (target: Message) => void;
+  retry: (p: Pending) => void;
+  edit: (p: Pending) => void;
+};
+
+/** Owns composer draft state so typing does not re-render the message list above it. */
+function ThreadComposer({
+  conversation,
+  roster,
+  inbox,
+  canSend,
+  canAttach,
+  blocked,
+  busy,
+  fullInbox,
+  textarea,
+  bridgeRef,
+  onResume,
+  footer,
+}: {
+  conversation: Conversation;
+  roster?: string;
+  inbox?: InboxSettings | null;
+  canSend: boolean;
+  canAttach: boolean;
+  blocked: string;
+  busy: boolean;
+  fullInbox: boolean;
+  textarea: RefObject<HTMLTextAreaElement | null>;
+  bridgeRef: RefObject<ComposerBridge | null>;
+  onResume?: () => void;
+  footer?: ReactNode;
+}) {
+  const composer = useComposer({
+    conversation,
+    roster,
+    inbox,
+    canSend,
+    textarea,
+    readInbox: async () => (fullInbox ? await api<InboxSettings>("/inbox/settings") : inbox),
+  });
+  useImperativeHandle(bridgeRef, () => ({
+    reply: (target) => {
+      composer.setReplyTarget(target);
+      textarea.current?.focus();
+    },
+    retry: composer.retryPending,
+    edit: composer.editPending,
+  }));
+  return (
+    <Composer
+      composer={composer}
+      textarea={textarea}
+      label={conversation.label}
+      blocked={blocked}
+      canSend={canSend}
+      canAttach={canAttach}
+      busy={busy}
+      onResume={onResume}
+      footer={footer}
+    />
+  );
+}
+
+const MessageRow = memo(function MessageRow({
+  message,
+  virtualIndex,
+  virtualStart,
+  measureElement,
+  dividerDay,
+  joinedPrev,
+  senderLabel,
+  highlighted,
+  label,
+  base,
+  fileLimitMB,
+  showActions,
+  conversationId,
+  writable,
+  roster,
+  eligibilityKey,
+  onJump,
+  onReply,
+  onChanged,
+}: {
+  message: Message;
+  virtualIndex?: number;
+  virtualStart: number | null;
+  measureElement?: (node: Element | null) => void;
+  dividerDay: string;
+  joinedPrev: boolean;
+  senderLabel?: string;
+  highlighted: boolean;
+  label: string;
+  base: string;
+  fileLimitMB: number;
+  showActions: boolean;
+  conversationId: string;
+  writable: boolean;
+  roster?: string;
+  eligibilityKey: string;
+  onJump: (id: string) => void;
+  onReply: (target: Message) => void;
+  onChanged: () => void;
+}) {
+  const actions = useMemo(
+    () =>
+      showActions ? (
+        <MessageActions
+          message={message}
+          conversation={conversationId}
+          label={label}
+          writable={writable}
+          roster={roster}
+          eligibilityKey={eligibilityKey}
+          onReply={onReply}
+          onChanged={onChanged}
+        />
+      ) : null,
+    [showActions, message, conversationId, label, writable, roster, eligibilityKey, onReply, onChanged],
+  );
+  return (
+    <div
+      data-index={virtualIndex}
+      ref={measureElement}
+      style={
+        virtualStart !== null
+          ? {
+              position: "absolute",
+              top: 0,
+              left: 0,
+              width: "100%",
+              transform: `translateY(${virtualStart}px)`,
+            }
+          : undefined
+      }
+      className="message-group"
+    >
+      {dividerDay && (
+        <div className="day" role="separator">
+          <span>{dividerDay}</span>
+        </div>
+      )}
+      <MessageBubble
+        message={message}
+        label={label}
+        base={base}
+        fileLimitMB={fileLimitMB}
+        joinedPrev={joinedPrev}
+        senderName={senderLabel}
+        highlighted={highlighted}
+        onJump={onJump}
+        actions={actions}
+      />
+    </div>
+  );
+});
 
 /**
  * One conversation: composes message synchronization, the scroll owner, read
  * receipts and the composer. Scrolling, virtualization and the visible range
  * stay together here because they depend on the same layout.
  */
-export function ConversationHistory({ conversation, state, busy, act, inbox, enrollControl, typing = false, onBack, onResume }: Props) {
+export const ConversationHistory = memo(function ConversationHistory({ conversation, state, busy, act, inbox, enrollControl, typing = false, onBack, onResume }: Props) {
   const base = `${inbox?.enabled || conversation.archived ? "/inbox" : ""}/conversations/${encodeURIComponent(conversation.id)}`;
   const scroll = useRef<HTMLDivElement>(null),
-    textarea = useRef<HTMLTextAreaElement>(null);
+    rowsContainer = useRef<HTMLDivElement>(null),
+    textarea = useRef<HTMLTextAreaElement>(null),
+    composerBridge = useRef<ComposerBridge | null>(null);
   const [search, setSearch] = useState(""),
     [searchOpen, setSearchOpen] = useState(false),
     [query, setQuery] = useState(""),
@@ -125,14 +319,17 @@ export function ConversationHistory({ conversation, state, busy, act, inbox, enr
   const canSend = !archiveReadOnly && !blocked && !busy;
   const canAttach = !!inbox?.enabled && !!state?.capabilities.includes("attachments");
   const fileLimits = inbox?.attachment_limits ?? defaultAttachmentLimits;
-  const composer = useComposer({
-    conversation,
-    roster: seenRoster,
-    inbox,
-    canSend,
-    textarea,
-    readInbox: async () => (state?.capabilities.includes("full_inbox") ? await api<InboxSettings>("/inbox/settings") : inbox),
+  const virtualized = messages.length > 300;
+  const virtualizer = useVirtualizer({
+    count: messages.length,
+    getScrollElement: () => scroll.current,
+    estimateSize: () => 110,
+    overscan: 12,
+    getItemKey: (index) => messages[index].id,
+    enabled: virtualized,
   });
+  const virtualizerRef = useRef(virtualizer);
+  virtualizerRef.current = virtualizer;
 
   // The visible time span drives viewed-section refresh and original-file priority.
   const [viewRange, setViewRange] = useState<{ since: string; until: string } | null>(null);
@@ -149,16 +346,48 @@ export function ConversationHistory({ conversation, state, busy, act, inbox, enr
   function updateViewedRange() {
     const el = scroll.current;
     if (!el) return;
-    const bounds = el.getBoundingClientRect();
-    const indices = Array.from(el.querySelectorAll<HTMLElement>("[data-message-index]"))
-      .filter((node) => {
-        const r = node.getBoundingClientRect();
-        return r.bottom >= bounds.top && r.top <= bounds.bottom;
-      })
-      .map((node) => Number(node.dataset.messageIndex));
     const rows = messagesRef.current;
-    const first = indices.length ? Math.max(0, Math.min(...indices) - 5) : Math.max(0, rows.length - 50);
-    const last = indices.length ? Math.min(rows.length - 1, Math.max(...indices) + 5) : rows.length - 1;
+    let first = Math.max(0, rows.length - 50);
+    let last = rows.length - 1;
+    if (rows.length > 300) {
+      const r = virtualizerRef.current.range;
+      if (r) {
+        first = Math.max(0, r.startIndex - 5);
+        last = Math.min(rows.length - 1, r.endIndex + 5);
+      }
+    } else if (rowsContainer.current && rowsContainer.current.children.length > 0) {
+      const bounds = el.getBoundingClientRect();
+      const children = rowsContainer.current.children;
+      // Binary search sorted message nodes instead of measuring every row on scroll.
+      let lo = 0,
+        hi = children.length - 1,
+        firstHit = -1;
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        if (children[mid].getBoundingClientRect().bottom >= bounds.top) {
+          firstHit = mid;
+          hi = mid - 1;
+        } else {
+          lo = mid + 1;
+        }
+      }
+      if (firstHit >= 0) {
+        lo = firstHit;
+        hi = children.length - 1;
+        let lastHit = firstHit;
+        while (lo <= hi) {
+          const mid = (lo + hi) >> 1;
+          if (children[mid].getBoundingClientRect().top <= bounds.bottom) {
+            lastHit = mid;
+            lo = mid + 1;
+          } else {
+            hi = mid - 1;
+          }
+        }
+        first = Math.max(0, firstHit - 5);
+        last = Math.min(rows.length - 1, lastHit + 5);
+      }
+    }
     const since = rows[first]?.at ?? new Date(Date.parse(openedAt.current) - 30 * 60 * 1000).toISOString();
     const until = el.scrollHeight - el.scrollTop - el.clientHeight < 80 ? "" : (rows[last]?.at ?? "");
     setViewRange((previous) => (previous?.since === since && previous.until === until ? previous : { since, until }));
@@ -203,44 +432,95 @@ export function ConversationHistory({ conversation, state, busy, act, inbox, enr
       if (p.phase === "sent" && p.transaction && messages.some((m) => m.id === p.transaction))
         removePending(conversation.id, p.key);
   }, [messages, pending, conversation.id]);
-  const savedIds = new Set(messages.map((m) => m.id));
-
-  const virtualized = messages.length > 300;
-  const virtualizer = useVirtualizer({
-    count: messages.length,
-    getScrollElement: () => scroll.current,
-    estimateSize: () => 110,
-    overscan: 12,
-    getItemKey: (index) => messages[index].id,
-    enabled: virtualized,
-  });
+  const savedIds = useMemo(() => new Set(messages.map((m) => m.id)), [messages]);
   const visibleRows = virtualized
-    ? virtualizer.getVirtualItems().map((row) => ({ m: messages[row.index], row }))
-    : messages.map((m) => ({ m, row: null }));
+    ? virtualizer.getVirtualItems().map((row) => ({ m: messages[row.index], index: row.index, start: row.start }))
+    : messages.map((m, index) => ({ m, index, start: null as number | null }));
 
-  async function jumpToMessage(id: string) {
-    const generation = thread.generation.current;
-    try {
-      if (query) {
-        thread.setError("Clear search to jump to the original message.");
-        return;
-      }
-      const next = await thread.windowAround(id);
-      if (!next) return;
-      const index = next.findIndex((m) => m.id === id);
-      if (index < 0) throw new Error("unavailable");
-      setHighlighted(id);
-      viewport.setAway(true);
-      if (next.length > 300) virtualizer.scrollToIndex(index, { align: "center" });
-      requestAnimationFrame(() =>
-        requestAnimationFrame(() =>
-          scroll.current?.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(id)}"]`)?.scrollIntoView({ block: "center", behavior: "auto" }),
-        ),
-      );
-    } catch {
-      if (generation === thread.generation.current) thread.setError("The original message is unavailable.");
+  const queryRef = useRef(query);
+  queryRef.current = query;
+  const threadRef = useRef(thread);
+  threadRef.current = thread;
+  const viewportRef = useRef(viewport);
+  viewportRef.current = viewport;
+
+  const handleJump = useCallback((id: string) => {
+    const currentThread = threadRef.current;
+    if (queryRef.current) {
+      currentThread.setError("Clear search to jump to the original message.");
+      return;
     }
-  }
+    const generation = currentThread.generation.current;
+    void currentThread
+      .windowAround(id)
+      .then((next) => {
+        if (queryRef.current) {
+          currentThread.setError("Clear search to jump to the original message.");
+          return;
+        }
+        if (!next) return;
+        const index = next.findIndex((m) => m.id === id);
+        if (index < 0) throw new Error("unavailable");
+        setHighlighted(id);
+        viewportRef.current.setAway(true);
+        if (next.length > 300) virtualizerRef.current.scrollToIndex(index, { align: "center" });
+        requestAnimationFrame(() =>
+          requestAnimationFrame(() =>
+            scroll.current?.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(id)}"]`)?.scrollIntoView({ block: "center", behavior: "auto" }),
+          ),
+        );
+      })
+      .catch(() => {
+        if (generation === currentThread.generation.current) currentThread.setError("The original message is unavailable.");
+      });
+  }, []);
+
+  const handleReply = useCallback((target: Message) => {
+    composerBridge.current?.reply(target);
+  }, []);
+
+  const handleRetryPending = useCallback((p: Pending) => {
+    composerBridge.current?.retry(p);
+  }, []);
+
+  const handleEditPending = useCallback((p: Pending) => {
+    composerBridge.current?.edit(p);
+  }, []);
+
+  const handleDismissPending = useCallback(
+    (key: string) => {
+      removePending(conversation.id, key);
+    },
+    [conversation.id],
+  );
+
+  const handleChanged = useCallback(() => {
+    threadRef.current.refreshNow();
+  }, []);
+
+  const showActions = !!state?.capabilities.includes("message_actions");
+  const actionsWritable = inboxAllows(inbox, conversation) && !archiveReadOnly && !groupChanged;
+  const actionsRoster = conversation.group ? seenRoster : undefined;
+  const eligibilityKey = useMemo(
+    () =>
+      JSON.stringify([
+        conversation.participant_id,
+        conversation.protocol,
+        state?.paused,
+        state?.transport_ready,
+        inbox?.revision,
+        conversation.group ? seenRoster : "",
+      ]),
+    [
+      conversation.participant_id,
+      conversation.protocol,
+      conversation.group,
+      state?.paused,
+      state?.transport_ready,
+      inbox?.revision,
+      seenRoster,
+    ],
+  );
 
   const showOlder = inbox?.enabled || conversation.archived ? !!cursor || (!!inbox?.load_older && !importFinished) : !!cursor;
   return (
@@ -359,53 +639,36 @@ export function ConversationHistory({ conversation, state, busy, act, inbox, enr
             )}
           </div>
         )}
-        <div style={virtualized ? { height: virtualizer.getTotalSize(), flexShrink: 0, position: "relative" } : { display: "contents" }}>
-          {visibleRows.map(({ m, row }) => {
+        <div
+          ref={rowsContainer}
+          style={virtualized ? { height: virtualizer.getTotalSize(), flexShrink: 0, position: "relative" } : { display: "contents" }}
+        >
+          {visibleRows.map(({ m, index, start }) => {
             const day = dayLabel(m.at);
-            const index = row?.index ?? messages.indexOf(m);
-            const divider = index === 0 || day !== dayLabel(messages[index - 1].at);
+            const dividerDay = index === 0 || day !== dayLabel(messages[index - 1].at) ? day : "";
             return (
-              <div
+              <MessageRow
                 key={m.id}
-                data-message-index={index}
-                data-index={row?.index}
-                ref={row ? virtualizer.measureElement : undefined}
-                style={row ? { position: "absolute", top: 0, left: 0, width: "100%", transform: `translateY(${row.start}px)` } : undefined}
-                className="message-group"
-              >
-                {divider && (
-                  <div className="day" role="separator">
-                    <span>{day}</span>
-                  </div>
-                )}
-                <MessageBubble
-                  message={m}
-                  label={conversation.label}
-                  base={base}
-                  fileLimitMB={fileLimits.max_file_mb}
-                  joinedPrev={joins(messages[index - 1], m)}
-                  senderName={senderName(conversation, m)}
-                  highlighted={highlighted === m.id}
-                  onJump={(id) => void jumpToMessage(id)}
-                  actions={
-                    state?.capabilities.includes("message_actions") && (
-                      <MessageActions
-                        message={m}
-                        conversation={conversation.id}
-                        label={conversation.label}
-                        writable={inboxAllows(inbox, conversation) && !archiveReadOnly && !groupChanged}
-                        roster={conversation.group ? seenRoster : undefined}
-                        eligibilityKey={JSON.stringify([conversation.participant_id, conversation.protocol, state?.paused, state?.transport_ready, inbox?.revision, conversation.group ? seenRoster : ""])}
-                        onReply={(target) => {
-                          composer.setReplyTarget(target);
-                          textarea.current?.focus();
-                        }}
-                        onChanged={thread.refreshNow}
-                      />
-                    )
-                  }
-                />
-              </div>
+                message={m}
+                virtualIndex={start !== null ? index : undefined}
+                virtualStart={start}
+                measureElement={start !== null ? virtualizer.measureElement : undefined}
+                dividerDay={dividerDay}
+                joinedPrev={!dividerDay && joinsSameDay(messages[index - 1], m)}
+                senderLabel={senderName(conversation, m)}
+                highlighted={highlighted === m.id}
+                label={conversation.label}
+                base={base}
+                fileLimitMB={fileLimits.max_file_mb}
+                showActions={showActions}
+                conversationId={conversation.id}
+                writable={actionsWritable}
+                roster={actionsRoster}
+                eligibilityKey={eligibilityKey}
+                onJump={handleJump}
+                onReply={handleReply}
+                onChanged={handleChanged}
+              />
             );
           })}
         </div>
@@ -417,9 +680,9 @@ export function ConversationHistory({ conversation, state, busy, act, inbox, enr
               pending={p}
               label={conversation.label}
               canSend={canSend}
-              onRetry={() => composer.retryPending(p)}
-              onEdit={() => composer.editPending(p)}
-              onDismiss={() => removePending(conversation.id, p.key)}
+              onRetry={handleRetryPending}
+              onEdit={handleEditPending}
+              onDismiss={handleDismissPending}
             />
           ))}
         {typing && (
@@ -448,14 +711,17 @@ export function ConversationHistory({ conversation, state, busy, act, inbox, enr
           New messages ↓
         </button>
       )}
-      <Composer
-        composer={composer}
-        textarea={textarea}
-        label={conversation.label}
-        blocked={blocked}
+      <ThreadComposer
+        conversation={conversation}
+        roster={seenRoster}
+        inbox={inbox}
         canSend={canSend}
         canAttach={canAttach}
+        blocked={blocked}
         busy={busy}
+        fullInbox={!!state?.capabilities.includes("full_inbox")}
+        textarea={textarea}
+        bridgeRef={composerBridge}
         onResume={onResume}
         footer={
           state?.fixture && (
@@ -481,4 +747,4 @@ export function ConversationHistory({ conversation, state, busy, act, inbox, enr
       />
     </div>
   );
-}
+});

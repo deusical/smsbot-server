@@ -284,6 +284,7 @@ func (s *Server) state(w http.ResponseWriter, r *http.Request) {
 	}
 	value["inbox_capture_gap"] = active
 	value["conversations_revision"] = s.Collection.ConversationRevision()
+	value["inbox_revision"] = s.Collection.SettingsRevision()
 	value["inbox_capture_gaps"] = gaps
 	value["inbox_capture_gap_unknown"] = unknown
 	s.json(w, 200, value)

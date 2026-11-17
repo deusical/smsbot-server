@@ -10,33 +10,65 @@ function stamp(value?: string): number {
 // The original index breaks ties so equal or missing times keep a stable order.
 export function sortConversations<T extends Conversation>(list: T[]): T[] {
   return list
-    .map((c, index) => ({ c, index }))
+    .map((c, index) => ({ c, index, at: stamp(c.last_message_at) }))
     .sort(
       (a, b) =>
         Number(!!b.c.pinned) - Number(!!a.c.pinned) ||
-        stamp(b.c.last_message_at) - stamp(a.c.last_message_at) ||
+        b.at - a.at ||
         a.index - b.index,
     )
     .map((entry) => entry.c);
 }
 
-export function formatListTime(iso?: string, now = new Date()): string {
-  const at = stamp(iso);
-  if (!at) return "";
+function formatRelativeDayTime(at: number, dayStartMs: number, year: number): string {
   const date = new Date(at);
-  const startOfDay = (d: Date) =>
-    new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
-  const days = Math.round((startOfDay(now) - startOfDay(date)) / 86400000);
+  const dateDayStart = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+  const days = Math.round((dayStartMs - dateDayStart) / 86400000);
   if (days <= 0)
     return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
   if (days === 1) return "Yesterday";
   if (days < 7) return date.toLocaleDateString([], { weekday: "short" });
   return date.toLocaleDateString(
     [],
-    date.getFullYear() === now.getFullYear()
+    date.getFullYear() === year
       ? { month: "short", day: "numeric" }
       : { month: "short", day: "numeric", year: "numeric" },
   );
+}
+
+let cachedDayStart = 0;
+let cachedDayEnd = 0;
+let cachedYear = 0;
+let cachedTzOffset = 0;
+const listTimeCache = new Map<string, string>();
+
+export function formatListTime(iso?: string, now?: Date): string {
+  if (!iso) return "";
+  if (now) {
+    const at = stamp(iso);
+    if (!at) return "";
+    const refStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    return formatRelativeDayTime(at, refStart, now.getFullYear());
+  }
+  const currentMs = Date.now();
+  const today = new Date(currentMs);
+  const tz = today.getTimezoneOffset();
+  if (currentMs < cachedDayStart || currentMs >= cachedDayEnd || tz !== cachedTzOffset) {
+    cachedYear = today.getFullYear();
+    cachedTzOffset = tz;
+    cachedDayStart = new Date(cachedYear, today.getMonth(), today.getDate()).getTime();
+    cachedDayEnd = new Date(cachedYear, today.getMonth(), today.getDate() + 1).getTime();
+    listTimeCache.clear();
+  } else if (listTimeCache.size > 2000) {
+    listTimeCache.clear();
+  }
+  const hit = listTimeCache.get(iso);
+  if (hit !== undefined) return hit;
+  const at = stamp(iso);
+  if (!at) return "";
+  const formatted = formatRelativeDayTime(at, cachedDayStart, cachedYear);
+  listTimeCache.set(iso, formatted);
+  return formatted;
 }
 
 type Seen = Record<string, number>;
