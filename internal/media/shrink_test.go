@@ -157,3 +157,24 @@ func TestAHEICPhotoIsReadAndReturnedAsAJPEG(t *testing.T) {
 		}
 	}
 }
+
+func TestShrinkHandlesExtremeAspectRatioWithoutOutOfBounds(t *testing.T) {
+	t.Parallel()
+	for _, rect := range []image.Rectangle{image.Rect(0, 0, 2048, 1), image.Rect(0, 0, 1, 2048)} {
+		jpg := encodeJPEG(t, image.NewRGBA(rect))
+		out, err := Shrink(jpg, 256)
+		if err != nil {
+			t.Fatalf("jpeg %v: %v", rect, err)
+		}
+		if w, h := decodeSize(t, out); w < 1 || h < 1 || w > 256 || h > 256 {
+			t.Fatalf("jpeg %v shrunk to %dx%d", rect, w, h)
+		}
+		var pngBuf bytes.Buffer
+		if err := png.Encode(&pngBuf, image.NewNRGBA(rect)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Shrink(pngBuf.Bytes(), 256); err != nil {
+			t.Fatalf("nrgba %v: %v", rect, err)
+		}
+	}
+}

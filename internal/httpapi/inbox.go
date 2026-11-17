@@ -92,7 +92,11 @@ func (s *Server) inboxConversations(w http.ResponseWriter, r *http.Request) {
 	}
 	p.Conversations = eligible
 
-	latest, _ := s.Store.LatestMessageTimes(r.Context())
+	convIDs := make([]string, len(p.Conversations))
+	for i, c := range p.Conversations {
+		convIDs[i] = c.ID
+	}
+	latest, _ := s.Store.LatestMessageTimesFor(r.Context(), convIDs)
 	settings, settingsErr := s.Collection.Settings()
 	var previewIDs []string
 	for _, c := range p.Conversations {
@@ -101,8 +105,8 @@ func (s *Server) inboxConversations(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	previews, _ := s.Store.LatestPreviews(r.Context(), previewIDs)
+	s.Store.ShowEnrollments(p.Conversations)
 	for i := range p.Conversations {
-		s.Store.ShowEnrollment(&p.Conversations[i])
 		p.Conversations[i].LastMessageAt = newestTime(p.Conversations[i].LastMessageAt, latest[p.Conversations[i].ID])
 		if v, ok := previews[p.Conversations[i].ID]; ok {
 			p.Conversations[i].Preview, p.Conversations[i].PreviewFromMe = v.Text, v.FromMe
@@ -193,12 +197,7 @@ func (s *Server) inboxAttachment(w http.ResponseWriter, r *http.Request) {
 	var localClose io.Closer
 	file, localErr := s.Collection.LocalArchiveAttachment(r.PathValue("id"), r.PathValue("message"), r.PathValue("attachment"))
 	if localErr == nil {
-		settings, err := s.Collection.Settings()
-		if err != nil {
-			s.bad(w, 500, "settings_unavailable")
-			return
-		}
-		if limit := settings.FileLimits().FileBytes(); limit > 0 && file.Size > limit {
+		if file.ReadLimit > 0 && file.Size > file.ReadLimit {
 			s.bad(w, 413, "attachment_size_limit")
 			return
 		}

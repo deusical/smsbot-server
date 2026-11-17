@@ -294,3 +294,89 @@ func (s *Store) ShowEnrollment(c *transport.Conversation) {
 	c.SharedAI = s.GroupShared(c.ID)
 	c.EnrolledMembers, c.BotRoster = members, roster
 }
+
+// ShowEnrollments populates enrollment state across a slice of conversations in
+// three small table reads instead of querying SQLite once or twice per row.
+func (s *Store) ShowEnrollments(convs []transport.Conversation) {
+	if len(convs) == 0 {
+		return
+	}
+	fallback := func() {
+		for i := range convs {
+			s.ShowEnrollment(&convs[i])
+		}
+	}
+	dm := map[string]string{}
+	rows, err := s.DB.Query("SELECT conversation,participant FROM enrollment")
+	if err != nil {
+		fallback()
+		return
+	}
+	for rows.Next() {
+		var conv, peer string
+		if err = rows.Scan(&conv, &peer); err != nil {
+			rows.Close()
+			fallback()
+			return
+		}
+		dm[conv] = peer
+	}
+	if rows.Close() != nil || rows.Err() != nil {
+		fallback()
+		return
+	}
+
+	groupMembers := map[string][]string{}
+	groupRosters := map[string]string{}
+	rows, err = s.DB.Query("SELECT conversation,participant,roster FROM group_enrollment ORDER BY conversation,participant")
+	if err != nil {
+		fallback()
+		return
+	}
+	for rows.Next() {
+		var conv, member, roster string
+		if err = rows.Scan(&conv, &member, &roster); err != nil {
+			rows.Close()
+			fallback()
+			return
+		}
+		groupMembers[conv] = append(groupMembers[conv], member)
+		groupRosters[conv] = roster
+	}
+	if rows.Close() != nil || rows.Err() != nil {
+		fallback()
+		return
+	}
+
+	shared := map[string]bool{}
+	rows, err = s.DB.Query("SELECT conversation FROM group_shared")
+	if err != nil {
+		fallback()
+		return
+	}
+	for rows.Next() {
+		var conv string
+		if err = rows.Scan(&conv); err != nil {
+			rows.Close()
+			fallback()
+			return
+		}
+		shared[conv] = true
+	}
+	if rows.Close() != nil || rows.Err() != nil {
+		fallback()
+		return
+	}
+
+	for i := range convs {
+		c := &convs[i]
+		if !c.Group {
+			c.Enrolled = c.ParticipantID != "" && dm[c.ID] == c.ParticipantID
+			continue
+		}
+		members := groupMembers[c.ID]
+		c.Enrolled = len(members) > 0
+		c.SharedAI = shared[c.ID]
+		c.EnrolledMembers, c.BotRoster = members, groupRosters[c.ID]
+	}
+}

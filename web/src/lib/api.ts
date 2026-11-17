@@ -16,6 +16,7 @@ export type State = {
   api_version: number;
   inbox_capture_gap?: boolean;
   conversations_revision?: string;
+  inbox_revision?: number;
   inbox_capture_gap_unknown?: boolean;
   inbox_capture_gaps?: CaptureGap[];
   paused: boolean;

@@ -135,7 +135,7 @@ export function useComposer({
   return {
     text,
     setText: (value: string) => {
-      setText(Array.from(value).slice(0, 12000).join(""));
+      setText(value.length <= 12000 ? value : Array.from(value).slice(0, 12000).join(""));
       setSendError("");
     },
     files,

@@ -165,6 +165,17 @@ func (svc *Service) Settings() (Settings, error) {
 	return s, err
 }
 
+// SettingsRevision returns the current collection preferences revision from
+// the in-memory consent snapshot once initialized, avoiding repeated decryption
+// during dashboard state polls.
+func (svc *Service) SettingsRevision() int64 {
+	s, err := svc.policySettings()
+	if err != nil {
+		return 0
+	}
+	return s.Revision
+}
+
 // Allows is the exact-identity collection check: enabled, a conversation whose
 // identity is known, and selected (or all) by its exact participant. Groups are
 // part of "all" only when Groups is set.

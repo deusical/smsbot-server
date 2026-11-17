@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Attachment } from "../lib/api";
 import { Icon } from "./Icon";
 
@@ -51,8 +51,16 @@ export function MessageAttachment({
   const [failed, setFailed] = useState(false);
   const [retry, setRetry] = useState(0);
   const [error, setError] = useState("");
- const [downloading, setDownloading] = useState(false);
- useEffect(()=>{setFailed(false);setError("");setRetry(n=>n+1)},[attachment.id,attachment.archive_state]);
+  const [downloading, setDownloading] = useState(false);
+  const sourceKey = `${attachment.id}\0${attachment.archive_state ?? ""}`;
+  const prevSourceKey = useRef(sourceKey);
+  useEffect(() => {
+    if (prevSourceKey.current === sourceKey) return;
+    prevSourceKey.current = sourceKey;
+    setFailed(false);
+    setError("");
+    setRetry((n) => n + 1);
+  }, [sourceKey]);
   const url = `/api/v1${base}/messages/${encodeURIComponent(message)}/attachments/${encodeURIComponent(attachment.id)}`;
   const source = `${url}?inline=1&retry=${retry}`;
   const oversized =
@@ -96,6 +104,7 @@ export function MessageAttachment({
             src={source}
             alt={attachment.name}
             loading="lazy"
+            decoding="async"
             onError={() => setFailed(true)}
           />
         </a>
@@ -187,7 +196,7 @@ export function SelectedAttachment({
   }, [file]);
   return (
     <div className={"selected-attachment" + (preview ? " has-thumb" : "")}>
-      {preview && <img src={preview} alt="" />}
+      {preview && <img src={preview} alt="" decoding="async" />}
       <span>
         <strong>{file.name}</strong>
         <small>{fileSize(file.size)}</small>
@@ -215,7 +224,7 @@ export function PendingFile({ file }: { file: File }) {
     return () => URL.revokeObjectURL(url);
   }, [file]);
   return preview ? (
-    <img className="pending-thumb" src={preview} alt={file.name} />
+    <img className="pending-thumb" src={preview} alt={file.name} decoding="async" />
   ) : (
     <span className="pending-file">
       <Icon name="attach" size={14} />

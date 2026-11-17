@@ -114,14 +114,16 @@ func (svc *Service) TypingConversations() []string {
 	if !ok {
 		return []string{}
 	}
-	svc.mu.Lock()
-	s, err := svc.Settings()
-	svc.mu.Unlock()
+	ids := reporter.TypingConversations()
+	if len(ids) == 0 {
+		return []string{}
+	}
+	s, err := svc.policySettings()
 	out := []string{}
 	if err != nil || !s.Enabled {
 		return out
 	}
-	for _, id := range reporter.TypingConversations() {
+	for _, id := range ids {
 		if s.AllowsID(id) {
 			out = append(out, id)
 		}

@@ -46,13 +46,16 @@ export function useReadReceipts({
   }, [conversation.id]);
   useEffect(() => {
     if (conversation.group || loading || !messages.length) return;
+    // messages is sorted chronologically; scan from the end to avoid O(N) parses on scroll/focus.
     let newest = 0,
       newestIncoming = 0;
-    for (const m of messages) {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
       const at = Date.parse(m.at);
       if (!Number.isFinite(at)) continue;
-      newest = Math.max(newest, at);
-      if (m.direction === "incoming") newestIncoming = Math.max(newestIncoming, at);
+      if (at > newest) newest = at;
+      if (m.direction === "incoming" && at > newestIncoming) newestIncoming = at;
+      if (newest > 0 && newestIncoming > 0 && at <= newestIncoming) break;
     }
     if (baseline.current === null) baseline.current = newestIncoming;
     if (!enabled || away || !newest || newest <= through.current) return;

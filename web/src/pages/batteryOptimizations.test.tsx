@@ -338,4 +338,64 @@ describe("ConversationHistory visibility guard", () => {
 
     expect(pollCount).toBeGreaterThan(countAfterVisible);
   });
+
+  it("does not re-render message bubbles while typing in the composer", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal("matchMedia", vi.fn((query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })));
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/history")) {
+        return new Response(
+          JSON.stringify({
+            messages: [
+              { id: "m1", direction: "incoming", text: "First message", at: "2026-11-16T01:00:00Z" },
+              { id: "m2", direction: "outgoing", text: "Second message", at: "2026-11-16T01:01:00Z" },
+            ],
+            next_cursor: "",
+            change_cursor: 1,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      if (url.includes("/changes")) {
+        return new Response(
+          JSON.stringify({ messages: [], cursor: 1, more: false }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      return new Response("{}", { status: 200 });
+    }));
+
+    const timeFormatter = vi.spyOn(Date.prototype, "toLocaleTimeString");
+
+    render(
+      <ConversationHistory
+        conversation={conversation}
+        state={state}
+        busy={false}
+        act={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("First message")).toBeVisible();
+      expect(screen.getByText("Second message")).toBeVisible();
+    });
+
+    timeFormatter.mockClear();
+    const box = screen.getByLabelText("Message");
+    await user.type(box, "Typing several characters");
+    expect(box).toHaveValue("Typing several characters");
+    // MessageBubble calls toLocaleTimeString on each render; zero calls proves zero bubble re-renders.
+    expect(timeFormatter).not.toHaveBeenCalled();
+  });
 });

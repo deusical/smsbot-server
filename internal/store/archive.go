@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 // Archive holds encrypted verified identity and durable read-job checkpoints.
@@ -321,37 +323,60 @@ func (s *Store) Changes(conv, after, search string) (Changes, error) {
 		return out, err
 	}
 	seen := map[string]bool{}
+	var unique []string
+	args := []any{conv}
 	for _, id := range ids {
-		if seen[id] {
-			continue
+		if !seen[id] {
+			seen[id] = true
+			unique = append(unique, id)
+			args = append(args, id)
 		}
-		seen[id] = true
-		var m Message
-		var enc, files string
-		err = s.DB.QueryRow("SELECT m.id,m.direction,m.at,m.payload,coalesce(meta.origin,'bot'),coalesce(meta.status,''),coalesce(a.payload,''),coalesce((SELECT max(revision) FROM message_revisions WHERE message=m.id),0) FROM messages m LEFT JOIN message_meta meta ON meta.message=m.id LEFT JOIN message_attachments a ON a.message=m.id WHERE m.id=? AND m.conversation=?", id, conv).Scan(&m.ID, &m.Direction, &m.At, &enc, &m.Origin, &m.Status, &files, &m.Revision)
-		if err != nil {
-			if !errors.Is(err, sql.ErrNoRows) {
+	}
+	loaded := make(map[string]Message, len(unique))
+	if len(unique) > 0 {
+		mRows, mErr := s.DB.Query("SELECT m.id,m.direction,m.at,m.payload,coalesce(meta.origin,'bot'),coalesce(meta.status,''),coalesce(a.payload,''),coalesce((SELECT max(revision) FROM message_revisions WHERE message=m.id),0) FROM messages m LEFT JOIN message_meta meta ON meta.message=m.id LEFT JOIN message_attachments a ON a.message=m.id WHERE m.conversation=? AND m.id IN ("+placeholders(len(unique))+")", args...)
+		if mErr != nil {
+			return out, mErr
+		}
+		for mRows.Next() {
+			var m Message
+			var enc, files string
+			if err = mRows.Scan(&m.ID, &m.Direction, &m.At, &enc, &m.Origin, &m.Status, &files, &m.Revision); err != nil {
+				mRows.Close()
 				return out, err
 			}
-			out.Deleted = append(out.Deleted, id)
-			continue
-		}
-		b, e := s.Vault.Open("message:"+id, enc)
-		if e != nil {
-			return out, e
-		}
-		m.Text = string(b)
-		if files != "" {
-			f, e := s.openAttachments(id, files)
+			b, e := s.Vault.Open("message:"+m.ID, enc)
 			if e != nil {
+				mRows.Close()
 				return out, e
 			}
-			for _, v := range f {
-				m.Attachments = append(m.Attachments, v.Info)
+			m.Text = string(b)
+			if files != "" {
+				f, e := s.openAttachments(m.ID, files)
+				if e != nil {
+					mRows.Close()
+					return out, e
+				}
+				for _, v := range f {
+					m.Attachments = append(m.Attachments, v.Info)
+				}
 			}
+			loaded[m.ID] = m
 		}
-		// Return changes even when an edit stops matching search, so clients can remove it.
-		out.Messages = append(out.Messages, m)
+		if err = mRows.Close(); err != nil {
+			return out, err
+		}
+		if err = mRows.Err(); err != nil {
+			return out, err
+		}
+	}
+	// Return changes even when an edit stops matching search, so clients can remove it.
+	for _, id := range unique {
+		if m, ok := loaded[id]; ok {
+			out.Messages = append(out.Messages, m)
+		} else {
+			out.Deleted = append(out.Deleted, id)
+		}
 	}
 	if err = s.EnrichMessages(conv, out.Messages); err != nil {
 		return out, err
@@ -399,6 +424,35 @@ func (s *Store) LatestMessageTimes(ctx context.Context) (map[string]string, erro
 	return out, rows.Err()
 }
 
+// LatestMessageTimesFor returns the newest saved message time for each requested
+// conversation using index seeks rather than scanning the entire messages table.
+func (s *Store) LatestMessageTimesFor(ctx context.Context, ids []string) (map[string]string, error) {
+	out := map[string]string{}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+	values := strings.TrimSuffix(strings.Repeat("(?),", len(ids)), ",")
+	rows, err := s.DB.QueryContext(ctx, "WITH wanted(c) AS (VALUES "+values+") SELECT w.c, coalesce((SELECT m.at FROM messages m WHERE m.conversation=w.c ORDER BY m.at DESC LIMIT 1),'') FROM wanted w", args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var conv, at string
+		if err = rows.Scan(&conv, &at); err != nil {
+			return nil, err
+		}
+		if at != "" {
+			out[conv] = at
+		}
+	}
+	return out, rows.Err()
+}
+
 // ChangeSequence is the newest message change number; it moves whenever a
 // message is added, edited or receives a new status.
 func (s *Store) ChangeSequence() uint64 {
@@ -416,29 +470,67 @@ type Preview struct {
 	Attachment bool
 }
 
+func compactPreview(plain []byte) string {
+	var b strings.Builder
+	b.Grow(min(len(plain), 160))
+	inSpace := true
+	runes := 0
+	for len(plain) > 0 {
+		r, width := utf8.DecodeRune(plain)
+		plain = plain[width:]
+		if unicode.IsSpace(r) {
+			if !inSpace {
+				inSpace = true
+			}
+			continue
+		}
+		if inSpace && runes > 0 {
+			if runes == 120 {
+				b.WriteRune('…')
+				return b.String()
+			}
+			b.WriteByte(' ')
+			runes++
+		}
+		inSpace = false
+		if runes == 120 {
+			b.WriteRune('…')
+			return b.String()
+		}
+		b.WriteRune(r)
+		runes++
+	}
+	return b.String()
+}
+
 // LatestPreviews opens only the newest message per requested conversation. The
 // caller must restrict ids to conversations the owner may see.
 func (s *Store) LatestPreviews(ctx context.Context, ids []string) (map[string]Preview, error) {
 	out := map[string]Preview{}
-	for _, id := range ids {
-		var mid, direction, enc string
+	if len(ids) == 0 {
+		return out, nil
+	}
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+	values := strings.TrimSuffix(strings.Repeat("(?),", len(ids)), ",")
+	rows, err := s.DB.QueryContext(ctx, "WITH wanted(c) AS (VALUES "+values+") SELECT m.conversation,m.id,m.direction,m.payload,EXISTS(SELECT 1 FROM message_attachments a WHERE a.message=m.id) FROM wanted w JOIN messages m ON m.id=(SELECT m2.id FROM messages m2 WHERE m2.conversation=w.c ORDER BY m2.at DESC,m2.id DESC LIMIT 1)", args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var conv, mid, direction, enc string
 		var files int
-		err := s.DB.QueryRowContext(ctx, "SELECT m.id,m.direction,m.payload,EXISTS(SELECT 1 FROM message_attachments a WHERE a.message=m.id) FROM messages m WHERE m.conversation=? ORDER BY m.at DESC,m.id DESC LIMIT 1", id).Scan(&mid, &direction, &enc, &files)
-		if errors.Is(err, sql.ErrNoRows) {
-			continue
-		}
-		if err != nil {
+		if err = rows.Scan(&conv, &mid, &direction, &enc, &files); err != nil {
 			return nil, err
 		}
-		plain, err := s.Vault.Open("message:"+mid, enc)
-		if err != nil {
+		plain, openErr := s.Vault.Open("message:"+mid, enc)
+		if openErr != nil {
 			continue
 		}
-		text := strings.Join(strings.Fields(string(plain)), " ")
-		if runes := []rune(text); len(runes) > 120 {
-			text = string(runes[:120]) + "…"
-		}
-		out[id] = Preview{Text: text, FromMe: direction == "outgoing", Attachment: files == 1}
+		out[conv] = Preview{Text: compactPreview(plain), FromMe: direction == "outgoing", Attachment: files == 1}
 	}
-	return out, nil
+	return out, rows.Err()
 }

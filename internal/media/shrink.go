@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"image"
+	"image/color"
 	"image/draw"
 	_ "image/gif"
 	"image/jpeg"
@@ -60,12 +61,14 @@ func Shrink(data []byte, maxSide int) ([]byte, error) {
 	w, h := max(1, b.Dx()/factor), max(1, b.Dy()/factor)
 	scaled := image.NewRGBA(image.Rect(0, 0, w, h))
 	n := uint64(factor * factor)
+	sample := pixelSampler(src)
 	for y := 0; y < h; y++ {
 		for x := 0; x < w; x++ {
 			var r, g, bl, a uint64
 			for dy := 0; dy < factor; dy++ {
+				sy := b.Min.Y + y*factor + dy
 				for dx := 0; dx < factor; dx++ {
-					cr, cg, cb, ca := src.At(b.Min.X+x*factor+dx, b.Min.Y+y*factor+dy).RGBA()
+					cr, cg, cb, ca := sample(b.Min.X+x*factor+dx, sy)
 					r, g, bl, a = r+uint64(cr), g+uint64(cg), bl+uint64(cb), a+uint64(ca)
 				}
 			}
@@ -81,6 +84,45 @@ func Shrink(data []byte, maxSide int) ([]byte, error) {
 		return nil, errors.New("image_unreadable")
 	}
 	return out.Bytes(), nil
+}
+
+// pixelSampler reads 16-bit premultiplied RGBA without allocating a color.Color
+// interface value per pixel on common JPEG/HEIC (YCbCr) and PNG (RGBA/NRGBA) inputs.
+func pixelSampler(src image.Image) func(x, y int) (uint32, uint32, uint32, uint32) {
+	switch img := src.(type) {
+	case *image.YCbCr:
+		return func(x, y int) (uint32, uint32, uint32, uint32) {
+			if !(image.Point{X: x, Y: y}.In(img.Rect)) {
+				return 0, 0, 0, 0
+			}
+			yi := img.YOffset(x, y)
+			ci := img.COffset(x, y)
+			return (color.YCbCr{Y: img.Y[yi], Cb: img.Cb[ci], Cr: img.Cr[ci]}).RGBA()
+		}
+	case *image.RGBA:
+		return func(x, y int) (uint32, uint32, uint32, uint32) {
+			if !(image.Point{X: x, Y: y}.In(img.Rect)) {
+				return 0, 0, 0, 0
+			}
+			i := img.PixOffset(x, y)
+			s := img.Pix[i : i+4 : i+4]
+			return uint32(s[0]) * 0x101, uint32(s[1]) * 0x101, uint32(s[2]) * 0x101, uint32(s[3]) * 0x101
+		}
+	case *image.NRGBA:
+		return func(x, y int) (uint32, uint32, uint32, uint32) {
+			if !(image.Point{X: x, Y: y}.In(img.Rect)) {
+				return 0, 0, 0, 0
+			}
+			i := img.PixOffset(x, y)
+			s := img.Pix[i : i+4 : i+4]
+			a := uint32(s[3])
+			return (uint32(s[0]) * 0x101 * a) / 0xff, (uint32(s[1]) * 0x101 * a) / 0xff, (uint32(s[2]) * 0x101 * a) / 0xff, a * 0x101
+		}
+	default:
+		return func(x, y int) (uint32, uint32, uint32, uint32) {
+			return src.At(x, y).RGBA()
+		}
+	}
 }
 
 // orient applies an EXIF orientation (1 to 8) so the image displays upright.

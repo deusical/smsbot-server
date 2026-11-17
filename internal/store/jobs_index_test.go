@@ -67,6 +67,12 @@ func TestJobsIndexesAndQueryPlans(t *testing.T) {
 			args:  []any{"2026-01-01T00:00:00Z"},
 			index: "jobs_created",
 		},
+		{
+			name:  "JobByTxn",
+			sql:   "SELECT id,state,code FROM jobs WHERE conversation=? AND txn=? ORDER BY created DESC LIMIT 1",
+			args:  []any{"conv-1", "txn-1"},
+			index: "jobs_conversation_txn",
+		},
 	}
 
 	v, err := vault.New(make([]byte, 32))
@@ -97,7 +103,7 @@ func TestJobsIndexesAndQueryPlans(t *testing.T) {
 
 	// Drop the indexes to capture the pre-change plans and simulate an existing
 	// schema-10 database upgrading on reopen.
-	if _, err := s.DB.Exec("DROP INDEX jobs_state_created; DROP INDEX jobs_created; DROP INDEX jobs_open_plan;"); err != nil {
+	if _, err := s.DB.Exec("DROP INDEX jobs_state_created; DROP INDEX jobs_created; DROP INDEX jobs_open_plan; DROP INDEX jobs_conversation_txn;"); err != nil {
 		t.Fatal(err)
 	}
 	for _, q := range queries {

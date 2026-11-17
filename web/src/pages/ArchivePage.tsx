@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api, inboxAllows, type Conversation, type InboxSettings, type State } from "../lib/api";
+import { deepEqual } from "../lib/equal";
 import { ArchiveSettings } from "../components/ArchiveSettings";
 import { CaptureChecks } from "../components/CaptureChecks";
 import { HistorySync, importLabel, stateTone, type Archive } from "../components/HistorySync";
@@ -56,7 +57,7 @@ export function ArchivePage({
       try {
         const result = await api<StorageStats>("/inbox/archive/stats", "GET", undefined, AbortSignal.any([controller.signal, AbortSignal.timeout(8000)]));
         if (!disposed) {
-          setStats(result);
+          setStats((prev) => (prev && deepEqual(prev, result) ? prev : result));
           setStatsError(false);
         }
       } catch {
@@ -92,7 +93,7 @@ export function ArchivePage({
       try {
         const result = await api<Archive[]>("/inbox/archive", "GET", undefined, AbortSignal.any([controller.signal, AbortSignal.timeout(8000)]));
         if (!disposed && version === epoch.current) {
-          setRows(result);
+          setRows((prev) => (deepEqual(prev, result) ? prev : result));
           setLoaded(true);
           setError("");
         }
@@ -113,14 +114,28 @@ export function ArchivePage({
       document.removeEventListener("visibilitychange", refresh);
     };
   }, [supported, reload]);
-  const known = new Map(rows.map((row) => [row.conversation.id, { ...row.conversation, archived: true }]));
-  for (const conversation of conversations) known.set(conversation.id, { ...conversation, archived: known.has(conversation.id) || !!conversation.archived });
-  const choices = sortConversations([...known.values()]).filter((item) => item.archived || inboxAllows(inbox, item));
+  const rowById = useMemo(() => new Map(rows.map((row) => [row.conversation.id, row])), [rows]);
+  const known = useMemo(() => {
+    const m = new Map(rows.map((row) => [row.conversation.id, { ...row.conversation, archived: true }]));
+    for (const c of conversations) {
+      m.set(c.id, { ...c, archived: m.has(c.id) || !!c.archived });
+    }
+    return m;
+  }, [rows, conversations]);
+  const choices = useMemo(
+    () => sortConversations([...known.values()]).filter((item) => item.archived || inboxAllows(inbox, item)),
+    [known, inbox],
+  );
   const conversation = choices.find((item) => item.id === selected) ?? choices.find((item) => item.id === rows[0]?.conversation.id) ?? choices[0];
   const current: Archive | undefined =
     conversation &&
-    (rows.find((row) => row.conversation.id === conversation.id) ?? { conversation, state: "not_started", imported: 0, since: "", last_sync: "", oldest: "" });
-  const filtered = choices.filter((item) => (item.label || "Saved conversation").toLocaleLowerCase().includes(query.toLocaleLowerCase()));
+    (rowById.get(conversation.id) ?? { conversation, state: "not_started", imported: 0, since: "", last_sync: "", oldest: "" });
+  const filtered = useMemo(() => {
+    const q = query.toLocaleLowerCase();
+    return q
+      ? choices.filter((item) => (item.label || "Saved conversation").toLocaleLowerCase().includes(q))
+      : choices;
+  }, [choices, query]);
   const active = rows.filter((row) => ["queued", "running", "retrying"].includes(row.state)).length;
   const pendingChecks = (state?.inbox_capture_gaps ?? []).filter((gap) => gap.state !== "checked_available" && gap.state !== "not_collected").length;
   const checked = rows.filter((row) => row.state === "available_pages_exhausted").length;
@@ -277,7 +292,7 @@ export function ArchivePage({
                 </label>
                 <ul className="archive-jobs command-list" aria-label="Archive jobs">
                   {filtered.map((item) => {
-                    const itemState = rows.find((row) => row.conversation.id === item.id)?.state ?? "not_started";
+                    const itemState = rowById.get(item.id)?.state ?? "not_started";
                     const label = item.label || "Saved conversation";
                     return (
                       <li key={item.id} className={(current?.conversation.id === item.id ? "selected" : "") + " tone-" + stateTone(itemState)}>

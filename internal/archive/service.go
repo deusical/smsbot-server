@@ -244,7 +244,7 @@ func (s *Service) NoteFocus(conv string, at time.Time) {
 		return
 	}
 	s.focusMu.Lock()
-	if at.After(s.focusedAt) {
+	if !at.Before(s.focusedAt) {
 		s.focusedConv = conv
 		s.focusedAt = at
 	}
@@ -271,22 +271,33 @@ func (s *Service) focusBatch(ctx context.Context) ([]store.AttachmentRecord, err
 	if s.focusSeeded && !s.hasRecentFocus(now) {
 		return nil, nil
 	}
-	archives, err := s.Store.Archives()
-	if err != nil {
-		return nil, err
-	}
-	s.focusSeeded = true
 	var focus store.Archive
-	var focusedAt time.Time
-	for _, a := range archives {
-		at, err := time.Parse(time.RFC3339Nano, a.FocusAt)
-		if err == nil && now.Sub(at) < 2*time.Minute && a.RefreshSince != "" && a.RefreshUntil != "" && at.After(focusedAt) {
-			focus = a
-			focusedAt = at
+	s.focusMu.Lock()
+	knownConv, knownAt := s.focusedConv, s.focusedAt
+	s.focusMu.Unlock()
+	if s.focusSeeded && knownConv != "" && !s.Store.LastArchiveFocus().After(knownAt) {
+		if a, err := s.Store.Archive(knownConv); err == nil {
+			if at, parseErr := time.Parse(time.RFC3339Nano, a.FocusAt); parseErr == nil && now.Sub(at) < 2*time.Minute && a.RefreshSince != "" && a.RefreshUntil != "" {
+				focus = a
+			}
 		}
-	}
-	if !focusedAt.IsZero() {
-		s.NoteFocus(focus.Conversation.ID, focusedAt)
+	} else {
+		archives, err := s.Store.Archives()
+		if err != nil {
+			return nil, err
+		}
+		s.focusSeeded = true
+		var focusedAt time.Time
+		for _, a := range archives {
+			at, err := time.Parse(time.RFC3339Nano, a.FocusAt)
+			if err == nil && now.Sub(at) < 2*time.Minute && a.RefreshSince != "" && a.RefreshUntil != "" && at.After(focusedAt) {
+				focus = a
+				focusedAt = at
+			}
+		}
+		if !focusedAt.IsZero() {
+			s.NoteFocus(focus.Conversation.ID, focusedAt)
+		}
 	}
 	if focus.Conversation.ID == "" {
 		return nil, nil
