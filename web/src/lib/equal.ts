@@ -14,12 +14,19 @@ export function deepEqual(a: unknown, b: unknown): boolean {
   const objB = b as Record<string, unknown>;
   const keysA = Object.keys(objA);
   const keysB = Object.keys(objB);
-  if (keysA.length !== keysB.length) return false;
+  let definedA = 0;
   for (let i = 0; i < keysA.length; i++) {
     const key = keysA[i];
-    if (!Object.prototype.hasOwnProperty.call(objB, key) || !deepEqual(objA[key], objB[key])) {
+    const valA = objA[key];
+    if (valA === undefined) continue;
+    definedA++;
+    if (!Object.prototype.hasOwnProperty.call(objB, key) || !deepEqual(valA, objB[key])) {
       return false;
     }
   }
-  return true;
+  let definedB = 0;
+  for (let i = 0; i < keysB.length; i++) {
+    if (objB[keysB[i]] !== undefined) definedB++;
+  }
+  return definedA === definedB;
 }
