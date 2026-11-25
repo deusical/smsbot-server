@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 
 	"github.com/deusical/smsbot-server/internal/transport"
@@ -121,6 +122,120 @@ func TestMigrationOnRealDatabaseCopy(t *testing.T) {
 	var integrity string
 	if err = s.DB.QueryRow("PRAGMA integrity_check").Scan(&integrity); err != nil || integrity != "ok" {
 		t.Fatal("copy integrity check failed")
+	}
+}
+
+func TestRelocateArchive(t *testing.T) {
+	t.Parallel()
+	s := inboxStore(t)
+
+	// Create original archive and messages for "chat"
+	a := Archive{
+		Conversation: transport.Conversation{
+			ID:            "chat",
+			ParticipantID: "peer-1",
+			Label:         "First Peer",
+			Protocol:      "RCS",
+			Writable:      true,
+		},
+		State:      "available_pages_exhausted",
+		Generation: 1,
+	}
+	if err := s.SaveArchive(a, 30); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SaveMessage("m1", "chat", "incoming", "hello from peer 1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SaveMessage("m2", "chat", "outgoing", "reply to peer 1"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Relocate "chat" to "archived-chat-peer-1"
+	targetID, err := s.RelocateArchive("chat", "archived-chat-peer-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if targetID != "archived-chat-peer-1" {
+		t.Fatalf("expected targetID %q, got %q", "archived-chat-peer-1", targetID)
+	}
+
+	// Old ID "chat" should no longer exist in archives or messages
+	if _, err := s.Archive("chat"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("expected ErrNoRows for old ID, got %v", err)
+	}
+	oldMsgs, err := s.Messages("chat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(oldMsgs) != 0 {
+		t.Fatalf("expected 0 messages in old ID, got %d", len(oldMsgs))
+	}
+
+	// Relocated ID should have the archive record and all messages intact
+	relocated, err := s.Archive("archived-chat-peer-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if relocated.Conversation.ID != "archived-chat-peer-1" || relocated.Conversation.ParticipantID != "peer-1" || relocated.Conversation.Label != "First Peer" {
+		t.Fatalf("unexpected relocated archive: %+v", relocated.Conversation)
+	}
+	relocatedMsgs, err := s.Messages("archived-chat-peer-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(relocatedMsgs) != 2 {
+		t.Fatalf("expected 2 messages in relocated ID, got %d", len(relocatedMsgs))
+	}
+	if relocatedMsgs[0].Text != "reply to peer 1" || relocatedMsgs[1].Text != "hello from peer 1" {
+		t.Fatalf("message text corrupted after relocation: %+v", relocatedMsgs)
+	}
+
+	// Now new conversation with ID "chat" can be created under a different participant
+	newA := Archive{
+		Conversation: transport.Conversation{
+			ID:            "chat",
+			ParticipantID: "peer-2",
+			Label:         "Second Peer",
+			Protocol:      "SMS",
+			Writable:      true,
+		},
+		State:      "running",
+		Generation: 1,
+	}
+	if err := s.SaveArchive(newA, 30); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SaveMessage("m3", "chat", "incoming", "hello from peer 2"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify "chat" only has peer-2's message, and "archived-chat-peer-1" only has peer-1's messages
+	chatMsgs, err := s.Messages("chat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(chatMsgs) != 1 || chatMsgs[0].Text != "hello from peer 2" {
+		t.Fatalf("unexpected chat messages: %+v", chatMsgs)
+	}
+	relocatedMsgsAgain, err := s.Messages("archived-chat-peer-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(relocatedMsgsAgain) != 2 {
+		t.Fatalf("expected 2 messages in relocated ID, got %d", len(relocatedMsgsAgain))
+	}
+
+	// Relocating again to the same target should auto-disambiguate with suffix
+	targetID2, err := s.RelocateArchive("chat", "archived-chat-peer-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if targetID2 != "archived-chat-peer-1-1" {
+		t.Fatalf("expected auto-disambiguated targetID %q, got %q", "archived-chat-peer-1-1", targetID2)
+	}
+	if a2, err := s.Archive("archived-chat-peer-1-1"); err != nil || a2.Conversation.ParticipantID != "peer-2" {
+		t.Fatalf("failed to retrieve auto-disambiguated archive: %v, %+v", err, a2)
 	}
 }
 

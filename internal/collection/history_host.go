@@ -227,10 +227,18 @@ func (svc *Service) persistHistoryPage(ctx context.Context, conv string, message
 }
 
 // ensureArchive records the verified identity of a conversation the owner
-// allows and refreshes its retention. Caller holds the control lock. A record bound to a
-// different participant is never reused.
+// allows and refreshes its retention. Caller holds the control lock. If the phone
+// reassigned this conversation ID to a different participant, the old archive is
+// relocated to an isolated ID so histories are never merged.
 func (svc *Service) ensureArchive(c transport.Conversation, retention int) error {
-	_, err := svc.Store.UpdateArchive(c.ID, retention, func(a *store.Archive, exists bool) error {
+	current, err := svc.Store.Archive(c.ID)
+	if err == nil && current.Conversation.ParticipantID != "" && current.Conversation.ParticipantID != c.ParticipantID {
+		relocatedID := "archived-" + c.ID + "-" + current.Conversation.ParticipantID
+		if _, err := svc.Store.RelocateArchive(c.ID, relocatedID); err != nil {
+			return err
+		}
+	}
+	_, err = svc.Store.UpdateArchive(c.ID, retention, func(a *store.Archive, exists bool) error {
 		if !exists {
 			*a = store.NewArchive(c)
 			return nil
@@ -280,6 +288,12 @@ func (svc *Service) RequestArchive(ctx context.Context, conv, since string, canc
 	if err != nil || !s.Allows(c) {
 		return store.Archive{}, errors.New("archive_access_disabled")
 	}
+	if current, err := svc.Store.Archive(conv); err == nil && current.Conversation.ParticipantID != "" && current.Conversation.ParticipantID != c.ParticipantID {
+		relocatedID := "archived-" + conv + "-" + current.Conversation.ParticipantID
+		if _, err := svc.Store.RelocateArchive(conv, relocatedID); err != nil {
+			return store.Archive{}, err
+		}
+	}
 	now := svc.now().UTC().Format(time.RFC3339Nano)
 	wake := false
 	a, err := svc.Store.UpdateArchive(conv, s.ArchiveRetentionDays, func(a *store.Archive, exists bool) error {
@@ -293,6 +307,9 @@ func (svc *Service) RequestArchive(ctx context.Context, conv, since string, canc
 				wake = true
 			}
 			return nil
+		}
+		if exists && a.Conversation.ParticipantID != "" && a.Conversation.ParticipantID != c.ParticipantID {
+			return errors.New("archive_identity_changed")
 		}
 		// Restart only the import; view and recent checkpoints are independent.
 		// The new generation rejects an import page fetched for the old request.

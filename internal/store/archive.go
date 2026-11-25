@@ -205,6 +205,105 @@ func (s *Store) saveArchive(tx *sql.Tx, a Archive, retention int) error {
 	_, err = tx.Exec("DELETE FROM archive_pending WHERE conversation=?", a.Conversation.ID)
 	return err
 }
+
+// RelocateArchive moves an archived conversation and all its associated
+// messages, changes, pending state, enrollments, and jobs to a new conversation ID.
+// This is used when an upstream phone renumbers its conversation IDs and
+// assigns oldConv to a different participant, isolating the existing
+// archive under newConv so messages from different people are never merged.
+// If newConv is already taken, a numbered suffix is appended to ensure uniqueness.
+func (s *Store) RelocateArchive(oldConv, newConv string) (string, error) {
+	if oldConv == "" || newConv == "" || oldConv == newConv {
+		return "", errors.New("invalid_conversation_id")
+	}
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback()
+
+	var payload string
+	var retention int
+	switch err = tx.QueryRow("SELECT payload, retention_days FROM archive_conversations WHERE conversation=?", oldConv).Scan(&payload, &retention); {
+	case errors.Is(err, sql.ErrNoRows):
+		return "", sql.ErrNoRows
+	case err != nil:
+		return "", err
+	}
+
+	b, err := s.Vault.Open("archive:"+Hash(oldConv), payload)
+	if err != nil {
+		return "", err
+	}
+	var a Archive
+	if err = json.Unmarshal(b, &a); err != nil {
+		return "", err
+	}
+
+	targetID := newConv
+	for i := 1; ; i++ {
+		var exists int
+		if err := tx.QueryRow("SELECT count(*) FROM archive_conversations WHERE conversation=?", targetID).Scan(&exists); err != nil {
+			return "", err
+		}
+		if exists == 0 {
+			break
+		}
+		targetID = newConv + "-" + strconv.Itoa(i)
+	}
+
+	a.Conversation.ID = targetID
+	newBytes, err := json.Marshal(a)
+	if err != nil {
+		return "", err
+	}
+	enc, err := s.Vault.Seal("archive:"+Hash(targetID), newBytes)
+	if err != nil {
+		return "", err
+	}
+
+	if _, err = tx.Exec("DELETE FROM archive_conversations WHERE conversation=?", oldConv); err != nil {
+		return "", err
+	}
+	if _, err = tx.Exec("INSERT INTO archive_conversations VALUES(?,?,?)", targetID, enc, retention); err != nil {
+		return "", err
+	}
+	if _, err = tx.Exec("UPDATE messages SET conversation=? WHERE conversation=?", targetID, oldConv); err != nil {
+		return "", err
+	}
+	if _, err = tx.Exec("UPDATE message_changes SET conversation=? WHERE conversation=?", targetID, oldConv); err != nil {
+		return "", err
+	}
+	if _, err = tx.Exec("UPDATE OR IGNORE archive_pending SET conversation=? WHERE conversation=?", targetID, oldConv); err != nil {
+		return "", err
+	}
+	if _, err = tx.Exec("DELETE FROM archive_pending WHERE conversation=?", oldConv); err != nil {
+		return "", err
+	}
+	if _, err = tx.Exec("UPDATE OR IGNORE enrollment SET conversation=? WHERE conversation=?", targetID, oldConv); err != nil {
+		return "", err
+	}
+	if _, err = tx.Exec("DELETE FROM enrollment WHERE conversation=?", oldConv); err != nil {
+		return "", err
+	}
+	if _, err = tx.Exec("UPDATE OR IGNORE group_enrollment SET conversation=? WHERE conversation=?", targetID, oldConv); err != nil {
+		return "", err
+	}
+	if _, err = tx.Exec("DELETE FROM group_enrollment WHERE conversation=?", oldConv); err != nil {
+		return "", err
+	}
+	if _, err = tx.Exec("UPDATE OR IGNORE group_shared SET conversation=? WHERE conversation=?", targetID, oldConv); err != nil {
+		return "", err
+	}
+	if _, err = tx.Exec("DELETE FROM group_shared WHERE conversation=?", oldConv); err != nil {
+		return "", err
+	}
+	if _, err = tx.Exec("UPDATE jobs SET conversation=? WHERE conversation=?", targetID, oldConv); err != nil {
+		return "", err
+	}
+
+	return targetID, tx.Commit()
+}
 func (s *Store) Archives() ([]Archive, error) { return s.ArchivesContext(context.Background()) }
 func (s *Store) ArchivesContext(ctx context.Context) ([]Archive, error) {
 	rows, err := s.DB.QueryContext(ctx, "SELECT conversation,payload FROM archive_conversations ORDER BY conversation")
