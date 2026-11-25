@@ -435,4 +435,70 @@ func TestRequestArchiveRebindsParticipantAndClearsIneligible(t *testing.T) {
 	if updated.RefreshState != "" {
 		t.Fatalf("expected RefreshState to be cleared, got %q", updated.RefreshState)
 	}
+
+	// The old archive was relocated to preserve its history
+	oldArchivedID := "archived-demo-chat-old-participant-177"
+	oldArchive, err := e.Store.Archive(oldArchivedID)
+	if err != nil {
+		t.Fatalf("expected relocated archive %q to exist: %v", oldArchivedID, err)
+	}
+	if oldArchive.Conversation.ParticipantID != "old-participant-177" {
+		t.Fatalf("expected relocated archive participant %q, got %q", "old-participant-177", oldArchive.Conversation.ParticipantID)
+	}
+}
+
+func TestRequestArchiveRelocatesCollidingParticipantArchiveAndIsolatesMessages(t *testing.T) {
+	t.Parallel()
+	e, _ := setup(t)
+	enableInbox(t, e)
+
+	// Seed old conversation "demo-chat" with messages under old participant
+	oldConv := transport.Conversation{
+		ID:            "demo-chat",
+		ParticipantID: "old-person-bryan",
+		Label:         "Bryan Zhang",
+		Protocol:      "RCS",
+		Writable:      true,
+	}
+	if err := e.Store.SaveArchive(store.Archive{Conversation: oldConv, State: "available_pages_exhausted", Generation: 1}, 30); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Store.SaveMessage("msg-1", "demo-chat", "incoming", "original drone text"); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Store.SaveMessage("msg-2", "demo-chat", "outgoing", "reply about drone"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Transport returns demo-chat with demo-peer (a different person, e.g. Mint Mobile)
+	// Calling RequestArchive should relocate Bryan Zhang's messages to archived-demo-chat-old-person-bryan
+	freshArchive, err := e.RequestArchive(context.Background(), "demo-chat", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if freshArchive.Conversation.ParticipantID != "demo-peer" {
+		t.Fatalf("expected fresh archive to be bound to demo-peer, got %q", freshArchive.Conversation.ParticipantID)
+	}
+
+	// Bryan Zhang's messages must be under the relocated ID, NOT demo-chat
+	relocatedID := "archived-demo-chat-old-person-bryan"
+	bryanMsgs, err := e.Store.Messages(relocatedID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bryanMsgs) != 2 {
+		t.Fatalf("expected 2 messages under relocated ID %q, got %d", relocatedID, len(bryanMsgs))
+	}
+	if bryanMsgs[0].Text != "reply about drone" || bryanMsgs[1].Text != "original drone text" {
+		t.Fatalf("unexpected message content under relocated ID: %+v", bryanMsgs)
+	}
+
+	// demo-chat must now have 0 messages from the old participant
+	newChatMsgs, err := e.Store.Messages("demo-chat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(newChatMsgs) != 0 {
+		t.Fatalf("expected 0 messages under demo-chat after collision relocation, got %d", len(newChatMsgs))
+	}
 }
