@@ -33,10 +33,10 @@ type Conversation struct {
 	// OutgoingID is the phone's sending identity for this conversation when
 	// read. Plans snapshot it encrypted at acceptance; it is omitted from JSON
 	// and never logged.
-	OutgoingID string `json:"-"`
-	Archived   bool   `json:"archived,omitempty"`
-	IdentityChanged bool `json:"identity_changed,omitempty"`
-	ID         string `json:"id"`
+	OutgoingID      string `json:"-"`
+	Archived        bool   `json:"archived,omitempty"`
+	IdentityChanged bool   `json:"identity_changed,omitempty"`
+	ID              string `json:"id"`
 	// ParticipantID is the other person in an individual conversation. A group
 	// has one fixed identity of its own, "group:" and its conversation ID, so
 	// that people joining or leaving doesn't disturb reading and archiving it.
