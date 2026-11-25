@@ -1314,7 +1314,7 @@ paths:
         '400': {description: Invalid bounded request}
         '401': {description: Authentication required}
         '403': {description: Access denied}
-        '409': {description: refresh_unavailable_or_invalid_range}
+        '409': {description: refresh_unavailable_or_invalid_range, archive_identity_changed, archive_access_disabled, or invalid_range}
   /inbox/conversations/{id}/sync:
     parameters:
     - name: id
@@ -1714,6 +1714,9 @@ components:
       type: object
       properties:
         archived: {type: boolean}
+        identity_changed:
+          type: boolean
+          description: True when Google Messages changed the contact or participant identity on the phone since the conversation was archived or enrolled. Composing and automated replies are locked until verified and re-bound.
         id:
           type: string
         participant_id:

@@ -20,7 +20,12 @@ func (s *Server) archiveRoutes() {
 		}
 		a, err := s.Collection.RequestArchiveRefresh(r.Context(), r.PathValue("id"), v.Since, v.Until)
 		if err != nil {
-			s.bad(w, 409, "refresh_unavailable_or_invalid_range")
+			code := "refresh_unavailable_or_invalid_range"
+			switch err.Error() {
+			case "archive_identity_changed", "archive_access_disabled", "invalid_range":
+				code = err.Error()
+			}
+			s.bad(w, 409, code)
 			return
 		}
 		s.json(w, 202, a)

@@ -386,3 +386,53 @@ func TestGapScheduleRespectsRetryAndUnknownScope(t *testing.T) {
 		t.Fatal("unknown scope keeps fast worker alive")
 	}
 }
+
+func TestRequestArchiveRebindsParticipantAndClearsIneligible(t *testing.T) {
+	t.Parallel()
+	e, _ := setup(t)
+	enableInbox(t, e)
+	// Seed archive with old participant ID, active state ("running"), and ineligible error states
+	a := store.Archive{
+		Conversation: transport.Conversation{ID: "demo-chat", ParticipantID: "old-participant-177", Writable: true},
+		State:        "running",
+		RecentCheckpoint: store.RecentCheckpoint{
+			RecentError:    "ineligible",
+			RecentFailures: 3,
+			RecentRetryAt:  "2026-11-24T18:00:00Z",
+		},
+		ViewCheckpoint: store.ViewCheckpoint{
+			RefreshError:    "ineligible",
+			RefreshState:    "ineligible",
+			RefreshFailures: 2,
+			RefreshRetryAt:  "2026-11-24T18:00:00Z",
+		},
+	}
+	if err := e.Store.SaveArchive(a, 0); err != nil {
+		t.Fatal(err)
+	}
+
+	// RequestArchive should look up the live conversation from transport (which returns demo-peer)
+	// and re-bind a.Conversation to demo-peer, while clearing ineligible error states.
+	updated, err := e.RequestArchive(context.Background(), "demo-chat", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Conversation.ParticipantID != "demo-peer" {
+		t.Fatalf("expected participant ID to be re-bound to 'demo-peer', got %q", updated.Conversation.ParticipantID)
+	}
+	if updated.RecentError != "" {
+		t.Fatalf("expected RecentError to be cleared, got %q", updated.RecentError)
+	}
+	if updated.RecentFailures != 0 {
+		t.Fatalf("expected RecentFailures to be 0, got %d", updated.RecentFailures)
+	}
+	if updated.RecentRetryAt != "" {
+		t.Fatalf("expected RecentRetryAt to be cleared, got %q", updated.RecentRetryAt)
+	}
+	if updated.RefreshError != "" {
+		t.Fatalf("expected RefreshError to be cleared, got %q", updated.RefreshError)
+	}
+	if updated.RefreshState != "" {
+		t.Fatalf("expected RefreshState to be cleared, got %q", updated.RefreshState)
+	}
+}

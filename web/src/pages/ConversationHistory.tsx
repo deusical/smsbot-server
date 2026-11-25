@@ -43,6 +43,7 @@ type Props = {
   typing?: boolean;
   onBack?: () => void;
   onResume?: () => void;
+  onPatchConversation?: (id: string, patch: Partial<Conversation>) => void;
 };
 
 let dayStartMs = 0;
@@ -262,7 +263,18 @@ const MessageRow = memo(function MessageRow({
  * receipts and the composer. Scrolling, virtualization and the visible range
  * stay together here because they depend on the same layout.
  */
-export const ConversationHistory = memo(function ConversationHistory({ conversation, state, busy, act, inbox, enrollControl, typing = false, onBack, onResume }: Props) {
+export const ConversationHistory = memo(function ConversationHistory({
+  conversation,
+  state,
+  busy,
+  act,
+  inbox,
+  enrollControl,
+  typing = false,
+  onBack,
+  onResume,
+  onPatchConversation,
+}: Props) {
   const base = `${inbox?.enabled || conversation.archived ? "/inbox" : ""}/conversations/${encodeURIComponent(conversation.id)}`;
   const scroll = useRef<HTMLDivElement>(null),
     rowsContainer = useRef<HTMLDivElement>(null),
@@ -307,15 +319,17 @@ export const ConversationHistory = memo(function ConversationHistory({ conversat
       ? "paused"
       : !state.transport_ready
         ? "Your phone isn’t connected, so messages can’t be sent right now."
-        : groupChanged
-          ? "The people in this group changed. Check who is in it before sending."
-          : !conversation.writable
-          ? "This conversation can’t receive replies."
-          : archiveReadOnly
-            ? "Sending is disabled for this conversation."
-            : !(conversation.enrolled || inbox?.enabled)
-              ? "Turn on bot replies to message this conversation."
-              : "";
+        : conversation.identity_changed
+          ? "Contact identity changed on phone. Verify and sync above to send."
+          : groupChanged
+            ? "The people in this group changed. Check who is in it before sending."
+            : !conversation.writable
+            ? "This conversation can’t receive replies."
+            : archiveReadOnly
+              ? "Sending is disabled for this conversation."
+              : !(conversation.enrolled || inbox?.enabled)
+                ? "Turn on bot replies to message this conversation."
+                : "";
   const canSend = !archiveReadOnly && !blocked && !busy;
   const canAttach = !!inbox?.enabled && !!state?.capabilities.includes("attachments");
   const fileLimits = inbox?.attachment_limits ?? defaultAttachmentLimits;
@@ -335,8 +349,8 @@ export const ConversationHistory = memo(function ConversationHistory({ conversat
   const [viewRange, setViewRange] = useState<{ since: string; until: string } | null>(null);
   useViewedHistoryRefresh(
     conversation.id,
-    !!state?.transport_ready && inboxAllows(inbox, conversation),
-    !!state?.capabilities.includes("archive_refresh") && (!!inbox?.enabled || !!conversation.archived),
+    !conversation.identity_changed && !!state?.transport_ready && inboxAllows(inbox, conversation),
+    !conversation.identity_changed && !!state?.capabilities.includes("archive_refresh") && (!!inbox?.enabled || !!conversation.archived),
     viewRange ?? undefined,
   );
   const openedAt = useRef(new Date().toISOString());
@@ -498,8 +512,20 @@ export const ConversationHistory = memo(function ConversationHistory({ conversat
     threadRef.current.refreshNow();
   }, []);
 
+  const handleRebindAndSync = useCallback(async () => {
+    await act(async () => {
+      await api(`/inbox/conversations/${encodeURIComponent(conversation.id)}/sync`, "POST", { since: "" });
+      onPatchConversation?.(conversation.id, {
+        writable: true,
+        identity_changed: false,
+      });
+      await threadRef.current.load("", true);
+      textarea.current?.focus();
+    });
+  }, [act, conversation.id, onPatchConversation]);
+
   const showActions = !!state?.capabilities.includes("message_actions");
-  const actionsWritable = inboxAllows(inbox, conversation) && !archiveReadOnly && !groupChanged;
+  const actionsWritable = inboxAllows(inbox, conversation) && !archiveReadOnly && !groupChanged && !conversation.identity_changed;
   const actionsRoster = conversation.group ? seenRoster : undefined;
   const eligibilityKey = useMemo(
     () =>
@@ -563,14 +589,23 @@ export const ConversationHistory = memo(function ConversationHistory({ conversat
           {enrollControl}
         </div>
       </header>
-      {groupChanged && (
+      {conversation.identity_changed ? (
+        <div className="group-changed identity-changed" role="alert">
+          <span>
+            Contact identity was refreshed by Google Messages on your phone. Updates are paused to protect your privacy.
+          </span>
+          <button type="button" disabled={busy} onClick={() => void handleRebindAndSync()}>
+            {busy ? "Updating…" : "Verify & Sync Messages"}
+          </button>
+        </div>
+      ) : groupChanged ? (
         <div className="group-changed" role="alert">
           <span>The people in this group changed. It now has {memberNames(conversation) || "no one else"}.</span>
           <button type="button" onClick={() => setSeenRoster(conversation.roster ?? "")}>
             Send to these people
           </button>
         </div>
-      )}
+      ) : null}
       {searchOpen && (
         <label className="search thread-search">
           <Icon name="search" size={16} />

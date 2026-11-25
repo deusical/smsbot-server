@@ -283,7 +283,7 @@ func (svc *Service) RequestArchive(ctx context.Context, conv, since string, canc
 	now := svc.now().UTC().Format(time.RFC3339Nano)
 	wake := false
 	a, err := svc.Store.UpdateArchive(conv, s.ArchiveRetentionDays, func(a *store.Archive, exists bool) error {
-		if exists && a.Since == since && activeArchiveState(a.State) {
+		if exists && a.Conversation.ParticipantID == c.ParticipantID && a.Since == since && activeArchiveState(a.State) {
 			if a.RequestedAt == "" {
 				// Promote the existing automatic job without erasing its checkpoint.
 				a.RequestSource = "owner"
@@ -300,6 +300,17 @@ func (svc *Service) RequestArchive(ctx context.Context, conv, since string, canc
 		a.Generation++
 		a.ImportCheckpoint = store.ImportCheckpoint{Since: since, State: "queued", ScanRevision: s.Revision, RequestSource: "owner", RequestedAt: now}
 		a.Skipped = 0
+		if a.RecentError == "ineligible" {
+			a.RecentCheckpoint.RecentError = ""
+			a.RecentCheckpoint.RecentFailures = 0
+			a.RecentCheckpoint.RecentRetryAt = ""
+		}
+		if a.RefreshError == "ineligible" {
+			a.ViewCheckpoint.RefreshError = ""
+			a.ViewCheckpoint.RefreshState = ""
+			a.ViewCheckpoint.RefreshFailures = 0
+			a.ViewCheckpoint.RefreshRetryAt = ""
+		}
 		wake = true
 		return nil
 	})
