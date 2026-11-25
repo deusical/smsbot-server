@@ -74,11 +74,10 @@ func (s *Server) inboxConversations(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, c := range archived {
 		if i, ok := known[c.ID]; ok {
-			if p.Conversations[i].ParticipantID == c.ParticipantID {
-				p.Conversations[i].Archived = true
-			} else {
-				c.Writable = false
-				p.Conversations[i] = c
+			p.Conversations[i].Archived = true
+			if p.Conversations[i].ParticipantID != c.ParticipantID {
+				p.Conversations[i].Writable = false
+				p.Conversations[i].IdentityChanged = true
 			}
 		} else {
 			p.Conversations = append(p.Conversations, c)

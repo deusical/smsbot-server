@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/deusical/smsbot-server/internal/store"
 	"github.com/deusical/smsbot-server/internal/transport"
 )
 
@@ -130,5 +131,89 @@ func TestViewedRefreshOwnerConsentAndRangeValidation(t *testing.T) {
 		if w := ownerRequest(s, "POST", path, body); w.Code != 409 {
 			t.Fatal("invalid range accepted", w.Code)
 		}
+	}
+}
+
+func TestInboxConversationsIdentityChanged(t *testing.T) {
+	t.Parallel()
+	s := apiSetup(t)
+	cfg, err := s.Collection.Settings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Enabled = true
+	if err := s.Collection.SetSettings(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	// Archive demo-chat under an old participant ID
+	oldConv := transport.Conversation{
+		ID:            "demo-chat",
+		ParticipantID: "old-stale-peer",
+		Label:         "Demo conversation",
+		Protocol:      "RCS",
+		Writable:      true,
+	}
+	if _, err := s.Store.UpdateArchive("demo-chat", 30, func(a *store.Archive, exists bool) error {
+		*a = store.NewArchive(oldConv)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Enroll demo-chat under old participant ID
+	if err := s.Store.Enroll("demo-chat", "old-stale-peer"); err != nil {
+		t.Fatal(err)
+	}
+
+	w := ownerRequest(s, "GET", "/api/v1/inbox/conversations", "")
+	if w.Code != 200 {
+		t.Fatal("inbox conversations failed", w.Code)
+	}
+	var page transport.ConversationPage
+	if err := json.Unmarshal(w.Body.Bytes(), &page); err != nil {
+		t.Fatal(err)
+	}
+	var demo *transport.Conversation
+	for i := range page.Conversations {
+		if page.Conversations[i].ID == "demo-chat" {
+			demo = &page.Conversations[i]
+			break
+		}
+	}
+	if demo == nil {
+		t.Fatal("demo-chat missing from inbox conversations")
+	}
+	if !demo.IdentityChanged {
+		t.Fatal("expected identity_changed to be true")
+	}
+	if demo.Writable {
+		t.Fatal("expected writable to be false")
+	}
+	if !demo.Archived {
+		t.Fatal("expected archived to be true")
+	}
+	if demo.Enrolled {
+		t.Fatal("expected enrolled to be false due to participant mismatch")
+	}
+	if demo.ParticipantID != "demo-peer" {
+		t.Fatalf("expected live participant ID 'demo-peer', got %q", demo.ParticipantID)
+	}
+
+	// Verify that adjacent conversations without identity changes are completely unaffected
+	for _, c := range page.Conversations {
+		if c.ID != "demo-chat" {
+			if c.IdentityChanged {
+				t.Fatalf("conversation %s unexpectedly flagged with identity_changed", c.ID)
+			}
+			if !c.Writable {
+				t.Fatalf("conversation %s unexpectedly marked non-writable", c.ID)
+			}
+		}
+	}
+
+	// Also verify that requesting a refresh for this mismatched conversation returns 409 archive_identity_changed
+	refreshBody := `{"since":"2026-01-01T00:00:00Z","until":"2026-01-02T00:00:00Z"}`
+	refW := ownerRequest(s, "POST", "/api/v1/inbox/conversations/demo-chat/refresh", refreshBody)
+	if refW.Code != 409 || !strings.Contains(refW.Body.String(), "archive_identity_changed") {
+		t.Fatalf("expected 409 archive_identity_changed, got %d %s", refW.Code, refW.Body.String())
 	}
 }

@@ -35,6 +35,7 @@ type Conversation struct {
 	// and never logged.
 	OutgoingID string `json:"-"`
 	Archived   bool   `json:"archived,omitempty"`
+	IdentityChanged bool `json:"identity_changed,omitempty"`
 	ID         string `json:"id"`
 	// ParticipantID is the other person in an individual conversation. A group
 	// has one fixed identity of its own, "group:" and its conversation ID, so

@@ -98,6 +98,10 @@
   color: var(--signal);
   font-weight: 550;
 }
+.warn-tag {
+  color: var(--amber);
+  font-weight: 550;
+}
 .load-more {
   margin: 0 14px 14px;
 }
@@ -443,6 +447,42 @@
   background: var(--raised);
   border-bottom: 1px solid var(--line, currentColor);
   font-size: 13px;
+}
+.thread-search ~ .older {
+  top: 124px;
+}
+.group-changed ~ .older {
+  top: 124px;
+}
+.group-changed ~ .thread-search ~ .older {
+  top: 174px;
+}
+.group-changed.identity-changed {
+  background: var(--amber-soft);
+  border-bottom: 1px solid color-mix(in srgb, var(--amber) 25%, transparent);
+  color: var(--text);
+}
+.group-changed.identity-changed button {
+  background: var(--signal);
+  border-color: var(--signal);
+  color: var(--signal-ink);
+}
+@media (max-width: 600px) {
+  .group-changed {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+  .group-changed button {
+    width: 100%;
+    min-height: 44px;
+  }
+  .group-changed ~ .older {
+    top: 205px;
+  }
+  .group-changed ~ .thread-search ~ .older {
+    top: 255px;
+  }
 }
 .thread-title small {
   display: block;

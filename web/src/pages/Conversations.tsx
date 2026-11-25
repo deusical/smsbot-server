@@ -245,11 +245,16 @@ export function ConversationsPage({
                 <span className="conversation-text">
                   <strong>
                     {c.label}
+                    {c.identity_changed && <span className="sr-only"> (identity update needed)</span>}
                     {isUnread(c) && <span className="sr-only"> (unread)</span>}
                     {c.pinned && <span className="sr-only"> (pinned)</span>}
                   </strong>
                   <small>
-                    {typing.has(c.id) ? (
+                    {c.identity_changed ? (
+                      <span className="warn-tag">
+                        Paused · Identity changed
+                      </span>
+                    ) : typing.has(c.id) ? (
                       <span className="typing-text">typing…</span>
                     ) : c.preview ? (
                       <span className="preview-text">
@@ -272,6 +277,11 @@ export function ConversationsPage({
                   )}
                   <span className="conversation-flags" aria-hidden="true">
                     {c.pinned && <Icon name="pin" size={13} />}
+                    {c.identity_changed && (
+                      <span title="Identity changed on phone — sync needed" style={{ color: "var(--amber)", display: "inline-flex" }}>
+                        <Icon name="warning" size={13} />
+                      </span>
+                    )}
                     {isUnread(c) && <span className="unread-dot" />}
                   </span>
                 </span>
@@ -324,6 +334,7 @@ export function ConversationsPage({
             typing={typing.has(current.id)}
             onBack={handleBack}
             onResume={onResume}
+            onPatchConversation={onPatchConversation}
           />
         ) : (
           <div className="thread-placeholder">

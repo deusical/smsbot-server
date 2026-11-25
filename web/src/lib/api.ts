@@ -37,6 +37,7 @@ export type PhoneSim = {
 };
 export type Conversation = {
   archived?: boolean;
+  identity_changed?: boolean;
   id: string;
   participant_id: string;
   label: string;
