@@ -211,9 +211,10 @@ func (g *Google) LookupConversation(ctx context.Context, id string) (Conversatio
 }
 
 type lookupFlight struct {
-	done chan struct{}
-	conv Conversation
-	err  error
+	done  chan struct{}
+	proto *gmproto.Conversation
+	conv  Conversation
+	err   error
 }
 
 // LookupConversationShared coalesces concurrent in-flight live lookups for the
@@ -227,6 +228,38 @@ func (g *Google) LookupConversationShared(ctx context.Context, id string) (Conve
 	if ctx.Err() != nil {
 		return Conversation{}, ErrLookupFailed
 	}
+	flight := g.ensureLookupFlight(ctx, id)
+	select {
+	case <-ctx.Done():
+		if !g.SessionUp() {
+			return Conversation{}, ErrUnavailable
+		}
+		return Conversation{}, ErrLookupFailed
+	case <-flight.done:
+		return flight.conv, flight.err
+	}
+}
+
+func (g *Google) lookupConversationProtoShared(ctx context.Context, id string) (*gmproto.Conversation, error) {
+	if !g.SessionUp() {
+		return nil, ErrUnavailable
+	}
+	if ctx.Err() != nil {
+		return nil, ErrLookupFailed
+	}
+	flight := g.ensureLookupFlight(ctx, id)
+	select {
+	case <-ctx.Done():
+		if !g.SessionUp() {
+			return nil, ErrUnavailable
+		}
+		return nil, ErrLookupFailed
+	case <-flight.done:
+		return flight.proto, flight.err
+	}
+}
+
+func (g *Google) ensureLookupFlight(ctx context.Context, id string) *lookupFlight {
 	g.lookupFlightMu.Lock()
 	if g.lookupFlights == nil {
 		g.lookupFlights = map[string]*lookupFlight{}
@@ -249,17 +282,12 @@ func (g *Google) LookupConversationShared(ctx context.Context, id string) (Conve
 			callCtx, cancel := context.WithTimeout(WithPhonePurpose(context.Background(), purpose), 20*time.Second)
 			defer cancel()
 			flight.conv, flight.err = g.LookupConversation(callCtx, id)
+			if flight.err == nil {
+				flight.proto, _ = g.cachedConversationProto(id)
+			}
 		}()
 	}
-	select {
-	case <-ctx.Done():
-		if !g.SessionUp() {
-			return Conversation{}, ErrUnavailable
-		}
-		return Conversation{}, ErrLookupFailed
-	case <-flight.done:
-		return flight.conv, flight.err
-	}
+	return flight
 }
 
 func (g *Google) conversationGetter() func(context.Context, string) (*gmproto.Conversation, error) {

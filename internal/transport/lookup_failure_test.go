@@ -2,6 +2,7 @@ package transport
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"sync"
 	"sync/atomic"
@@ -416,6 +417,33 @@ func TestFetchHistorySkipsPreLookupWhenCachedAndVerifiesPostFetch(t *testing.T) 
 	})
 	if !errors.Is(err, ErrIneligibleConversation) || getCalls != 1 || fetchCalls != 0 {
 		t.Fatalf("post-stale fetchHistory returned %v (getCalls=%d fetchCalls=%d), want ErrIneligibleConversation without fetch", err, getCalls, fetchCalls)
+	}
+}
+
+func TestFetchHistoryPagingReusesFreshCachedConversationWithoutLookup(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	g := NewGoogle(nil, "")
+	g.ready.Store(true)
+	g.connected = func() bool { return true }
+	g.cacheDetail(individual("c1"))
+
+	cursor := base64.RawURLEncoding.EncodeToString([]byte{0x08, 0x01})
+
+	getCalls := 0
+	fetchCalls := 0
+	_, err := g.fetchHistory(ctx, "c1", "peer", cursor, func(context.Context, string) (*gmproto.Conversation, error) {
+		getCalls++
+		return individual("c1"), nil
+	}, func(context.Context, string, int64, *gmproto.Cursor) (*gmproto.ListMessagesResponse, error) {
+		fetchCalls++
+		return &gmproto.ListMessagesResponse{}, nil
+	})
+	if err != nil {
+		t.Fatalf("paged fetchHistory failed: %v", err)
+	}
+	if getCalls != 0 || fetchCalls != 1 {
+		t.Fatalf("got getCalls=%d fetchCalls=%d, want 0 and 1 (cached reuse for paged history)", getCalls, fetchCalls)
 	}
 }
 
