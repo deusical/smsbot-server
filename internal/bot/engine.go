@@ -937,6 +937,11 @@ func pollsWorker(p store.Plan) bool {
 // The send itself is serialized with pause and enrollment, and its intent is
 // persisted (submitting, with a transaction ID) before the transport call.
 func (e *Engine) Dispatch(ctx context.Context) error {
+	_, err := e.dispatchOne(ctx)
+	return err
+}
+
+func (e *Engine) dispatchOne(ctx context.Context) (bool, error) {
 	ctx = transport.WithPhonePurpose(ctx, "send")
 	dispatchStart := time.Now()
 	e.dispatchMu.Lock()
@@ -986,18 +991,19 @@ func (e *Engine) Dispatch(ctx context.Context) error {
 		diagResult = "collect_failed"
 		controlHold = time.Since(controlHoldStart)
 		e.mu.Unlock()
-		return err
+		return false, err
 	}
 	j, p, cfg, mode, ready, err := e.nextReady(ctx)
 	if !ready || err != nil {
 		controlHold = time.Since(controlHoldStart)
 		e.mu.Unlock()
-		return err
+		return false, err
 	}
 	if p.Mutation != nil {
 		diagResult = "reaction"
 		controlHold = time.Since(controlHoldStart)
-		return e.dispatchReaction(ctx, j, p) // releases the lock
+		rErr := e.dispatchReaction(ctx, j, p) // releases the lock
+		return rErr == nil, rErr
 	}
 	defer func() {
 		e.videoChecked = ""
@@ -1007,17 +1013,17 @@ func (e *Engine) Dispatch(ctx context.Context) error {
 	}()
 	if done, err := e.runPipeline(ctx, j, &p, &cfg); done {
 		diagResult = "pipeline_done"
-		return err
+		return false, err
 	}
 	if p.ExecutionDeadline != "" && len(p.Attachments) > 0 {
 		// A long-running job uploads in the background lane, within its deadline.
 		if done, err := e.prepareDownloadUpload(ctx, j, &p); done {
 			diagResult = "prepare_upload"
-			return err
+			return false, err
 		}
 	} else if done, err := e.prepareFiles(ctx, j, &p); done {
 		diagResult = "prepare_files"
-		return err
+		return false, err
 	}
 	if (mode == cachedLookup || e.workerUnlocked) && len(p.Attachments) == 0 && e.videoChecked != j.ID {
 		// A pipeline whose worker step produced no attachment skipped sendableVideo
@@ -1028,7 +1034,7 @@ func (e *Engine) Dispatch(ctx context.Context) error {
 			if errors.Is(err, transport.ErrLookupFailed) {
 				e.backoffPreflight(j.ID, j.ConversationID)
 			}
-			return err
+			return false, err
 		}
 		if code != "" {
 			diagResult = code
@@ -1036,12 +1042,13 @@ func (e *Engine) Dispatch(ctx context.Context) error {
 			if code == "stale" || code == "execution_expired" {
 				state = "expired"
 			}
-			return e.Store.Complete(j.ID, state, code)
+			return false, e.Store.Complete(j.ID, state, code)
 		}
 	}
 	// The conversation turn's earlier history, as checked by the AI step.
 	diagResult = "submitted"
-	return e.submit(ctx, j, p, cfg)
+	sErr := e.submit(ctx, j, p, cfg)
+	return sErr == nil, sErr
 }
 
 func (e *Engine) backoffPreflight(id, conv string) {
@@ -1550,8 +1557,14 @@ func (e *Engine) Run(ctx context.Context, report func(error)) {
 				report(err)
 			}
 		case <-ticker.C:
-			if err := e.Dispatch(ctx); err != nil && !errors.Is(err, transport.ErrLookupFailed) {
-				report(err)
+			for {
+				dispatched, err := e.dispatchOne(ctx)
+				if err != nil && !errors.Is(err, transport.ErrLookupFailed) {
+					report(err)
+				}
+				if !dispatched || err != nil || ctx.Err() != nil {
+					break
+				}
 			}
 		}
 	}
