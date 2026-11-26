@@ -106,11 +106,7 @@ func (g *Google) cacheDetail(c *gmproto.Conversation) {
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if g.conversations == nil {
-		g.conversations = map[string]*gmproto.Conversation{}
-	}
-	g.conversations[c.GetConversationID()] = c
-	delete(g.staleCached, c.GetConversationID())
+	g.updateBaselineLocked(c, false)
 }
 
 // updateBaselineLocked updates g.conversations from a phone event or list page
@@ -359,8 +355,7 @@ func (g *Google) Conversations(ctx context.Context) ([]Conversation, error) {
 		if c.GetConversationID() == "" {
 			continue
 		}
-		g.conversations[c.GetConversationID()] = c
-		delete(g.staleCached, c.GetConversationID())
+		g.updateBaselineLocked(c, false)
 		out = append(out, listConversation(c))
 	}
 	g.mu.Unlock()

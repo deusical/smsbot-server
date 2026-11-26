@@ -59,6 +59,9 @@ func TestD1VerifySendTargetIdentityChange(t *testing.T) {
 		_, sendErr := g.sendPartsWith(context.Background(), "c1", "txn1", "hi", nil, 0, g.conversationGetter(), successSendMessage)
 
 		t.Logf("participant change outcome: err=%v, diag_result=%q", sendErr, lastDiag.Result)
+		if sendErr == nil || lastDiag.Result != "participant_changed" {
+			t.Fatalf("expected participant_changed, got err=%v diag=%q", sendErr, lastDiag.Result)
+		}
 	})
 
 	t.Run("roster changed", func(t *testing.T) {
@@ -91,6 +94,9 @@ func TestD1VerifySendTargetIdentityChange(t *testing.T) {
 		_, sendErr := g.sendPartsWith(context.Background(), "g1", "txn2", "hi", nil, 0, g.conversationGetter(), successSendMessage)
 
 		t.Logf("roster change outcome: err=%v, diag_result=%q", sendErr, lastDiag.Result)
+		if sendErr == nil || lastDiag.Result != "roster_changed" {
+			t.Fatalf("expected roster_changed, got err=%v diag=%q", sendErr, lastDiag.Result)
+		}
 	})
 
 	t.Run("outgoing identity changed", func(t *testing.T) {
@@ -125,5 +131,8 @@ func TestD1VerifySendTargetIdentityChange(t *testing.T) {
 		_, sendErr := g.sendPartsWith(context.Background(), "c2", "txn3", "hi", nil, 0, g.conversationGetter(), successSendMessage)
 
 		t.Logf("outgoing identity change outcome: err=%v, diag_result=%q", sendErr, lastDiag.Result)
+		if sendErr == nil || lastDiag.Result != "outgoing_identity_changed" {
+			t.Fatalf("expected outgoing_identity_changed, got err=%v diag=%q", sendErr, lastDiag.Result)
+		}
 	})
 }
