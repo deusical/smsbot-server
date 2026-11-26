@@ -616,3 +616,47 @@ func TestReactRetriesGetConversationOnce(t *testing.T) {
 		t.Fatalf("err=%v reason=%q getCalls=%d reactCalls=%d", err, RefusalReason(err), getCalls, reactCalls)
 	}
 }
+
+func TestFetchConversationDeadlineExceededDoesNotRetry(t *testing.T) {
+	t.Parallel()
+	calls := 0
+	get := func(ctx context.Context, id string) (*gmproto.Conversation, error) {
+		calls++
+		return nil, context.DeadlineExceeded
+	}
+	_, err := fetchConversation(context.Background(), "c1", 100*time.Millisecond, get)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected DeadlineExceeded, got %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("expected 1 call on DeadlineExceeded without retry, got %d", calls)
+	}
+}
+
+func TestSoftFailureDoesNotWipeCachesOnRecovery(t *testing.T) {
+	t.Parallel()
+	g := NewGoogle(nil, "")
+	g.ready.Store(true)
+	g.conversations["c1"] = individual("c1")
+
+	// Trigger a soft failure event (e.g. PingFailed)
+	_, reason, hard, soft, _, ok := connectionFailure(&events.PingFailed{Error: errors.New("ping timeout")})
+	if !ok || !soft || hard {
+		t.Fatalf("expected soft failure: ok=%v soft=%v hard=%v", ok, soft, hard)
+	}
+	g.noteFailureType(reason, hard, soft)
+
+	// Recovery completes successfully
+	recovered, hardRec := g.finishRecovery(recoveryResult{epoch: g.recovery.epoch, err: nil}, time.Now())
+	if !recovered || hardRec {
+		t.Fatalf("expected recovered=true hard=false, got recovered=%v hard=%v", recovered, hardRec)
+	}
+
+	// Verify conversation cache is NOT wiped!
+	g.mu.Lock()
+	conv := g.conversations["c1"]
+	g.mu.Unlock()
+	if conv == nil {
+		t.Fatal("soft failure wiped conversation cache on recovery")
+	}
+}
