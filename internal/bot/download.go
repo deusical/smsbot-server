@@ -91,10 +91,12 @@ func (e *Engine) pollWorkerStep(ctx context.Context, j store.Job, p *store.Plan,
 	e.videoChecked = ""
 	e.workerUnlocked = true
 	e.mu.Unlock()
+	e.dispatchMu.Unlock()
 	requestctx, requestcancel := context.WithTimeout(workctx, 10*time.Second)
 	stage, workerr := poll(requestctx, deadline)
 	requestcancel()
 	cancel()
+	e.dispatchMu.Lock()
 	e.mu.Lock()
 	delete(e.pending, j.ID)
 	current, loaderr := e.Store.Job(j.ID)
