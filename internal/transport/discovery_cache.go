@@ -19,6 +19,9 @@ type cachedConversationPage struct {
 // are picked up within a day.
 const pageRecheckAfter = 24 * time.Hour
 
+// discoveryFailureBackoff is the short backoff after a failed discovery page read.
+const discoveryFailureBackoff = 3 * time.Second
+
 // Pages that are not partial stay valid until the phone reports activity. Phone reads after
 // activity are spaced by listInvalidateGap; a page older than the latest
 // activity is returned marked stale within that gap so callers ask again.
@@ -70,6 +73,12 @@ func (c *conversationPageCache) get(ctx context.Context, key string, fetch func(
 		}
 		c.mu.Lock()
 		if until := c.failures[key]; time.Now().Before(until) {
+			if cached, ok := c.pages[key]; ok && cached.at.After(c.resetAt) && !cached.page.Partial {
+				c.mu.Unlock()
+				page := cloneConversationPage(cached.page)
+				page.Stale = true
+				return page, nil
+			}
 			c.mu.Unlock()
 			return ConversationPage{}, errors.New("discovery_unavailable")
 		}
@@ -124,7 +133,7 @@ func (c *conversationPageCache) get(ctx context.Context, key string, fetch func(
 						break
 					}
 				}
-				c.failures[key] = time.Now().Add(partialRetryGap)
+				c.failures[key] = time.Now().Add(discoveryFailureBackoff)
 			} else if err == nil {
 				delete(c.failures, key)
 			}
@@ -143,6 +152,15 @@ func (c *conversationPageCache) get(ctx context.Context, key string, fetch func(
 			c.pages[key] = cachedConversationPage{cloneConversationPage(page), started, started}
 			if had && samePage(old.page, page) {
 				c.confirmAfterLocked(page.NextCursor, started)
+			}
+		}
+		if err != nil && ctx.Err() == nil {
+			if cached, ok := c.pages[key]; ok && cached.at.After(c.resetAt) && !cached.page.Partial {
+				out := cloneConversationPage(cached.page)
+				out.Stale = true
+				close(done)
+				c.mu.Unlock()
+				return out, nil
 			}
 		}
 		out := cloneConversationPage(page)
