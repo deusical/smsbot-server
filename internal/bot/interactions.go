@@ -198,6 +198,9 @@ func (e *Engine) QueueReactionIn(ctx context.Context, conv, roster, target, emoj
 	}
 	intent := &store.MutationIntent{Target: target, WireTarget: v.UpstreamID, Protocol: "RCS", Emoji: emoji, Operation: operation, Version: version}
 	_, err = e.Store.Enqueue(id, conv, "reaction", store.Plan{Participant: c.ParticipantID, Roster: c.Roster, OutgoingID: c.OutgoingID, Manual: true, InboxOwnerOnly: true, Mutation: intent})
+	if err == nil {
+		e.nudgeDispatch()
+	}
 	return id, err
 }
 

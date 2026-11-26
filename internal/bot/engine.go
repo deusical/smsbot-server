@@ -44,6 +44,7 @@ type Engine struct {
 	downloadUploads map[string]downloadUpload
 	downloadWG      sync.WaitGroup
 	cancelNudge     chan struct{}
+	dispatchNudge   chan struct{}
 	DispatchLog     func(DispatchDiagnostic)
 	metrics         dispatchMetrics
 	passLookupMs    atomic.Int64
@@ -62,7 +63,7 @@ func New(s *store.Store, t transport.Transport, c *collection.Service, control *
 	if _, offline := t.(*transport.Fixture); offline {
 		provider = SimulatedProvider{}
 	}
-	return &Engine{Collection: c, Store: s, Transport: t, Provider: provider, mu: control, now: time.Now, pending: map[string]context.CancelFunc{}, downloadUploads: map[string]downloadUpload{}, cancelNudge: make(chan struct{}, 1), preflights: map[string]preflightRetry{}}
+	return &Engine{Collection: c, Store: s, Transport: t, Provider: provider, mu: control, now: time.Now, pending: map[string]context.CancelFunc{}, downloadUploads: map[string]downloadUpload{}, cancelNudge: make(chan struct{}, 1), dispatchNudge: make(chan struct{}, 1), preflights: map[string]preflightRetry{}}
 }
 
 // Init performs the engine's one-time startup work: offline fixture mode
@@ -159,6 +160,9 @@ func (e *Engine) Pause(value bool) error {
 	e.mu.Unlock()
 	if value && err == nil {
 		e.nudgeWorkerCancel()
+	}
+	if !value && err == nil {
+		e.nudgeDispatch()
 	}
 	return err
 }
@@ -360,6 +364,9 @@ func (e *Engine) Approve(id string) error {
 	ok, err := e.Store.Transition(id, "awaiting_approval", "queued")
 	if err == nil && !ok {
 		return errors.New("approval_unavailable")
+	}
+	if err == nil && ok {
+		e.nudgeDispatch()
 	}
 	return err
 }
@@ -616,6 +623,7 @@ func (e *Engine) record(m transport.Incoming, id, name, text string, p store.Pla
 	if err != nil || !accepted {
 		return accepted, err
 	}
+	e.nudgeDispatch()
 	if m.Outgoing {
 		// The phone's copy of the owner's message is usually saved already,
 		// under the dashboard send when it came from there.
@@ -1673,10 +1681,21 @@ func (e *Engine) Run(ctx context.Context, report func(error)) {
 		defer sweepWG.Done()
 		e.runWorkerCancelSweep(ctx)
 	}()
-	ticker := time.NewTicker(250 * time.Millisecond)
+	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 	retention := time.NewTicker(time.Hour)
 	defer retention.Stop()
+	drain := func() {
+		for {
+			dispatched, err := e.dispatchOne(ctx)
+			if err != nil && !errors.Is(err, transport.ErrLookupFailed) {
+				report(err)
+			}
+			if !dispatched || err != nil || ctx.Err() != nil {
+				break
+			}
+		}
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -1692,16 +1711,10 @@ func (e *Engine) Run(ctx context.Context, report func(error)) {
 			if err != nil {
 				report(err)
 			}
+		case <-e.dispatchNudge:
+			drain()
 		case <-ticker.C:
-			for {
-				dispatched, err := e.dispatchOne(ctx)
-				if err != nil && !errors.Is(err, transport.ErrLookupFailed) {
-					report(err)
-				}
-				if !dispatched || err != nil || ctx.Err() != nil {
-					break
-				}
-			}
+			drain()
 		}
 	}
 }

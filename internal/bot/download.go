@@ -137,6 +137,9 @@ func (e *Engine) finishWorkerStep(j store.Job) (bool, error) {
 		return true, err
 	}
 	ok, err := e.Store.Transition(j.ID, "generating", "queued")
+	if err == nil && ok {
+		e.nudgeDispatch()
+	}
 	return !ok || err != nil, err
 }
 
@@ -314,6 +317,7 @@ func (e *Engine) collectDownloadUploads(ctx context.Context) error {
 			if _, err = e.Store.Transition(id, "generating", "queued"); err != nil {
 				return err
 			}
+			e.nudgeDispatch()
 			if checkErr != nil {
 				e.backoffPreflight(id, j.ConversationID)
 				lookupErr = checkErr
@@ -342,6 +346,15 @@ func (e *Engine) nudgeWorkerCancel() {
 	select {
 	case e.cancelNudge <- struct{}{}:
 	default:
+	}
+}
+
+func (e *Engine) nudgeDispatch() {
+	if e.dispatchNudge != nil {
+		select {
+		case e.dispatchNudge <- struct{}{}:
+		default:
+		}
 	}
 }
 

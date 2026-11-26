@@ -1543,3 +1543,48 @@ func TestPauseCancelUnenrollDoNotWaitOnPhoneLookup(t *testing.T) {
 		}
 	})
 }
+
+func TestDispatchNudgeWakesRunnerImmediatelyOnEnqueue(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	e, f := setup(t)
+	arm(t, e)
+
+	runDone := make(chan struct{})
+	go func() {
+		defer close(runDone)
+		e.Run(ctx, func(err error) {
+			t.Errorf("unexpected error from Run: %v", err)
+		})
+	}()
+
+	// Wait briefly for Run to enter idle select
+	time.Sleep(20 * time.Millisecond)
+
+	start := time.Now()
+	m := incoming()
+	if ok, err := e.Accept(ctx, m); !ok || err != nil {
+		t.Fatalf("accept failed: %v", err)
+	}
+
+	// Because ticker is 5 seconds, nudgeDispatch must wake the runner and send promptly
+	for time.Since(start) < 2*time.Second {
+		if len(f.Sent) > 0 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	elapsed := time.Since(start)
+	if len(f.Sent) == 0 {
+		t.Fatal("message not dispatched via nudge")
+	}
+	if elapsed > time.Second {
+		t.Fatalf("nudge took too long (%v), likely fell back to slow ticker", elapsed)
+	}
+
+	cancel()
+	<-runDone
+}
