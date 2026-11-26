@@ -303,3 +303,52 @@ func TestLookupConversationSharedCoalescesAndDetachesContext(t *testing.T) {
 		t.Fatalf("expected 4 total calls (2 shared + 1 plain + 1 different ID), got %d", calls.Load())
 	}
 }
+
+func TestConversationsDoesNotBlockInvalidateIdentitiesAndCoalesces(t *testing.T) {
+	t.Parallel()
+	g := NewGoogle(nil, "")
+	g.ready.Store(true)
+	g.connected = func() bool { return true }
+
+	rpcEntered := make(chan struct{})
+	releaseRPC := make(chan struct{})
+	var rpcCalls atomic.Int32
+	g.listConversations = func(ctx context.Context, req *gmproto.ListConversationsRequest) (*gmproto.ListConversationsResponse, error) {
+		rpcCalls.Add(1)
+		close(rpcEntered)
+		select {
+		case <-releaseRPC:
+		case <-ctx.Done():
+		}
+		return &gmproto.ListConversationsResponse{
+			Conversations: []*gmproto.Conversation{individual("c1")},
+		}, nil
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = g.Conversations(context.Background())
+	}()
+
+	<-rpcEntered
+
+	// Invalidate identities while RPC is blocked: must not block on listMu!
+	invStart := time.Now()
+	g.invalidateIdentities()
+	if elapsed := time.Since(invStart); elapsed > 100*time.Millisecond {
+		t.Fatalf("invalidateIdentities blocked on in-flight Conversations RPC: took %v", elapsed)
+	}
+
+	// Release RPC
+	close(releaseRPC)
+	<-done
+
+	// Verify that the stale pre-invalidation RPC results were NOT written to g.list
+	g.listMu.Lock()
+	l := g.list
+	g.listMu.Unlock()
+	if len(l) != 0 {
+		t.Fatalf("superseded RPC wrote stale list into cache: %+v", l)
+	}
+}

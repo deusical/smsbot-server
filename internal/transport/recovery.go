@@ -281,6 +281,7 @@ func (g *Google) finishRecovery(result recoveryResult, now time.Time) (recovered
 func (g *Google) invalidateIdentities() {
 	g.identityEpoch.Add(1)
 	g.listMu.Lock()
+	g.listGen++
 	g.mu.Lock()
 	g.listed = time.Time{}
 	g.list = nil

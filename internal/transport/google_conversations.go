@@ -106,7 +106,11 @@ func (g *Google) cacheDetail(c *gmproto.Conversation) {
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	g.updateBaselineLocked(c, false)
+	if g.conversations == nil {
+		g.conversations = map[string]*gmproto.Conversation{}
+	}
+	g.conversations[c.GetConversationID()] = c
+	delete(g.staleCached, c.GetConversationID())
 }
 
 // updateBaselineLocked updates g.conversations from a phone event or list page
@@ -328,40 +332,94 @@ func detailConversation(id string, c *gmproto.Conversation) Conversation {
 	return withListState(Conversation{OutgoingID: c.GetDefaultOutgoingID(), ID: id, ParticipantID: listedIdentity(c), Members: groupMembers(c), Roster: roster(c), Label: label, Protocol: c.GetType().String(), Group: c.GetIsGroupChat(), Writable: readable(c)}, c)
 }
 
+type listConversationsFlight struct {
+	done chan struct{}
+	list []Conversation
+	err  error
+	gen  uint64
+}
+
 func (g *Google) Conversations(ctx context.Context) ([]Conversation, error) {
-	g.listMu.Lock()
-	defer g.listMu.Unlock()
 	if !g.SessionUp() {
 		return nil, errors.New("phone connection unavailable")
 	}
-	if !g.activity.listStale.Swap(false) && time.Since(g.listed) < 30*time.Second {
-		return append([]Conversation(nil), g.list...), nil
+	g.listMu.Lock()
+	if !g.activity.listStale.Swap(false) && time.Since(g.listed) < 30*time.Second && g.list != nil {
+		out := append([]Conversation(nil), g.list...)
+		g.listMu.Unlock()
+		return out, nil
 	}
-	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
-	defer cancel()
-	g.countPhone(ctx, phoneList)
-	res, e := g.client.ListConversations(ctx, &gmproto.ListConversationsRequest{Count: 25, Folder: gmproto.ListConversationsRequest_INBOX})
-	if e != nil {
-		return nil, errors.New("conversation refresh failed")
+	gen := g.listGen
+	g.listMu.Unlock()
+
+	g.listFlightMu.Lock()
+	flight, joined := g.listFlights, g.listFlights != nil
+	if !joined {
+		flight = &listConversationsFlight{done: make(chan struct{}), gen: gen}
+		g.listFlights = flight
+		go func() {
+			defer func() {
+				g.listFlightMu.Lock()
+				g.listFlights = nil
+				g.listFlightMu.Unlock()
+				close(flight.done)
+			}()
+			callCtx, cancel := context.WithTimeout(WithPhonePurpose(context.Background(), "list"), 20*time.Second)
+			defer cancel()
+			g.countPhone(callCtx, phoneList)
+			caller := g.listConversationsCaller()
+			res, e := caller(callCtx, &gmproto.ListConversationsRequest{Count: 25, Folder: gmproto.ListConversationsRequest_INBOX})
+			if e != nil {
+				flight.err = errors.New("conversation refresh failed")
+				return
+			}
+			out := []Conversation{}
+			g.listMu.Lock()
+			defer g.listMu.Unlock()
+			if g.listGen != gen {
+				flight.err = errors.New("conversation refresh superseded")
+				return
+			}
+			g.mu.Lock()
+			if g.conversations == nil {
+				g.conversations = map[string]*gmproto.Conversation{}
+			}
+			for _, c := range res.GetConversations() {
+				if c.GetConversationID() == "" {
+					continue
+				}
+				g.updateBaselineLocked(c, false)
+				out = append(out, listConversation(c))
+			}
+			g.mu.Unlock()
+			g.list = out
+			g.listed = time.Now()
+			flight.list = out
+		}()
 	}
-	// The list records are fresh phone reads: they also become the identity
-	// baselines that sends compare against their own live lookup.
-	out := []Conversation{}
-	g.mu.Lock()
-	if g.conversations == nil {
-		g.conversations = map[string]*gmproto.Conversation{}
-	}
-	for _, c := range res.GetConversations() {
-		if c.GetConversationID() == "" {
-			continue
+	g.listFlightMu.Unlock()
+
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-flight.done:
+		if flight.err != nil {
+			return nil, flight.err
 		}
-		g.updateBaselineLocked(c, false)
-		out = append(out, listConversation(c))
+		return append([]Conversation(nil), flight.list...), nil
 	}
-	g.mu.Unlock()
-	g.list = out
-	g.listed = time.Now()
-	return append([]Conversation(nil), out...), nil
+}
+
+func (g *Google) listConversationsCaller() func(context.Context, *gmproto.ListConversationsRequest) (*gmproto.ListConversationsResponse, error) {
+	if g.listConversations != nil {
+		return g.listConversations
+	}
+	if g.client == nil {
+		return func(context.Context, *gmproto.ListConversationsRequest) (*gmproto.ListConversationsResponse, error) {
+			return nil, errors.New("client_uninitialized")
+		}
+	}
+	return g.client.ListConversations
 }
 
 // conversationLastMessageTime decodes LastMessageTimestamp, which the library
