@@ -1198,7 +1198,7 @@ func TestStreamRolloverGapBacksOffWithoutCancellingUnsentWork(t *testing.T) {
 		}
 		id1 := store.Hash(m1.ConversationID + "\x00" + m1.ID)
 
-		m2 := transport.Incoming{ID: "rollover-2", ConversationID: "demo-sms", ParticipantID: "demo-sms-peer", Text: "!ping", At: now}
+		m2 := transport.Incoming{ID: "rollover-2", ConversationID: m1.ConversationID, ParticipantID: m1.ParticipantID, Text: "!ping", At: now}
 		if ok, err := e.Accept(ctx, m2); !ok || err != nil {
 			t.Fatal("accept m2", ok, err)
 		}

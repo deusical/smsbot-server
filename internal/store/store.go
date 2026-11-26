@@ -13,6 +13,7 @@ import (
 	"github.com/deusical/smsbot-server/internal/vault"
 	_ "modernc.org/sqlite"
 	"regexp"
+	"strings"
 	"sync/atomic"
 	"time"
 )
@@ -483,7 +484,7 @@ func (s *Store) Enqueue(id, conv, command string, p Plan) (bool, error) {
 	}
 	return n == 1, tx.Commit()
 }
-func (s *Store) Next() (Job, Plan, error) {
+func (s *Store) Next(excludeConvs ...string) (Job, Plan, error) {
 	var j Job
 	var enc string
 	tx, e := s.DB.Begin()
@@ -491,7 +492,18 @@ func (s *Store) Next() (Job, Plan, error) {
 		return j, Plan{}, e
 	}
 	defer tx.Rollback()
-	e = tx.QueryRow("SELECT id,conversation,command,state,created,txn,code,plan FROM jobs WHERE state='queued' AND id NOT IN (SELECT job FROM job_work WHERE next_poll>?) ORDER BY created LIMIT 1", time.Now().UnixMilli()).Scan(&j.ID, &j.ConversationID, &j.Command, &j.State, &j.CreatedAt, &j.TransactionID, &j.Code, &enc)
+	query := "SELECT id,conversation,command,state,created,txn,code,plan FROM jobs WHERE state='queued' AND id NOT IN (SELECT job FROM job_work WHERE next_poll>?)"
+	args := []any{time.Now().UnixMilli()}
+	if len(excludeConvs) > 0 {
+		placeholders := make([]string, len(excludeConvs))
+		for i, c := range excludeConvs {
+			placeholders[i] = "?"
+			args = append(args, c)
+		}
+		query += " AND conversation NOT IN (" + strings.Join(placeholders, ",") + ")"
+	}
+	query += " ORDER BY created LIMIT 1"
+	e = tx.QueryRow(query, args...).Scan(&j.ID, &j.ConversationID, &j.Command, &j.State, &j.CreatedAt, &j.TransactionID, &j.Code, &enc)
 	if e != nil {
 		return j, Plan{}, e
 	}

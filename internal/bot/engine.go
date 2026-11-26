@@ -35,7 +35,7 @@ type Engine struct {
 	// mu is the control lock shared with Collection: send decisions serialize
 	// with consent changes and protected commits.
 	mu              *sync.Mutex
-	preflight       preflightRetry
+	preflights      map[string]preflightRetry
 	videoChecked    string
 	workerUnlocked  bool
 	dispatchMu      sync.Mutex
@@ -60,7 +60,7 @@ func New(s *store.Store, t transport.Transport, c *collection.Service, control *
 	if _, offline := t.(*transport.Fixture); offline {
 		provider = SimulatedProvider{}
 	}
-	return &Engine{Collection: c, Store: s, Transport: t, Provider: provider, mu: control, now: time.Now, pending: map[string]context.CancelFunc{}, downloadUploads: map[string]downloadUpload{}, cancelNudge: make(chan struct{}, 1)}
+	return &Engine{Collection: c, Store: s, Transport: t, Provider: provider, mu: control, now: time.Now, pending: map[string]context.CancelFunc{}, downloadUploads: map[string]downloadUpload{}, cancelNudge: make(chan struct{}, 1), preflights: map[string]preflightRetry{}}
 }
 
 // Init performs the engine's one-time startup work: offline fixture mode
@@ -1026,7 +1026,7 @@ func (e *Engine) Dispatch(ctx context.Context) error {
 		cfg = checked
 		if err != nil {
 			if errors.Is(err, transport.ErrLookupFailed) {
-				e.backoffPreflight(j.ID)
+				e.backoffPreflight(j.ID, j.ConversationID)
 			}
 			return err
 		}
@@ -1044,12 +1044,16 @@ func (e *Engine) Dispatch(ctx context.Context) error {
 	return e.submit(ctx, j, p, cfg)
 }
 
-func (e *Engine) backoffPreflight(id string) {
-	if e.preflight.job != id {
-		e.preflight = preflightRetry{job: id}
+func (e *Engine) backoffPreflight(id, conv string) {
+	if e.preflights == nil {
+		e.preflights = map[string]preflightRetry{}
 	}
-	e.preflight.failures++
-	e.preflight.until = e.now().Add(min(30*time.Second, time.Second*time.Duration(1<<min(e.preflight.failures-1, 5))))
+	pr := e.preflights[id]
+	pr.job = id
+	pr.conv = conv
+	pr.failures++
+	pr.until = e.now().Add(min(30*time.Second, time.Second*time.Duration(1<<min(pr.failures-1, 5))))
+	e.preflights[id] = pr
 }
 
 // nextReady returns the next queued job that passes every pre-send check.
@@ -1061,18 +1065,26 @@ func (e *Engine) nextReady(ctx context.Context) (j store.Job, p store.Plan, cfg 
 	if err != nil || paused || !e.Transport.Ready() {
 		return j, p, cfg, liveLookup, false, err
 	}
-	j, p, err = e.Store.Next()
+	if e.preflights == nil {
+		e.preflights = map[string]preflightRetry{}
+	}
+	var blockedConvs []string
+	now := e.now()
+	for id, pr := range e.preflights {
+		if now.Before(pr.until) {
+			if pr.conv != "" {
+				blockedConvs = append(blockedConvs, pr.conv)
+			}
+		} else {
+			delete(e.preflights, id)
+		}
+	}
+	j, p, err = e.Store.Next(blockedConvs...)
 	if errors.Is(err, sql.ErrNoRows) {
 		return j, p, cfg, liveLookup, false, nil
 	}
 	if err != nil {
 		return j, p, cfg, liveLookup, false, err
-	}
-	if e.preflight.job != j.ID {
-		e.preflight = preflightRetry{job: j.ID}
-	}
-	if e.now().Before(e.preflight.until) {
-		return j, p, cfg, liveLookup, false, nil
 	}
 	mode = liveLookup
 	if pollsWorker(p) {
@@ -1083,10 +1095,10 @@ func (e *Engine) nextReady(ctx context.Context) (j store.Job, p store.Plan, cfg 
 		if !e.sessionUp() {
 			return j, p, cfg, mode, false, transport.ErrUnavailable
 		}
-		e.backoffPreflight(j.ID)
+		e.backoffPreflight(j.ID, j.ConversationID)
 		return j, p, cfg, mode, false, err
 	}
-	e.preflight = preflightRetry{}
+	delete(e.preflights, j.ID)
 	if code != "" {
 		if code == "approval_required" {
 			_, err = e.Store.Transition(j.ID, "queued", "awaiting_approval")
@@ -1568,6 +1580,7 @@ func (e *Engine) Reconcile(conv, txn, state, reported string) error {
 
 type preflightRetry struct {
 	job      string
+	conv     string
 	until    time.Time
 	failures int
 }

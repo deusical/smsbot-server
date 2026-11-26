@@ -221,7 +221,7 @@ func (e *Engine) prepareDownloadUpload(ctx context.Context, j store.Job, p *stor
 		_, code, err := e.check(ctx, j, *p, liveLookup)
 		if err != nil {
 			if errors.Is(err, transport.ErrLookupFailed) {
-				e.backoffPreflight(j.ID)
+				e.backoffPreflight(j.ID, j.ConversationID)
 			}
 			return true, err
 		}
@@ -313,7 +313,7 @@ func (e *Engine) collectDownloadUploads(ctx context.Context) error {
 				return err
 			}
 			if checkErr != nil {
-				e.backoffPreflight(id)
+				e.backoffPreflight(id, j.ConversationID)
 				lookupErr = checkErr
 			}
 		default:

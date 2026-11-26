@@ -1049,7 +1049,7 @@ func (e *Engine) runAgentStep(ctx context.Context, j store.Job, p *store.Plan, c
 		*cfg = checked
 		if err != nil {
 			if len(p.Attachments) > 0 && errors.Is(err, transport.ErrLookupFailed) {
-				e.backoffPreflight(j.ID)
+				e.backoffPreflight(j.ID, j.ConversationID)
 				_, _ = e.Store.Transition(j.ID, "generating", "queued")
 				return true, err
 			}
