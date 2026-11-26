@@ -11,6 +11,7 @@ import (
 	"github.com/deusical/smsbot-server/internal/transport"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 )
@@ -43,6 +44,13 @@ type Engine struct {
 	downloadUploads map[string]downloadUpload
 	downloadWG      sync.WaitGroup
 	cancelNudge     chan struct{}
+	DispatchLog     func(DispatchDiagnostic)
+	metrics         dispatchMetrics
+	passLookupMs    atomic.Int64
+}
+
+func (e *Engine) DispatchTiming() DispatchTimingStats {
+	return e.metrics.snapshot()
 }
 
 // New wires an engine without touching storage or starting work. control is
@@ -118,7 +126,9 @@ func (e *Engine) lookupError(err error) error {
 }
 
 func (e *Engine) lookupConversation(ctx context.Context, id string) (transport.Conversation, error) {
+	start := time.Now()
 	c, err := transport.Lookup(ctx, e.Transport, id)
+	e.passLookupMs.Add(time.Since(start).Milliseconds())
 	if errors.Is(err, transport.ErrIneligibleConversation) {
 		return transport.Conversation{ID: id}, nil
 	}
@@ -921,37 +931,85 @@ func pollsWorker(p store.Plan) bool {
 // persisted (submitting, with a transaction ID) before the transport call.
 func (e *Engine) Dispatch(ctx context.Context) error {
 	ctx = transport.WithPhonePurpose(ctx, "send")
+	dispatchStart := time.Now()
 	e.dispatchMu.Lock()
+	dispatchWait := time.Since(dispatchStart)
 	defer e.dispatchMu.Unlock()
+
+	e.passLookupMs.Store(0)
+	var dbWaitStart time.Duration
+	if e.Store != nil && e.Store.DB != nil {
+		dbWaitStart = e.Store.DB.Stats().WaitDuration
+	}
+
+	muStart := time.Now()
 	e.mu.Lock()
+	muWait := time.Since(muStart)
+	controlHoldStart := time.Now()
+	var controlHold time.Duration
+
+	diagResult := "idle"
+	defer func() {
+		if controlHold == 0 {
+			controlHold = time.Since(controlHoldStart)
+		}
+		var dbWaitMs int64
+		if e.Store != nil && e.Store.DB != nil {
+			dbWaitMs = (e.Store.DB.Stats().WaitDuration - dbWaitStart).Milliseconds()
+		}
+		diag := DispatchDiagnostic{
+			At:              time.Now().UTC().Format(time.RFC3339Nano),
+			DispatchWaitMs:  dispatchWait.Milliseconds(),
+			DispatchHoldMs:  time.Since(dispatchStart).Milliseconds(),
+			ControlWaitMs:   muWait.Milliseconds(),
+			ControlHoldMs:   controlHold.Milliseconds(),
+			LookupLatencyMs: e.passLookupMs.Load(),
+			DBWaitMs:        dbWaitMs,
+			Result:          diagResult,
+		}
+		e.metrics.record(diag)
+		if e.DispatchLog != nil {
+			e.DispatchLog(diag)
+		}
+	}()
+
 	e.videoChecked = ""
 	e.workerUnlocked = false
 	if err := e.collectDownloadUploads(ctx); err != nil {
+		diagResult = "collect_failed"
+		controlHold = time.Since(controlHoldStart)
 		e.mu.Unlock()
 		return err
 	}
 	j, p, cfg, mode, ready, err := e.nextReady(ctx)
 	if !ready || err != nil {
+		controlHold = time.Since(controlHoldStart)
 		e.mu.Unlock()
 		return err
 	}
 	if p.Mutation != nil {
+		diagResult = "reaction"
+		controlHold = time.Since(controlHoldStart)
 		return e.dispatchReaction(ctx, j, p) // releases the lock
 	}
 	defer func() {
 		e.videoChecked = ""
 		e.workerUnlocked = false
+		controlHold = time.Since(controlHoldStart)
 		e.mu.Unlock()
 	}()
 	if done, err := e.runPipeline(ctx, j, &p, &cfg); done {
+		diagResult = "pipeline_done"
 		return err
 	}
 	if p.ExecutionDeadline != "" && len(p.Attachments) > 0 {
 		// A long-running job uploads in the background lane, within its deadline.
 		if done, err := e.prepareDownloadUpload(ctx, j, &p); done {
+			diagResult = "prepare_upload"
 			return err
 		}
 	} else if done, err := e.prepareFiles(ctx, j, &p); done {
+		diagResult = "prepare_files"
 		return err
 	}
 	if (mode == cachedLookup || e.workerUnlocked) && len(p.Attachments) == 0 && e.videoChecked != j.ID {
@@ -966,6 +1024,7 @@ func (e *Engine) Dispatch(ctx context.Context) error {
 			return err
 		}
 		if code != "" {
+			diagResult = code
 			state := "cancelled"
 			if code == "stale" || code == "execution_expired" {
 				state = "expired"
@@ -974,6 +1033,7 @@ func (e *Engine) Dispatch(ctx context.Context) error {
 		}
 	}
 	// The conversation turn's earlier history, as checked by the AI step.
+	diagResult = "submitted"
 	return e.submit(ctx, j, p, cfg)
 }
 

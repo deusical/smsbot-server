@@ -62,7 +62,9 @@ func (g *Google) sendPartsWith(
 	}
 
 	g.countPhone(ctx, phoneLookup)
+	lookupStart := time.Now()
 	c, e := fetchConversation(ctx, id, pause, getConversation)
+	d.LookupLatencyMs = time.Since(lookupStart).Milliseconds()
 	if e != nil {
 		return refused("conversation_lookup_failed")
 	}
