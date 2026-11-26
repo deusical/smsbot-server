@@ -12,19 +12,50 @@ import (
 	"github.com/deusical/smsbot-server/internal/media"
 	"github.com/deusical/smsbot-server/internal/vault"
 	_ "modernc.org/sqlite"
+	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
 
+type sessionCacheEntry struct {
+	expires  int64
+	valid    bool
+	cachedAt time.Time
+}
+
 type Store struct {
 	DB               *sql.DB
+	ReadDB           *sql.DB
 	Vault            *vault.Vault
 	Path             string
 	messageDeletions atomic.Uint64
 	listChanges      atomic.Uint64
 	lastFocusNano    atomic.Int64
+	sessionMu        sync.RWMutex
+	sessions         map[string]sessionCacheEntry
+}
+
+func (s *Store) reader() rowQuerier {
+	if s.ReadDB != nil {
+		return s.ReadDB
+	}
+	return s.DB
+}
+
+func (s *Store) Close() error {
+	var err error
+	if s.ReadDB != nil {
+		err = s.ReadDB.Close()
+	}
+	if s.DB != nil {
+		if e := s.DB.Close(); err == nil {
+			err = e
+		}
+	}
+	return err
 }
 
 // MessageDeletionSequence increments whenever messages are deleted from the
@@ -156,20 +187,42 @@ func TransactionID() string {
 	return id[:8] + "-" + id[8:12] + "-4" + id[13:16] + "-8" + id[17:20] + "-" + id[20:]
 }
 func Hash(s string) string { h := sha256.Sum256([]byte(s)); return hex.EncodeToString(h[:]) }
+func SQLiteDSN(path string) string {
+	clean := filepath.ToSlash(path)
+	if !strings.HasPrefix(clean, "file:") {
+		clean = "file:" + clean
+	}
+	if strings.Contains(clean, "?") {
+		return clean + "&_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_pragma=synchronous(FULL)&_pragma=journal_mode(WAL)"
+	}
+	return clean + "?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_pragma=synchronous(FULL)&_pragma=journal_mode(WAL)"
+}
+
 func Open(path string, v *vault.Vault) (*Store, error) {
-	db, e := sql.Open("sqlite", path)
+	dsn := SQLiteDSN(path)
+	db, e := sql.Open("sqlite", dsn)
 	if e != nil {
 		return nil, e
 	}
 	db.SetMaxOpenConns(1)
-	s := &Store{DB: db, Vault: v, Path: path}
+
+	readDB, e := sql.Open("sqlite", dsn)
+	if e != nil {
+		db.Close()
+		return nil, e
+	}
+	readDB.SetMaxOpenConns(4)
+
+	s := &Store{DB: db, ReadDB: readDB, Vault: v, Path: path}
 	if e = s.migrate(); e != nil {
 		db.Close()
+		readDB.Close()
 		return nil, e
 	}
 	// Bearer client credentials are no longer accepted; drop any saved by older versions.
 	if _, e = db.Exec("DELETE FROM credentials WHERE kind='client'"); e != nil {
 		db.Close()
+		readDB.Close()
 		return nil, e
 	}
 	return s, nil
@@ -487,11 +540,6 @@ func (s *Store) Enqueue(id, conv, command string, p Plan) (bool, error) {
 func (s *Store) Next(excludeConvs ...string) (Job, Plan, error) {
 	var j Job
 	var enc string
-	tx, e := s.DB.Begin()
-	if e != nil {
-		return j, Plan{}, e
-	}
-	defer tx.Rollback()
 	query := "SELECT id,conversation,command,state,created,txn,code,plan FROM jobs WHERE state='queued' AND id NOT IN (SELECT job FROM job_work WHERE next_poll>?)"
 	args := []any{time.Now().UnixMilli()}
 	if len(excludeConvs) > 0 {
@@ -503,11 +551,11 @@ func (s *Store) Next(excludeConvs ...string) (Job, Plan, error) {
 		query += " AND conversation NOT IN (" + strings.Join(placeholders, ",") + ")"
 	}
 	query += " ORDER BY created LIMIT 1"
-	e = tx.QueryRow(query, args...).Scan(&j.ID, &j.ConversationID, &j.Command, &j.State, &j.CreatedAt, &j.TransactionID, &j.Code, &enc)
+	e := s.reader().QueryRow(query, args...).Scan(&j.ID, &j.ConversationID, &j.Command, &j.State, &j.CreatedAt, &j.TransactionID, &j.Code, &enc)
 	if e != nil {
 		return j, Plan{}, e
 	}
-	p, _, e := s.openPlan(tx, j.ID, enc, true)
+	p, _, e := s.openPlan(s.reader(), j.ID, enc, true)
 	return j, p, e
 }
 func (s *Store) Submitting(id, txn string) error {
@@ -604,11 +652,42 @@ func (s *Store) Credential(token, kind string) bool {
 
 // SessionExpiry reports a live browser session's expiry; 0 means it never expires.
 func (s *Store) SessionExpiry(token string) (int64, bool) {
+	h := Hash(token)
+	now := time.Now()
+	s.sessionMu.RLock()
+	if entry, ok := s.sessions[h]; ok && now.Sub(entry.cachedAt) < 5*time.Second {
+		s.sessionMu.RUnlock()
+		if !entry.valid {
+			return 0, false
+		}
+		if entry.expires > 0 && entry.expires <= now.Unix() {
+			return 0, false
+		}
+		return entry.expires, true
+	}
+	s.sessionMu.RUnlock()
+
 	var expires int64
-	e := s.DB.QueryRow("SELECT expires FROM credentials WHERE hash=? AND kind='session'", Hash(token)).Scan(&expires)
-	return expires, e == nil && (expires == 0 || expires > time.Now().Unix())
+	e := s.reader().QueryRow("SELECT expires FROM credentials WHERE hash=? AND kind='session'", h).Scan(&expires)
+	valid := e == nil && (expires == 0 || expires > now.Unix())
+
+	s.sessionMu.Lock()
+	if s.sessions == nil {
+		s.sessions = make(map[string]sessionCacheEntry)
+	}
+	s.sessions[h] = sessionCacheEntry{
+		expires:  expires,
+		valid:    valid,
+		cachedAt: now,
+	}
+	s.sessionMu.Unlock()
+	return expires, valid
 }
+
 func (s *Store) RevokeSessions() error {
+	s.sessionMu.Lock()
+	clear(s.sessions)
+	s.sessionMu.Unlock()
 	_, e := s.DB.Exec("DELETE FROM credentials WHERE kind='session'")
 	return e
 }

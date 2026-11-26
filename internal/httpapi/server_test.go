@@ -24,7 +24,7 @@ func apiSetup(t *testing.T) *Server {
 	if e != nil {
 		t.Fatal(e)
 	}
-	t.Cleanup(func() { s.DB.Close() })
+	t.Cleanup(func() { s.Close() })
 	s.AddCredential("fixture-owner", "test", "owner", 0)
 	s.AddCredential("fixture-client", "test", "session", 0)
 	service := app.New(s, transport.NewFixture(), filepath.Join(filepath.Dir(s.Path), "archive"))

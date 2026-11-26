@@ -30,7 +30,7 @@ func setup(t *testing.T) (*store.Store, *Service) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { s.DB.Close() })
+	t.Cleanup(func() { s.Close() })
 	return s, New(s, filepath.Join(root, "archive"), nil)
 }
 func seed(t *testing.T, s *store.Store, files []media.File) {

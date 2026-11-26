@@ -25,7 +25,7 @@ func setup(t *testing.T) (*Engine, *transport.Fixture) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	t.Cleanup(func() { s.DB.Close() })
+	t.Cleanup(func() { s.Close() })
 	f := transport.NewFixture()
 	return assemble(t, s, f), f
 }

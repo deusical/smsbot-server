@@ -105,6 +105,9 @@ func (s *Store) HasEnrollment(conv string) bool { return s.BotOn(conv) }
 // RevokeSession deletes a browser session credential. Owner credentials are
 // never affected.
 func (s *Store) RevokeSession(token string) error {
+	s.sessionMu.Lock()
+	delete(s.sessions, Hash(token))
+	s.sessionMu.Unlock()
 	_, err := s.DB.Exec("DELETE FROM credentials WHERE hash=? AND kind='session'", Hash(token))
 	return err
 }

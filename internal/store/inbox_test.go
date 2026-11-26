@@ -19,7 +19,7 @@ func inboxStore(t *testing.T) *Store {
 	if e != nil {
 		t.Fatal(e)
 	}
-	t.Cleanup(func() { s.DB.Close() })
+	t.Cleanup(func() { s.Close() })
 	return s
 }
 func TestMessagePageStableCursorAndBoundedSearch(t *testing.T) {

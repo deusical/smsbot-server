@@ -22,7 +22,7 @@ func TestDispatchTimingAndDiagnostics(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { s.DB.Close() })
+	t.Cleanup(func() { s.Close() })
 
 	f := transport.NewFixture()
 	control := new(sync.Mutex)
