@@ -175,14 +175,12 @@ func (s *Store) openPlan(q rowQuerier, id, enc string, files bool) (Plan, []plan
 	return stored.Plan, stored.Files, nil
 }
 
-// Job returns a job without reading its files: for checking a job's state or
-// conversation. It fails when the stored plan does not open, as JobPlan does.
+// Job returns a job without reading its files or decrypting its plan:
+// for checking a job's state or conversation.
 func (s *Store) Job(id string) (Job, error) {
 	var j Job
-	var enc string
-	if err := s.DB.QueryRow("SELECT id,conversation,command,state,created,txn,code,plan FROM jobs WHERE id=?", id).Scan(&j.ID, &j.ConversationID, &j.Command, &j.State, &j.CreatedAt, &j.TransactionID, &j.Code, &enc); err != nil {
+	if err := s.DB.QueryRow("SELECT id,conversation,command,state,created,txn,code FROM jobs WHERE id=?", id).Scan(&j.ID, &j.ConversationID, &j.Command, &j.State, &j.CreatedAt, &j.TransactionID, &j.Code); err != nil {
 		return j, err
 	}
-	_, _, err := s.openPlan(s.DB, id, enc, false)
-	return j, err
+	return j, nil
 }

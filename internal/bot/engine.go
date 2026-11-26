@@ -47,6 +47,8 @@ type Engine struct {
 	DispatchLog     func(DispatchDiagnostic)
 	metrics         dispatchMetrics
 	passLookupMs    atomic.Int64
+	configMu        sync.RWMutex
+	cachedConfig    *Configuration
 }
 
 func (e *Engine) DispatchTiming() DispatchTimingStats {

@@ -19,9 +19,7 @@ func (svc *Service) InboxAttachment(ctx context.Context, conv, message, attachme
 func (svc *Service) InboxAttachmentContent(ctx context.Context, conv, message, attachment string, preview bool) (media.Info, []byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	svc.mu.Lock()
-	s, err := svc.Settings()
-	svc.mu.Unlock()
+	s, err := svc.policySettings()
 	if err != nil || !s.Enabled {
 		return media.Info{}, nil, errors.New("inbox_access_disabled")
 	}
@@ -29,12 +27,12 @@ func (svc *Service) InboxAttachmentContent(ctx context.Context, conv, message, a
 	if err != nil || !s.Allows(c) {
 		return media.Info{}, nil, errors.New("inbox_access_disabled")
 	}
-	svc.mu.Lock()
-	current, err := svc.Settings()
+	current, err := svc.policySettings()
 	if err == nil && (current.Revision != s.Revision || !current.Allows(c)) {
 		err = errors.New("inbox_access_disabled")
 	}
 	var since time.Time
+	svc.mu.Lock()
 	if err == nil {
 		days, daysErr := svc.messageRetention()
 		err = daysErr
