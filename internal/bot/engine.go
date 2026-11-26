@@ -279,22 +279,38 @@ func (e *Engine) enrolledFor(conv string, p store.Plan) bool {
 	return e.Store.Enrolled(conv, p.Participant)
 }
 
+// checkPeerConversation verifies identity, roster, and writability against an already-loaded conversation.
+func (e *Engine) checkPeerConversation(c transport.Conversation, peer, roster string, ownerSend bool) (string, bool) {
+	if roster != "" && !ownerSend {
+		if !c.Group || !c.Writable || roster == "" || c.Roster != roster {
+			return "", false
+		}
+		if peer == store.OwnerMember {
+			return c.OutgoingID, true
+		}
+		for _, m := range c.Members {
+			if m.ID == peer {
+				return c.OutgoingID, true
+			}
+		}
+		return "", false
+	}
+	allowGroup := ownerSend
+	if c.ParticipantID != peer || !c.Writable || c.Roster != roster || (!allowGroup && c.Group) {
+		return "", false
+	}
+	return c.OutgoingID, true
+}
+
 // validGroupMember reports whether member is in the group conv, which can be
 // sent to and has exactly the people in roster. The owner is not in the list.
 func (e *Engine) validGroupMember(ctx context.Context, conv, member, roster string, mode lookupMode) (string, bool, error) {
 	c, err := e.conversationForCheck(ctx, conv, mode)
-	if err != nil || !c.Group || !c.Writable || roster == "" || c.Roster != roster {
+	if err != nil {
 		return "", false, err
 	}
-	if member == store.OwnerMember {
-		return c.OutgoingID, true, nil
-	}
-	for _, m := range c.Members {
-		if m.ID == member {
-			return c.OutgoingID, true, nil
-		}
-	}
-	return "", false, nil
+	outgoing, ok := e.checkPeerConversation(c, member, roster, false)
+	return outgoing, ok, nil
 }
 func (e *Engine) Cancel(id string) error {
 	e.mu.Lock()
@@ -350,51 +366,33 @@ func (e *Engine) Approve(id string) error {
 // was made: a member of the group under the roster, or the one person in an
 // individual conversation. ownerSend is the owner's own dashboard send.
 func (e *Engine) validPeer(ctx context.Context, conv, peer, roster string, ownerSend bool, mode lookupMode) (string, bool, error) {
-	if roster != "" && !ownerSend {
-		return e.validGroupMember(ctx, conv, peer, roster, mode)
+	c, err := e.conversationForCheck(ctx, conv, mode)
+	if err != nil {
+		return "", false, err
 	}
-	return e.matchConversation(ctx, conv, peer, roster, ownerSend, mode)
+	outgoing, ok := e.checkPeerConversation(c, peer, roster, ownerSend)
+	return outgoing, ok, nil
 }
 
 // validConversation reports whether conv is still the conversation with peer
 // that can be sent to. A group is valid only where groups are allowed and has
 // exactly the people in roster; the bot's own commands pass allowGroup false.
 func (e *Engine) validConversation(ctx context.Context, conv, peer, roster string, allowGroup bool) (bool, error) {
-	_, ok, err := e.matchConversation(ctx, conv, peer, roster, allowGroup, liveLookup)
-	return ok, err
+	c, err := e.conversationForCheck(ctx, conv, liveLookup)
+	if err != nil {
+		return false, err
+	}
+	_, ok := e.checkPeerConversation(c, peer, roster, allowGroup)
+	return ok, nil
 }
 
 func (e *Engine) matchConversation(ctx context.Context, conv, peer, roster string, allowGroup bool, mode lookupMode) (string, bool, error) {
-	ok := func(c transport.Conversation) bool {
-		return c.ParticipantID == peer && c.Writable && c.Roster == roster && (allowGroup || !c.Group)
-	}
-	if mode == cachedLookup {
-		if cache, can := e.Transport.(transport.CachedLookup); can {
-			if c, found := cache.CachedConversation(conv); found {
-				if !ok(c) {
-					return "", false, nil
-				}
-				return c.OutgoingID, true, nil
-			}
-		}
-	}
-	if _, can := e.Transport.(transport.ConversationLookup); can {
-		c, err := e.lookupConversation(ctx, conv)
-		if err != nil || !ok(c) {
-			return "", false, err
-		}
-		return c.OutgoingID, true, nil
-	}
-	list, err := e.Transport.Conversations(ctx)
+	c, err := e.conversationForCheck(ctx, conv, mode)
 	if err != nil {
-		return "", false, e.lookupError(err)
+		return "", false, err
 	}
-	for _, c := range list {
-		if c.ID == conv && ok(c) {
-			return c.OutgoingID, true, nil
-		}
-	}
-	return "", false, nil
+	outgoing, ok := e.checkPeerConversation(c, peer, roster, allowGroup)
+	return outgoing, ok, nil
 }
 
 // Accept turns a fresh command into a queued job. Each step can decline the
@@ -840,6 +838,8 @@ func (e *Engine) check(ctx context.Context, j store.Job, p store.Plan, mode look
 	if !p.Manual && !inbox.AutomaticReplies {
 		return cfg, "automatic_replies_disabled", nil
 	}
+	var conv transport.Conversation
+	var convLoaded bool
 	if p.InboxOwnerOnly {
 		if err := inbox.FileLimits().Check(p.Attachments); err != nil {
 			return cfg, "attachment_limits_changed", nil
@@ -848,6 +848,8 @@ func (e *Engine) check(ctx context.Context, j store.Job, p store.Plan, mode look
 		if err != nil {
 			return cfg, "", err
 		}
+		conv = c
+		convLoaded = true
 		if !inbox.Allows(c) || c.ParticipantID != p.Participant {
 			return cfg, "inbox_access_disabled", nil
 		}
@@ -868,9 +870,14 @@ func (e *Engine) check(ctx context.Context, j store.Job, p store.Plan, mode look
 			return cfg, "", err
 		}
 	}
-	_, valid, err := e.validPeer(ctx, j.ConversationID, p.Participant, p.Roster, p.InboxOwnerOnly, mode)
-	if err != nil {
-		return cfg, "", err
+	var valid bool
+	if convLoaded {
+		_, valid = e.checkPeerConversation(conv, p.Participant, p.Roster, p.InboxOwnerOnly)
+	} else {
+		_, valid, err = e.validPeer(ctx, j.ConversationID, p.Participant, p.Roster, p.InboxOwnerOnly, mode)
+		if err != nil {
+			return cfg, "", err
+		}
 	}
 	if !valid {
 		return cfg, "identity_changed", nil
