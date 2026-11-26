@@ -104,6 +104,30 @@ func outboundMedia(file media.File) *gmproto.MediaContent {
 	return &gmproto.MediaContent{Format: format, MediaID: file.RemoteID, MediaName: file.Name, Size: file.Size, DecryptionKey: file.Key, MimeType: file.MIME}
 }
 
+func (g *Google) acquireDownloadSlot(ctx context.Context) (func(), error) {
+	g.downloadSemOnce.Do(func() {
+		g.downloadSem = make(chan struct{}, 2)
+	})
+	select {
+	case g.downloadSem <- struct{}{}:
+		return func() { <-g.downloadSem }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func (g *Google) mediaDownloader() func(string, []byte) (io.ReadCloser, error) {
+	if g.downloadMedia != nil {
+		return g.downloadMedia
+	}
+	if g.client == nil {
+		return func(string, []byte) (io.ReadCloser, error) {
+			return nil, errors.New("client_uninitialized")
+		}
+	}
+	return g.client.DownloadMedia
+}
+
 func (g *Google) DownloadFile(ctx context.Context, file media.File) ([]byte, error) {
 	if !g.Ready() || ctx.Err() != nil {
 		return nil, errors.New("attachment_unavailable")
@@ -113,6 +137,14 @@ func (g *Google) DownloadFile(ctx context.Context, file media.File) ([]byte, err
 	}
 	if len(file.Data) > 0 {
 		return file.Data, nil
+	}
+	release, err := g.acquireDownloadSlot(ctx)
+	if err != nil {
+		return nil, errors.New("attachment_unavailable")
+	}
+	defer release()
+	if !g.Ready() {
+		return nil, errors.New("attachment_unavailable")
 	}
 	if file.RemoteID == "" && file.MessageID != "" && file.ActionID != "" {
 		var err error
@@ -127,7 +159,7 @@ func (g *Google) DownloadFile(ctx context.Context, file media.File) ([]byte, err
 	if file.RemoteID == "" || len(file.Key) != 32 {
 		return nil, errors.New("attachment_unavailable")
 	}
-	r, err := g.client.DownloadMedia(file.RemoteID, file.Key)
+	r, err := g.mediaDownloader()(file.RemoteID, file.Key)
 	if err != nil {
 		return nil, errors.New("attachment_unavailable")
 	}

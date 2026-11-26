@@ -1,11 +1,14 @@
 package transport
 
 import (
-	"github.com/deusical/smsbot-server/internal/media"
+	"context"
+	"io"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/deusical/smsbot-server/internal/media"
 	"go.mau.fi/mautrix-gmessages/pkg/libgm"
 	"go.mau.fi/mautrix-gmessages/pkg/libgm/gmproto"
 )
@@ -89,5 +92,99 @@ func TestOutboundPartsPutFilesBeforeCaption(t *testing.T) {
 	}
 	if _, ok = outboundParts("", nil); ok {
 		t.Fatal("an empty message must not be sent")
+	}
+}
+
+func TestDownloadFileBoundsConcurrentPhoneDownloadsAndBypassesMemoryData(t *testing.T) {
+	t.Parallel()
+	g := NewGoogle(nil, "")
+	g.ready.Store(true)
+	g.connected = func() bool { return true }
+
+	var active atomic.Int32
+	var maxActive atomic.Int32
+	var startedCalls atomic.Int32
+	slotEntered := make(chan string, 4)
+	releaseSlots := make(chan struct{})
+	g.downloadMedia = func(remoteID string, _ []byte) (io.ReadCloser, error) {
+		cur := active.Add(1)
+		for {
+			prev := maxActive.Load()
+			if cur <= prev || maxActive.CompareAndSwap(prev, cur) {
+				break
+			}
+		}
+		startedCalls.Add(1)
+		slotEntered <- remoteID
+		<-releaseSlots
+		active.Add(-1)
+		return io.NopCloser(strings.NewReader("payload-" + remoteID)), nil
+	}
+
+	remoteFile := func(id string) media.File {
+		return media.File{RemoteID: id, Key: make([]byte, 32)}
+	}
+
+	// Start 2 concurrent downloads that occupy both semaphore slots.
+	type result struct {
+		b   []byte
+		err error
+	}
+	res1 := make(chan result, 1)
+	res2 := make(chan result, 1)
+	go func() {
+		b, err := g.DownloadFile(context.Background(), remoteFile("1"))
+		res1 <- result{b, err}
+	}()
+	go func() {
+		b, err := g.DownloadFile(context.Background(), remoteFile("2"))
+		res2 <- result{b, err}
+	}()
+	<-slotEntered
+	<-slotEntered
+
+	// In-memory data must bypass the semaphore completely.
+	memData, err := g.DownloadFile(context.Background(), media.File{Data: []byte("inline-bytes")})
+	if err != nil || string(memData) != "inline-bytes" {
+		t.Fatalf("in-memory download failed while slots full: %q %v", string(memData), err)
+	}
+
+	// Start a 3rd concurrent download and verify it waits.
+	res3 := make(chan result, 1)
+	go func() {
+		b, err := g.DownloadFile(context.Background(), remoteFile("3"))
+		res3 <- result{b, err}
+	}()
+
+	// A cancelled caller waiting for a slot must return promptly without acquiring a slot.
+	cancelCtx, cancel := context.WithCancel(context.Background())
+	res4 := make(chan result, 1)
+	go func() {
+		b, err := g.DownloadFile(cancelCtx, remoteFile("4"))
+		res4 <- result{b, err}
+	}()
+	cancel()
+	if r4 := <-res4; r4.err == nil {
+		t.Fatal("cancelled waiting download succeeded unexpectedly")
+	}
+
+	select {
+	case id := <-slotEntered:
+		t.Fatalf("3rd download %s bypassed semaphore while 2 were active", id)
+	case <-time.After(30 * time.Millisecond):
+	}
+	if startedCalls.Load() != 2 {
+		t.Fatalf("startedCalls = %d while 2 slots occupied, want 2", startedCalls.Load())
+	}
+
+	close(releaseSlots)
+	for i, ch := range []chan result{res1, res2, res3} {
+		r := <-ch
+		if r.err != nil {
+			t.Fatalf("download %d failed: %v", i+1, r.err)
+		}
+	}
+	if maxActive.Load() > 2 || startedCalls.Load() != 3 {
+		t.Fatalf("maxActive=%d startedCalls=%d, want <=2 and 3", maxActive.Load(), startedCalls.Load())
 	}
 }

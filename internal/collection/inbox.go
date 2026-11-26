@@ -180,7 +180,7 @@ func (svc *Service) observe(ctx context.Context, m transport.Incoming, epoch uin
 	if !m.Outgoing && mutation == "" && svc.captureReads.matches(resource, digest) && connection == svc.captureConnectionEpoch() {
 		return nil
 	}
-	c, err := svc.lookup(ctx, m.ConversationID)
+	c, err := svc.cachedOrLookup(ctx, m.ConversationID)
 	if err != nil {
 		return err
 	}

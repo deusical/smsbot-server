@@ -24,37 +24,45 @@ import (
 
 // Google is opt-in and never instantiated by fixture mode.
 type Google struct {
-	recovery         recoveryControl
-	recoveryWake     chan struct{}
-	recoveryProbe    func(context.Context) error                                  // offline fault injection; nil in production
-	recoveryInterval time.Duration                                                // zero means 1s; tests only
-	saveInterval     time.Duration                                                // zero means 30s; tests only
-	connected        func() bool                                                  // offline fault injection; nil in production
-	getConversation  func(context.Context, string) (*gmproto.Conversation, error) // offline fault injection; nil in production
-	lookupPause      time.Duration                                                // zero means lookupRetryPause; tests only
-	fullMedia        fullMediaRequests
-	client           *libgm.Client
-	vault            *vault.Vault
-	path             string
-	ready            atomic.Bool
-	mu               sync.Mutex
-	listMu           sync.Mutex
-	listed           time.Time
-	list             []Conversation
-	settings         *gmproto.Settings
-	conversations    map[string]*gmproto.Conversation
-	staleCached      map[string]bool
-	updates          chan any
-	queueMu          sync.Mutex
-	overflow         atomic.Bool
-	healthFailure    atomic.Bool
-	overflowWake     chan struct{}
-	started          time.Time
-	saveMu           sync.Mutex
-	savedDigest      [32]byte
-	hasSavedDigest   bool
-	Diagnostic       func(AuthDiagnostic)
-	SendLog          func(SendDiagnostic)
+	recovery          recoveryControl
+	recoveryWake      chan struct{}
+	recoveryProbe     func(context.Context) error                                    // offline fault injection; nil in production
+	recoveryInterval  time.Duration                                                  // zero means 1s; tests only
+	saveInterval      time.Duration                                                  // zero means 30s; tests only
+	connected         func() bool                                                    // offline fault injection; nil in production
+	getConversation   func(context.Context, string) (*gmproto.Conversation, error)   // offline fault injection; nil in production
+	probeBugleDefault func(context.Context) (*gmproto.IsBugleDefaultResponse, error) // offline fault injection; nil in production
+	probeTimeout      time.Duration                                                  // zero means 10s; tests only
+	probeInflight     atomic.Bool
+	downloadMedia     func(string, []byte) (io.ReadCloser, error) // offline fault injection; nil in production
+	downloadSemOnce   sync.Once
+	downloadSem       chan struct{}
+	lookupFlightMu    sync.Mutex
+	lookupFlights     map[string]*lookupFlight
+	lookupPause       time.Duration // zero means lookupRetryPause; tests only
+	fullMedia         fullMediaRequests
+	client            *libgm.Client
+	vault             *vault.Vault
+	path              string
+	ready             atomic.Bool
+	mu                sync.Mutex
+	listMu            sync.Mutex
+	listed            time.Time
+	list              []Conversation
+	settings          *gmproto.Settings
+	conversations     map[string]*gmproto.Conversation
+	staleCached       map[string]bool
+	updates           chan any
+	queueMu           sync.Mutex
+	overflow          atomic.Bool
+	healthFailure     atomic.Bool
+	overflowWake      chan struct{}
+	started           time.Time
+	saveMu            sync.Mutex
+	savedDigest       [32]byte
+	hasSavedDigest    bool
+	Diagnostic        func(AuthDiagnostic)
+	SendLog           func(SendDiagnostic)
 	// RequestLog, when set, receives every request the adapter sends to the phone.
 	RequestLog func(PhoneRequestLog)
 	// Reconnected, when set, runs after a connection outage ends (see OutagesSince).

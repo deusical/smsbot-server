@@ -126,6 +126,25 @@ func (g *Google) TypingConversations() []string {
 }
 
 func (g *Google) MarkRead(ctx context.Context, conv, expectedPeer string, through time.Time) error {
+	var get func(context.Context, string) (*gmproto.Conversation, error)
+	var fetch func(context.Context, string, int64, *gmproto.Cursor) (*gmproto.ListMessagesResponse, error)
+	var mark func(context.Context, string, string) error
+	if g.client != nil {
+		get = g.client.GetConversation
+		fetch = g.client.FetchMessages
+		mark = g.client.MarkRead
+	}
+	return g.markReadWith(ctx, conv, expectedPeer, through, get, fetch, mark)
+}
+
+func (g *Google) markReadWith(
+	ctx context.Context,
+	conv, expectedPeer string,
+	through time.Time,
+	getConversation func(context.Context, string) (*gmproto.Conversation, error),
+	fetchMessages func(context.Context, string, int64, *gmproto.Cursor) (*gmproto.ListMessagesResponse, error),
+	markRead func(context.Context, string, string) error,
+) error {
 	ctx = WithPhonePurpose(ctx, "read")
 	if !g.Ready() {
 		return ErrUnavailable
@@ -133,37 +152,46 @@ func (g *Google) MarkRead(ctx context.Context, conv, expectedPeer string, throug
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	g.countPhone(ctx, phoneLookup)
-	c, err := g.client.GetConversation(ctx, conv)
+	c, err := getConversation(ctx, conv)
 	if err != nil || !eligible(c) || peer(c) != expectedPeer || c.GetIsGroupChat() {
 		return errors.New("ineligible_conversation")
 	}
 	if !c.GetUnread() {
 		return nil
 	}
-	g.countPhone(ctx, phoneMessages)
-	res, err := g.client.FetchMessages(ctx, conv, 1, nil)
-	if err != nil {
-		return errors.New("read_failed")
-	}
-	var latest *gmproto.Message
-	for _, m := range res.GetMessages() {
-		if m.GetConversationID() == conv && m.GetMessageID() != "" && (latest == nil || m.GetTimestamp() > latest.GetTimestamp()) {
-			latest = m
+	latestID := c.GetLatestMessageID()
+	latestAt, hasTimestamp := conversationLastMessageTime(c)
+	if latestID != "" && hasTimestamp {
+		if latestAt.After(through.Add(2 * time.Second)) {
+			return ErrNewerMessage
 		}
-	}
-	if latest == nil {
-		return nil
-	}
-	if time.UnixMicro(latest.GetTimestamp()).After(through.Add(2 * time.Second)) {
-		return ErrNewerMessage
-	}
-	// The conversation may have changed identity while the messages were fetched.
-	g.countPhone(ctx, phoneLookup)
-	if again, err := g.client.GetConversation(ctx, conv); err != nil || !eligible(again) || peer(again) != expectedPeer {
-		return errors.New("conversation_identity_changed")
+	} else {
+		g.countPhone(ctx, phoneMessages)
+		res, err := fetchMessages(ctx, conv, 1, nil)
+		if err != nil {
+			return errors.New("read_failed")
+		}
+		var latest *gmproto.Message
+		for _, m := range res.GetMessages() {
+			if m.GetConversationID() == conv && m.GetMessageID() != "" && (latest == nil || m.GetTimestamp() > latest.GetTimestamp()) {
+				latest = m
+			}
+		}
+		if latest == nil {
+			return nil
+		}
+		if time.UnixMicro(latest.GetTimestamp()).After(through.Add(2 * time.Second)) {
+			return ErrNewerMessage
+		}
+		// The conversation may have changed identity while the messages were fetched.
+		g.countPhone(ctx, phoneLookup)
+		if again, err := getConversation(ctx, conv); err != nil || !eligible(again) || peer(again) != expectedPeer {
+			return errors.New("conversation_identity_changed")
+		}
+		latestID = latest.GetMessageID()
 	}
 	g.countPhone(ctx, phoneMarkRead)
-	if err := g.client.MarkRead(ctx, conv, latest.GetMessageID()); err != nil {
+	if err := markRead(ctx, conv, latestID); err != nil {
 		return errors.New("read_failed")
 	}
 	g.noteActivity()

@@ -116,7 +116,11 @@ func (g *Google) FetchHistory(ctx context.Context, conv, expectedPeer, cursor st
 	}
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	return g.fetchHistory(ctx, conv, expectedPeer, cursor, g.client.GetConversation, g.client.FetchMessages)
+	var fetch func(context.Context, string, int64, *gmproto.Cursor) (*gmproto.ListMessagesResponse, error)
+	if g.client != nil {
+		fetch = g.client.FetchMessages
+	}
+	return g.fetchHistory(ctx, conv, expectedPeer, cursor, g.conversationGetter(), fetch)
 }
 
 func (g *Google) fetchHistory(
@@ -125,16 +129,22 @@ func (g *Google) fetchHistory(
 	getConversation func(context.Context, string) (*gmproto.Conversation, error),
 	fetchMessages func(context.Context, string, int64, *gmproto.Cursor) (*gmproto.ListMessagesResponse, error),
 ) (HistoryPage, error) {
-	g.countPhone(ctx, phoneLookup)
-	c, err := getConversation(ctx, conv)
-	if err != nil {
-		if !g.Ready() {
-			return HistoryPage{}, ErrUnavailable
+	var c *gmproto.Conversation
+	if cached, ok := g.cachedConversationProto(conv); ok && readable(cached) && peer(cached) == expectedPeer {
+		c = cached
+	} else {
+		g.countPhone(ctx, phoneLookup)
+		var err error
+		c, err = getConversation(ctx, conv)
+		if err != nil {
+			if !g.Ready() {
+				return HistoryPage{}, ErrUnavailable
+			}
+			return HistoryPage{}, ErrLookupFailed
 		}
-		return HistoryPage{}, ErrLookupFailed
-	}
-	if !readable(c) || peer(c) != expectedPeer {
-		return HistoryPage{}, ErrIneligibleConversation
+		if !readable(c) || peer(c) != expectedPeer {
+			return HistoryPage{}, ErrIneligibleConversation
+		}
 	}
 	var pointer *gmproto.Cursor
 	if cursor != "" {
@@ -168,7 +178,18 @@ func (g *Google) fetchHistory(
 		return HistoryPage{}, ErrLookupFailed
 	}
 	if !readable(c) || peer(c) != expectedPeer {
+		g.mu.Lock()
+		if g.conversations[conv] != nil {
+			if g.staleCached == nil {
+				g.staleCached = map[string]bool{}
+			}
+			g.staleCached[conv] = true
+		}
+		g.mu.Unlock()
 		return HistoryPage{}, errors.New("conversation_identity_changed")
+	}
+	if c.GetConversationID() == conv {
+		g.cacheDetail(c)
 	}
 	out := HistoryPage{Messages: []HistoricalMessage{}}
 	for _, m := range result.GetMessages() {

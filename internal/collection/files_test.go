@@ -208,3 +208,89 @@ func TestFileHostAuthorizeChecksLocalSettingsFirstAndCoolsDownFailures(t *testin
 		t.Fatalf("file not archived after recovery: %+v err=%v", saved, err)
 	}
 }
+
+type cachedSharedFileTransport struct {
+	*countingFileTransport
+	cached       map[string]transport.Conversation
+	sharedCalls  atomic.Int32
+	downloadData []byte
+}
+
+func (c *cachedSharedFileTransport) CachedConversation(id string) (transport.Conversation, bool) {
+	v, ok := c.cached[id]
+	return v, ok
+}
+
+func (c *cachedSharedFileTransport) LookupConversationShared(ctx context.Context, id string) (transport.Conversation, error) {
+	c.sharedCalls.Add(1)
+	return c.LookupConversation(ctx, id)
+}
+
+func (c *cachedSharedFileTransport) DownloadFile(_ context.Context, _ media.File) ([]byte, error) {
+	return append([]byte(nil), c.downloadData...), nil
+}
+
+func TestReadPathsUseCachedIdentityAndSharedPostDownloadCheck(t *testing.T) {
+	t.Parallel()
+	svc, fixture := setup(t)
+	now := time.Now()
+	svc.SetClock(func() time.Time { return now })
+	enableInbox(t, svc)
+
+	demo := transport.Conversation{ID: "demo-chat", ParticipantID: "demo-peer", Writable: true, OutgoingID: "demo-self"}
+	tr := &cachedSharedFileTransport{
+		countingFileTransport: &countingFileTransport{Fixture: fixture},
+		cached:                map[string]transport.Conversation{demo.ID: demo},
+		downloadData:          []byte("remote-image-bytes"),
+	}
+	svc.Transport = tr
+
+	// 1. Observe uses CachedConversation and avoids live phone lookups.
+	err := svc.Observe(context.Background(), transport.Incoming{
+		ID:             "m-inline",
+		ConversationID: demo.ID,
+		ParticipantID:  demo.ParticipantID,
+		At:             now,
+		Attachments: []media.File{{
+			Info:        media.Info{ID: "part-0", Name: "inline.png", MIME: "image/png", Size: 0, PreviewOnly: true},
+			MessageID:   "m-inline",
+			PreviewData: []byte("inline-data"),
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Observe inline failed: %v", err)
+	}
+	if tr.lookups.Load() != 0 || tr.sharedCalls.Load() != 0 {
+		t.Fatalf("Observe made live lookups when cached: lookups=%d shared=%d", tr.lookups.Load(), tr.sharedCalls.Load())
+	}
+
+	// 2. Reading an inline preview uses CachedConversation and makes 0 live lookups.
+	if _, got, err := svc.InboxAttachmentContent(context.Background(), demo.ID, store.Hash(demo.ID+"\x00m-inline"), "part-0", true); err != nil || string(got) != "inline-data" {
+		t.Fatalf("inline InboxAttachmentContent failed: got=%q err=%v", string(got), err)
+	}
+	if tr.lookups.Load() != 0 || tr.sharedCalls.Load() != 0 {
+		t.Fatalf("inline attachment made live lookups: lookups=%d shared=%d", tr.lookups.Load(), tr.sharedCalls.Load())
+	}
+
+	// 3. Reading a remote attachment skips the pre-download lookup (uses cache)
+	// and performs the post-download live re-check via LookupConversationShared.
+	if err := svc.Store.SaveObservedFiles(demo.ID, "m-remote", "", "incoming", "", "phone", "", now, []media.File{{
+		Info:     media.Info{ID: "part-0", Name: "photo.jpg", MIME: "image/jpeg", Size: int64(len(tr.downloadData))},
+		RemoteID: "remote-id",
+		Key:      make([]byte, 32),
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, got, err := svc.InboxAttachmentContent(context.Background(), demo.ID, store.Hash(demo.ID+"\x00m-remote"), "part-0", false); err != nil || string(got) != "remote-image-bytes" {
+		t.Fatalf("remote InboxAttachmentContent failed: got=%q err=%v", string(got), err)
+	}
+	if tr.lookups.Load() != 1 || tr.sharedCalls.Load() != 1 {
+		t.Fatalf("remote attachment lookups=%d shared=%d, want 1 post-download shared lookup", tr.lookups.Load(), tr.sharedCalls.Load())
+	}
+
+	// 4. If the post-download live re-check sees a participant change, access is refused.
+	tr.livePeer = "different-peer"
+	if _, _, err := svc.InboxAttachmentContent(context.Background(), demo.ID, store.Hash(demo.ID+"\x00m-remote"), "part-0", false); err == nil || err.Error() != "conversation_identity_changed" {
+		t.Fatalf("expected post-download identity mismatch error, got %v", err)
+	}
+}
