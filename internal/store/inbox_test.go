@@ -2,9 +2,11 @@ package store
 
 import (
 	"fmt"
-	"github.com/deusical/smsbot-server/internal/vault"
 	"path/filepath"
 	"testing"
+	"time"
+
+	"github.com/deusical/smsbot-server/internal/vault"
 )
 
 func inboxStore(t *testing.T) *Store {
@@ -130,5 +132,98 @@ func TestRetentionSkipsAlreadyClearedJobPlans(t *testing.T) {
 	}
 	if err := s.DB.QueryRow("SELECT count(*) FROM job_updates").Scan(&updates); err != nil || updates != 1 {
 		t.Fatalf("second retention rewrote empty-plan rows: total updates=%d, want 1 (err=%v)", updates, err)
+	}
+}
+
+func TestRetentionPruningSessionsChangesObservedEventsNoJobsDeletion(t *testing.T) {
+	t.Parallel()
+	s := inboxStore(t)
+
+	// 1. Sessions in credentials table
+	now := time.Now().Unix()
+	if _, err := s.DB.Exec("INSERT INTO credentials VALUES('hash-expired', 'expired', 'session', ?)", now-100); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DB.Exec("INSERT INTO credentials VALUES('hash-valid', 'valid', 'session', ?)", now+1000); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DB.Exec("INSERT INTO credentials VALUES('hash-remembered', 'remembered', 'session', 0)"); err != nil {
+		t.Fatal(err)
+	}
+
+	// 2. messages and observed_events
+	if _, err := s.DB.Exec("INSERT INTO archive_conversations VALUES('archived-chat', 'payload', 0)"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DB.Exec("INSERT INTO messages VALUES('msg-1', 'archived-chat', 'incoming', '2026-01-01T00:00:00Z', 'enc')"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DB.Exec("INSERT INTO message_alias VALUES('event-referenced', 'msg-1')"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DB.Exec("INSERT INTO observed_events VALUES('event-orphan')"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DB.Exec("INSERT INTO observed_events VALUES('event-referenced')"); err != nil {
+		t.Fatal(err)
+	}
+
+	// 3. message_changes
+	if _, err := s.DB.Exec("INSERT INTO message_changes(conversation, message) VALUES('unarchived-chat', 'msg-unarchived')"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DB.Exec("INSERT INTO message_changes(conversation, message) VALUES('archived-chat', 'msg-1')"); err != nil {
+		t.Fatal(err)
+	}
+
+	// 4. Jobs: verify jobs table is NOT pruned (only plan cleared for old non-active jobs)
+	if _, err := s.Enqueue("job-keep", "archived-chat", "ping", Plan{Reply: "hello", Participant: "p1"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Run retention
+	if _, err := s.Retention(30); err != nil {
+		t.Fatalf("Retention: %v", err)
+	}
+
+	// Verify expired session pruned, valid and remembered kept
+	var count int
+	s.DB.QueryRow("SELECT count(*) FROM credentials WHERE hash='hash-expired'").Scan(&count)
+	if count != 0 {
+		t.Fatal("expired session not pruned")
+	}
+	s.DB.QueryRow("SELECT count(*) FROM credentials WHERE hash='hash-valid'").Scan(&count)
+	if count != 1 {
+		t.Fatal("valid session pruned")
+	}
+	s.DB.QueryRow("SELECT count(*) FROM credentials WHERE hash='hash-remembered'").Scan(&count)
+	if count != 1 {
+		t.Fatal("remembered session pruned")
+	}
+
+	// Verify orphan observed_event pruned, referenced kept
+	s.DB.QueryRow("SELECT count(*) FROM observed_events WHERE id='event-orphan'").Scan(&count)
+	if count != 0 {
+		t.Fatal("orphan observed_event not pruned")
+	}
+	s.DB.QueryRow("SELECT count(*) FROM observed_events WHERE id='event-referenced'").Scan(&count)
+	if count != 1 {
+		t.Fatal("referenced observed_event pruned")
+	}
+
+	// Verify unarchived message_changes pruned
+	s.DB.QueryRow("SELECT count(*) FROM message_changes WHERE conversation='unarchived-chat'").Scan(&count)
+	if count != 0 {
+		t.Fatalf("unarchived message_changes not pruned: count=%d", count)
+	}
+	s.DB.QueryRow("SELECT count(*) FROM message_changes WHERE conversation='archived-chat'").Scan(&count)
+	if count == 0 {
+		t.Fatalf("archived message_changes pruned: count=%d", count)
+	}
+
+	// Verify jobs table is NOT pruned
+	s.DB.QueryRow("SELECT count(*) FROM jobs WHERE id='job-keep'").Scan(&count)
+	if count != 1 {
+		t.Fatal("jobs row was deleted")
 	}
 }

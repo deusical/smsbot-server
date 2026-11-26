@@ -140,6 +140,18 @@ func (s *Store) Retention(days int) (int64, error) {
 	if _, e = tx.Exec("DELETE FROM memory WHERE julianday(expires)<=julianday('now')"); e != nil {
 		return 0, e
 	}
+	if _, e = tx.Exec("DELETE FROM credentials WHERE kind='session' AND expires>0 AND expires<=?", time.Now().Unix()); e != nil {
+		return 0, e
+	}
+	if _, e = tx.Exec("DELETE FROM message_changes WHERE conversation NOT IN (SELECT conversation FROM archive_conversations UNION SELECT conversation FROM archive_pending)"); e != nil {
+		return 0, e
+	}
+	if _, e = tx.Exec("DELETE FROM message_changes WHERE seq < (SELECT coalesce(max(seq) - 5000, 0) FROM message_changes)"); e != nil {
+		return 0, e
+	}
+	if _, e = tx.Exec("DELETE FROM observed_events WHERE id NOT IN (SELECT id FROM messages UNION SELECT alias FROM message_alias)"); e != nil {
+		return 0, e
+	}
 	n, e := result.RowsAffected()
 	if e != nil {
 		return 0, e
@@ -151,4 +163,34 @@ func (s *Store) Retention(days int) (int64, error) {
 		s.noteMessageDeletion()
 	}
 	return n, nil
+}
+
+// PruneExpiredSessions removes browser sessions whose expires timestamp is in the past.
+func (s *Store) PruneExpiredSessions() (int64, error) {
+	res, err := s.DB.Exec("DELETE FROM credentials WHERE kind='session' AND expires>0 AND expires<=?", time.Now().Unix())
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// PruneObservedEvents removes deduplication hashes that no longer correspond to existing messages or message aliases.
+func (s *Store) PruneObservedEvents() (int64, error) {
+	res, err := s.DB.Exec("DELETE FROM observed_events WHERE id NOT IN (SELECT id FROM messages UNION SELECT alias FROM message_alias)")
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// PruneMessageChanges removes message_changes with seq < minSeq.
+func (s *Store) PruneMessageChanges(minSeq int64) (int64, error) {
+	if minSeq <= 0 {
+		return 0, nil
+	}
+	res, err := s.DB.Exec("DELETE FROM message_changes WHERE seq < ?", minSeq)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }
