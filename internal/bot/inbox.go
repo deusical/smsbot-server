@@ -97,7 +97,7 @@ func (e *Engine) ComposeInboxTo(ctx context.Context, conv, roster, text, request
 	id := store.Hash("compose\x00" + conv + "\x00" + requestID)
 	e.mu.Lock()
 	exists, err := e.existingCompose(id, conv, text, files, replyTarget)
-	s, settingsErr := e.Collection.Settings()
+	s, settingsErr := e.Collection.PolicySettings()
 	epoch := e.Collection.ConsentEpoch()
 	e.mu.Unlock()
 	if err != nil {
@@ -135,7 +135,7 @@ func (e *Engine) ComposeInboxTo(ctx context.Context, conv, roster, text, request
 	if err = ctx.Err(); err != nil {
 		return "", err
 	}
-	current, err := e.Collection.Settings()
+	current, err := e.Collection.PolicySettings()
 	if err != nil {
 		return "", err
 	}

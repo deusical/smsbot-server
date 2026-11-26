@@ -1385,3 +1385,161 @@ func TestLookupIDMismatchCancelsAsIdentityChangedWithoutRetry(t *testing.T) {
 		t.Fatalf("ineligible conversation paused engine: paused=%v err=%v", paused, err)
 	}
 }
+
+func TestPauseCancelUnenrollDoNotWaitOnPhoneLookup(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	t.Run("pause_does_not_wait_on_phone_lookup", func(t *testing.T) {
+		e, f := setup(t)
+		arm(t, e)
+		m := incoming()
+		if ok, err := e.Accept(ctx, m); !ok || err != nil {
+			t.Fatal("accept", ok, err)
+		}
+		id := store.Hash(m.ConversationID + "\x00" + m.ID)
+
+		lookupStarted := make(chan struct{})
+		releaseLookup := make(chan struct{})
+		useTransport(e, &lookupTransport{
+			Fixture: f,
+			lookup: func(ctx context.Context, id string) (transport.Conversation, error) {
+				close(lookupStarted)
+				select {
+				case <-releaseLookup:
+				case <-ctx.Done():
+				}
+				return transport.Conversation{ID: id, ParticipantID: "demo-peer", Writable: true}, nil
+			},
+		})
+
+		dispatchDone := make(chan error, 1)
+		go func() {
+			dispatchDone <- e.Dispatch(ctx)
+		}()
+
+		<-lookupStarted
+
+		// Pause while lookup is blocked in phone RPC: must return immediately!
+		pauseStart := time.Now()
+		if err := e.Pause(true); err != nil {
+			t.Fatalf("pause: %v", err)
+		}
+		if elapsed := time.Since(pauseStart); elapsed > 200*time.Millisecond {
+			t.Fatalf("pause waited on phone lookup: took %v", elapsed)
+		}
+
+		// Now unblock lookup
+		close(releaseLookup)
+		<-dispatchDone
+
+		// Job must not be submitted because pause was set
+		if len(f.Sent) != 0 {
+			t.Fatal("message was sent despite pause")
+		}
+		st := stateOf(t, e, id)
+		if st != "cancelled" && st != "queued" {
+			t.Fatalf("unexpected state: %s", st)
+		}
+	})
+
+	t.Run("cancel_does_not_wait_on_phone_lookup", func(t *testing.T) {
+		e, f := setup(t)
+		arm(t, e)
+		m := incoming()
+		if ok, err := e.Accept(ctx, m); !ok || err != nil {
+			t.Fatal("accept", ok, err)
+		}
+		id := store.Hash(m.ConversationID + "\x00" + m.ID)
+
+		lookupStarted := make(chan struct{})
+		releaseLookup := make(chan struct{})
+		useTransport(e, &lookupTransport{
+			Fixture: f,
+			lookup: func(ctx context.Context, id string) (transport.Conversation, error) {
+				close(lookupStarted)
+				select {
+				case <-releaseLookup:
+				case <-ctx.Done():
+				}
+				return transport.Conversation{ID: id, ParticipantID: "demo-peer", Writable: true}, nil
+			},
+		})
+
+		dispatchDone := make(chan error, 1)
+		go func() {
+			dispatchDone <- e.Dispatch(ctx)
+		}()
+
+		<-lookupStarted
+
+		// Cancel while lookup is blocked: must return immediately!
+		cancelStart := time.Now()
+		if err := e.Cancel(id); err != nil {
+			t.Fatalf("cancel: %v", err)
+		}
+		if elapsed := time.Since(cancelStart); elapsed > 200*time.Millisecond {
+			t.Fatalf("cancel waited on phone lookup: took %v", elapsed)
+		}
+
+		close(releaseLookup)
+		<-dispatchDone
+
+		if len(f.Sent) != 0 {
+			t.Fatal("message was sent despite cancel")
+		}
+		if st := stateOf(t, e, id); st != "cancelled" {
+			t.Fatalf("expected cancelled, got %s", st)
+		}
+	})
+
+	t.Run("unenroll_does_not_wait_on_phone_lookup", func(t *testing.T) {
+		e, f := setup(t)
+		arm(t, e)
+		m := incoming()
+		if ok, err := e.Accept(ctx, m); !ok || err != nil {
+			t.Fatal("accept", ok, err)
+		}
+		id := store.Hash(m.ConversationID + "\x00" + m.ID)
+
+		lookupStarted := make(chan struct{})
+		releaseLookup := make(chan struct{})
+		useTransport(e, &lookupTransport{
+			Fixture: f,
+			lookup: func(ctx context.Context, id string) (transport.Conversation, error) {
+				close(lookupStarted)
+				select {
+				case <-releaseLookup:
+				case <-ctx.Done():
+				}
+				return transport.Conversation{ID: id, ParticipantID: "demo-peer", Writable: true}, nil
+			},
+		})
+
+		dispatchDone := make(chan error, 1)
+		go func() {
+			dispatchDone <- e.Dispatch(ctx)
+		}()
+
+		<-lookupStarted
+
+		// Unenroll while lookup is blocked: must return immediately!
+		unenrollStart := time.Now()
+		if err := e.Unenroll(m.ConversationID); err != nil {
+			t.Fatalf("unenroll: %v", err)
+		}
+		if elapsed := time.Since(unenrollStart); elapsed > 200*time.Millisecond {
+			t.Fatalf("unenroll waited on phone lookup: took %v", elapsed)
+		}
+
+		close(releaseLookup)
+		<-dispatchDone
+
+		if len(f.Sent) != 0 {
+			t.Fatal("message was sent despite unenroll")
+		}
+		if st := stateOf(t, e, id); st != "cancelled" {
+			t.Fatalf("expected cancelled, got %s", st)
+		}
+	})
+}

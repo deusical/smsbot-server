@@ -203,16 +203,20 @@ func (e *Engine) QueueReactionIn(ctx context.Context, conv, roster, target, emoj
 
 // Dispatch owns both engine locks. A reaction is not a text send and must never
 // enter the normal message/receipt reconciliation path.
-func (e *Engine) dispatchReaction(ctx context.Context, j store.Job, p store.Plan) error {
-	defer e.mu.Unlock()
+func (e *Engine) dispatchReaction(ctx context.Context, j store.Job, p store.Plan, preloaded ...transport.Conversation) error {
 	m := p.Mutation
 	v, err := e.Store.Interaction(j.ConversationID, m.Target)
 	if err != nil {
 		return err
 	}
-	c, err := e.lookupConversation(ctx, j.ConversationID)
-	if err != nil {
-		return err
+	var c transport.Conversation
+	if len(preloaded) > 0 {
+		c = preloaded[0]
+	} else {
+		c, err = e.lookupConversation(ctx, j.ConversationID)
+		if err != nil {
+			return err
+		}
 	}
 	if m.Protocol != "RCS" || v == nil || v.Protocol != "RCS" || v.OwnerID == "" || v.UpstreamID != m.WireTarget || store.InteractionVersion(v) != m.Version || !isRCS(c.Protocol) || c.Roster != p.Roster {
 		return e.Store.Complete(j.ID, "failed", "reaction_conflict")

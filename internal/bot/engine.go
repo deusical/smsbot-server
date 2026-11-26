@@ -795,7 +795,7 @@ func memoryScope(conv, command, model, member string) string {
 	}
 	return scope
 }
-func (e *Engine) check(ctx context.Context, j store.Job, p store.Plan, mode lookupMode) (Configuration, string, error) {
+func (e *Engine) check(ctx context.Context, j store.Job, p store.Plan, mode lookupMode, preloaded ...transport.Conversation) (Configuration, string, error) {
 	cfg, err := e.Configuration()
 	if err != nil {
 		return cfg, "", err
@@ -828,7 +828,7 @@ func (e *Engine) check(ctx context.Context, j store.Job, p store.Plan, mode look
 	if quiet(cfg.Settings, e.now()) {
 		return cfg, "quiet_hours", nil
 	}
-	inbox, err := e.Collection.Settings()
+	inbox, err := e.Collection.PolicySettings()
 	if err != nil {
 		return cfg, "", err
 	}
@@ -842,17 +842,23 @@ func (e *Engine) check(ctx context.Context, j store.Job, p store.Plan, mode look
 	}
 	var conv transport.Conversation
 	var convLoaded bool
+	if len(preloaded) > 0 {
+		conv = preloaded[0]
+		convLoaded = true
+	}
 	if p.InboxOwnerOnly {
 		if err := inbox.FileLimits().Check(p.Attachments); err != nil {
 			return cfg, "attachment_limits_changed", nil
 		}
-		c, err := e.conversationForCheck(ctx, j.ConversationID, mode)
-		if err != nil {
-			return cfg, "", err
+		if !convLoaded {
+			c, err := e.conversationForCheck(ctx, j.ConversationID, mode)
+			if err != nil {
+				return cfg, "", err
+			}
+			conv = c
+			convLoaded = true
 		}
-		conv = c
-		convLoaded = true
-		if !inbox.Allows(c) || c.ParticipantID != p.Participant {
+		if !inbox.Allows(conv) || conv.ParticipantID != p.Participant {
 			return cfg, "inbox_access_disabled", nil
 		}
 	} else if !e.enrolledFor(j.ConversationID, p) {
@@ -946,9 +952,6 @@ func (e *Engine) Dispatch(ctx context.Context) error {
 func (e *Engine) dispatchOne(ctx context.Context) (bool, error) {
 	ctx = transport.WithPhonePurpose(ctx, "send")
 	dispatchStart := time.Now()
-	e.dispatchMu.Lock()
-	dispatchWait := time.Since(dispatchStart)
-	defer e.dispatchMu.Unlock()
 
 	e.passLookupMs.Store(0)
 	var dbWaitStart time.Duration
@@ -956,15 +959,14 @@ func (e *Engine) dispatchOne(ctx context.Context) (bool, error) {
 		dbWaitStart = e.Store.DB.Stats().WaitDuration
 	}
 
-	muStart := time.Now()
-	e.mu.Lock()
-	muWait := time.Since(muStart)
-	controlHoldStart := time.Now()
+	var dispatchWait time.Duration
+	var muWait time.Duration
 	var controlHold time.Duration
-
+	var controlHoldStart time.Time
 	diagResult := "idle"
+
 	defer func() {
-		if controlHold == 0 {
+		if !controlHoldStart.IsZero() && controlHold == 0 {
 			controlHold = time.Since(controlHoldStart)
 		}
 		var dbWaitMs int64
@@ -987,32 +989,132 @@ func (e *Engine) dispatchOne(ctx context.Context) (bool, error) {
 		}
 	}()
 
+	// 1. Candidate check: short control lock for DB and in-flight work collection
 	e.videoChecked = ""
 	e.workerUnlocked = false
+
+	muStart := time.Now()
+	e.mu.Lock()
+	muWait = time.Since(muStart)
+	controlHoldStart = time.Now()
+
 	if err := e.collectDownloadUploads(ctx); err != nil {
 		diagResult = "collect_failed"
 		controlHold = time.Since(controlHoldStart)
 		e.mu.Unlock()
 		return false, err
 	}
-	j, p, cfg, mode, ready, err := e.nextReady(ctx)
-	if !ready || err != nil {
+	paused, err := e.Store.Paused()
+	if err != nil || paused || !e.Transport.Ready() {
 		controlHold = time.Since(controlHoldStart)
 		e.mu.Unlock()
 		return false, err
 	}
-	if p.Mutation != nil {
-		diagResult = "reaction"
-		controlHold = time.Since(controlHoldStart)
-		rErr := e.dispatchReaction(ctx, j, p) // releases the lock
-		return rErr == nil, rErr
+	if e.preflights == nil {
+		e.preflights = map[string]preflightRetry{}
 	}
+	var blockedConvs []string
+	now := e.now()
+	for id, pr := range e.preflights {
+		if now.Before(pr.until) {
+			if pr.conv != "" {
+				blockedConvs = append(blockedConvs, pr.conv)
+			}
+		} else {
+			delete(e.preflights, id)
+		}
+	}
+	j, p, err := e.Store.Next(blockedConvs...)
+	if errors.Is(err, sql.ErrNoRows) {
+		controlHold = time.Since(controlHoldStart)
+		e.mu.Unlock()
+		return false, nil
+	}
+	if err != nil {
+		controlHold = time.Since(controlHoldStart)
+		e.mu.Unlock()
+		return false, err
+	}
+	mode := liveLookup
+	if pollsWorker(p) {
+		mode = cachedLookup
+	}
+	controlHold = time.Since(controlHoldStart)
+	e.mu.Unlock()
+
+	// 2. Phone lookup OUTSIDE e.mu and OUTSIDE dispatchMu
+	lookupStart := time.Now()
+	conv, lookupErr := e.conversationForCheck(ctx, j.ConversationID, mode)
+	e.passLookupMs.Add(time.Since(lookupStart).Milliseconds())
+
+	// 3. Lock dispatchMu and e.mu for ordered execution
+	dStart := time.Now()
+	e.dispatchMu.Lock()
+	dispatchWait = time.Since(dStart)
+	defer e.dispatchMu.Unlock()
+
+	mStart := time.Now()
+	e.mu.Lock()
+	muWait += time.Since(mStart)
+	controlHoldStart = time.Now()
+	controlHold = 0
 	defer func() {
 		e.videoChecked = ""
 		e.workerUnlocked = false
-		controlHold = time.Since(controlHoldStart)
+		if controlHold == 0 {
+			controlHold = time.Since(controlHoldStart)
+		}
 		e.mu.Unlock()
 	}()
+
+	// 4. Repeat checks under lock: pause and job state
+	paused, _ = e.Store.Paused()
+	if paused {
+		return false, nil
+	}
+	current, loadErr := e.Store.Job(j.ID)
+	if loadErr != nil || current.State != "queued" {
+		return false, nil
+	}
+	if lookupErr != nil {
+		if !e.sessionUp() {
+			return false, transport.ErrUnavailable
+		}
+		e.backoffPreflight(j.ID, j.ConversationID)
+		return false, lookupErr
+	}
+	delete(e.preflights, j.ID)
+
+	cfg, code, err := e.check(ctx, j, p, mode, conv)
+	if err != nil {
+		if errors.Is(err, transport.ErrLookupFailed) {
+			e.backoffPreflight(j.ID, j.ConversationID)
+		}
+		return false, err
+	}
+	if code != "" {
+		diagResult = code
+		if code == "approval_required" {
+			_, err = e.Store.Transition(j.ID, "queued", "awaiting_approval")
+		} else {
+			state := "cancelled"
+			if code == "stale" || code == "execution_expired" {
+				state = "expired"
+			}
+			err = e.Store.Complete(j.ID, state, code)
+			if err == nil {
+				e.nudgeWorkerCancel()
+			}
+		}
+		return false, err
+	}
+
+	if p.Mutation != nil {
+		diagResult = "reaction"
+		rErr := e.dispatchReaction(ctx, j, p, conv)
+		return rErr == nil, rErr
+	}
+
 	if done, err := e.runPipeline(ctx, j, &p, &cfg); done {
 		diagResult = "pipeline_done"
 		return false, err
@@ -1029,8 +1131,33 @@ func (e *Engine) dispatchOne(ctx context.Context) (bool, error) {
 	}
 	if (mode == cachedLookup || e.workerUnlocked) && len(p.Attachments) == 0 && e.videoChecked != j.ID {
 		// A pipeline whose worker step produced no attachment skipped sendableVideo
-		// and upload checks; verify live before submitting.
-		checked, code, err := e.check(ctx, j, p, liveLookup)
+		// and upload checks; verify live before submitting, releasing locks during lookup.
+		controlHold = time.Since(controlHoldStart)
+		e.mu.Unlock()
+		e.dispatchMu.Unlock()
+
+		liveConv, liveErr := e.conversationForCheck(ctx, j.ConversationID, liveLookup)
+
+		e.dispatchMu.Lock()
+		e.mu.Lock()
+		controlHoldStart = time.Now()
+		controlHold = 0
+
+		paused, _ = e.Store.Paused()
+		if paused || !e.Transport.Ready() {
+			return false, nil
+		}
+		current, loadErr = e.Store.Job(j.ID)
+		if loadErr != nil || current.State != "queued" {
+			return false, nil
+		}
+		if liveErr != nil {
+			if errors.Is(liveErr, transport.ErrLookupFailed) {
+				e.backoffPreflight(j.ID, j.ConversationID)
+			}
+			return false, liveErr
+		}
+		checked, code, err := e.check(ctx, j, p, liveLookup, liveConv)
 		cfg = checked
 		if err != nil {
 			if errors.Is(err, transport.ErrLookupFailed) {
@@ -1046,10 +1173,11 @@ func (e *Engine) dispatchOne(ctx context.Context) (bool, error) {
 			}
 			return false, e.Store.Complete(j.ID, state, code)
 		}
+		conv = liveConv
 	}
 	// The conversation turn's earlier history, as checked by the AI step.
 	diagResult = "submitted"
-	sErr := e.submit(ctx, j, p, cfg)
+	sErr := e.submit(ctx, j, p, cfg, conv)
 	return sErr == nil, sErr
 }
 
@@ -1306,7 +1434,7 @@ func (e *Engine) prepareFiles(ctx context.Context, j store.Job, p *store.Plan) (
 // submit persists the send intent (submitting, with a new transaction ID),
 // then calls the transport once. A transport error other than a definite
 // non-submission is recorded as unknown_submission and never retried.
-func (e *Engine) submit(ctx context.Context, j store.Job, p store.Plan, cfg Configuration) error {
+func (e *Engine) submit(ctx context.Context, j store.Job, p store.Plan, cfg Configuration, preloaded ...transport.Conversation) error {
 	current, err := e.Store.Job(j.ID)
 	if err != nil || current.State != "queued" {
 		return err
@@ -1333,9 +1461,15 @@ func (e *Engine) submit(ctx context.Context, j store.Job, p store.Plan, cfg Conf
 		p.Input = turn.Input
 	}
 	if p.ReplyTarget != "" {
-		c, lookupErr := e.lookupConversation(ctx, j.ConversationID)
-		if lookupErr != nil {
-			return lookupErr
+		var c transport.Conversation
+		var lookupErr error
+		if len(preloaded) > 0 {
+			c = preloaded[0]
+		} else {
+			c, lookupErr = e.lookupConversation(ctx, j.ConversationID)
+			if lookupErr != nil {
+				return lookupErr
+			}
 		}
 		v, targetErr := e.replyTarget(ctx, c, p.ReplyTarget)
 		if targetErr != nil || v.UpstreamID != p.ReplyWireTarget {

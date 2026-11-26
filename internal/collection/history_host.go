@@ -17,6 +17,12 @@ type HistoryHost struct{ svc *Service }
 // policySettings returns the in-memory consent snapshot when initialized,
 // falling back to reading encrypted settings under the control lock.
 // Persisting paths such as Commit still read Settings under the control lock.
+// PolicySettings returns the in-memory consent snapshot when initialized,
+// falling back to reading encrypted settings under the control lock.
+func (svc *Service) PolicySettings() (Settings, error) {
+	return svc.policySettings()
+}
+
 func (svc *Service) policySettings() (Settings, error) {
 	if c := svc.consent.Load(); c != nil {
 		return c.settings, nil
