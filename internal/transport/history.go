@@ -44,7 +44,7 @@ func (f *Fixture) DiscoverConversations(ctx context.Context, cursor string) (Con
 	return ConversationPage{Conversations: list}, err
 }
 func (g *Google) DiscoverConversations(ctx context.Context, cursor string) (ConversationPage, error) {
-	if !g.Ready() {
+	if !g.SessionUp() {
 		return ConversationPage{}, errors.New("transport_unavailable")
 	}
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
@@ -111,7 +111,7 @@ func (f *Fixture) FetchHistory(ctx context.Context, conv, expectedPeer, cursor s
 	}}, nil
 }
 func (g *Google) FetchHistory(ctx context.Context, conv, expectedPeer, cursor string) (HistoryPage, error) {
-	if !g.Ready() {
+	if !g.SessionUp() {
 		return HistoryPage{}, ErrUnavailable
 	}
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)

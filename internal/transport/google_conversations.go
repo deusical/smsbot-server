@@ -307,7 +307,7 @@ func detailConversation(id string, c *gmproto.Conversation) Conversation {
 func (g *Google) Conversations(ctx context.Context) ([]Conversation, error) {
 	g.listMu.Lock()
 	defer g.listMu.Unlock()
-	if !g.Ready() {
+	if !g.SessionUp() {
 		return nil, errors.New("phone connection unavailable")
 	}
 	if !g.activity.listStale.Swap(false) && time.Since(g.listed) < 30*time.Second {

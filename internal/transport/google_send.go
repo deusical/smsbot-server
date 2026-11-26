@@ -48,7 +48,7 @@ func (g *Google) sendPartsWith(
 		d.Result = reason
 		return Receipt{}, refuse(reason)
 	}
-	if !g.Ready() {
+	if !g.SessionUp() {
 		return refused("not_ready")
 	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
