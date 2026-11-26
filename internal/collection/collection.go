@@ -106,7 +106,7 @@ func (svc *Service) ConsentEpoch() uint64 {
 }
 
 func (svc *Service) lookup(ctx context.Context, id string) (transport.Conversation, error) {
-	return transport.Lookup(ctx, svc.Transport, id)
+	return transport.LookupShared(ctx, svc.Transport, id)
 }
 
 func (svc *Service) cachedOrLookup(ctx context.Context, id string) (transport.Conversation, error) {

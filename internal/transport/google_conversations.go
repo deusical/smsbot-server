@@ -193,6 +193,8 @@ func (g *Google) LookupConversation(ctx context.Context, id string) (Conversatio
 		if !errors.Is(err, context.Canceled) {
 			if reason, hard, offline := lookupFailure(err); offline {
 				g.noteFailure(reason, hard)
+			} else if errors.Is(err, context.DeadlineExceeded) {
+				g.probeReadinessOnTimeout()
 			}
 			g.diagnose("conversation_lookup", err)
 		}
@@ -208,6 +210,58 @@ func (g *Google) LookupConversation(ctx context.Context, id string) (Conversatio
 	return detailConversation(id, c), nil
 }
 
+type lookupFlight struct {
+	done chan struct{}
+	conv Conversation
+	err  error
+}
+
+// LookupConversationShared coalesces concurrent in-flight live lookups for the
+// same conversation ID on read-only paths. The underlying lookup uses a
+// detached 20s context so one caller cancelling does not fail others, while each
+// caller still honors its own ctx. Results are never cached across calls.
+func (g *Google) LookupConversationShared(ctx context.Context, id string) (Conversation, error) {
+	if !g.SessionUp() {
+		return Conversation{}, ErrUnavailable
+	}
+	if ctx.Err() != nil {
+		return Conversation{}, ErrLookupFailed
+	}
+	g.lookupFlightMu.Lock()
+	if g.lookupFlights == nil {
+		g.lookupFlights = map[string]*lookupFlight{}
+	}
+	flight, joined := g.lookupFlights[id]
+	if !joined {
+		flight = &lookupFlight{done: make(chan struct{})}
+		g.lookupFlights[id] = flight
+	}
+	g.lookupFlightMu.Unlock()
+	if !joined {
+		purpose := phonePurpose(ctx)
+		go func() {
+			defer func() {
+				g.lookupFlightMu.Lock()
+				delete(g.lookupFlights, id)
+				g.lookupFlightMu.Unlock()
+				close(flight.done)
+			}()
+			callCtx, cancel := context.WithTimeout(WithPhonePurpose(context.Background(), purpose), 20*time.Second)
+			defer cancel()
+			flight.conv, flight.err = g.LookupConversation(callCtx, id)
+		}()
+	}
+	select {
+	case <-ctx.Done():
+		if !g.SessionUp() {
+			return Conversation{}, ErrUnavailable
+		}
+		return Conversation{}, ErrLookupFailed
+	case <-flight.done:
+		return flight.conv, flight.err
+	}
+}
+
 func (g *Google) conversationGetter() func(context.Context, string) (*gmproto.Conversation, error) {
 	if g.getConversation != nil {
 		return g.getConversation
@@ -220,6 +274,17 @@ func (g *Google) conversationGetter() func(context.Context, string) (*gmproto.Co
 	return g.client.GetConversation
 }
 
+func (g *Google) cachedConversationProto(id string) (*gmproto.Conversation, bool) {
+	g.mu.Lock()
+	c := g.conversations[id]
+	stale := g.staleCached[id]
+	g.mu.Unlock()
+	if stale || c == nil || c.GetConversationID() != id {
+		return nil, false
+	}
+	return c, true
+}
+
 // CachedConversation projects the last phone record seen for id, from a
 // lookup, the conversation list or a phone update, unless a subsequent event
 // or list page reported an identity, SIM, roster or readability change.
@@ -227,11 +292,8 @@ func (g *Google) CachedConversation(id string) (Conversation, bool) {
 	if !g.Ready() {
 		return Conversation{}, false
 	}
-	g.mu.Lock()
-	c := g.conversations[id]
-	stale := g.staleCached[id]
-	g.mu.Unlock()
-	if stale || c == nil || c.GetConversationID() != id {
+	c, ok := g.cachedConversationProto(id)
+	if !ok {
 		return Conversation{}, false
 	}
 	return detailConversation(id, c), true
@@ -279,18 +341,24 @@ func (g *Google) Conversations(ctx context.Context) ([]Conversation, error) {
 	return append([]Conversation(nil), out...), nil
 }
 
-// withListState copies the phone's ordering hints. The library reports the last
-// message time in microseconds; smaller values are treated as milliseconds.
+// conversationLastMessageTime decodes LastMessageTimestamp, which the library
+// reports in microseconds; smaller values are treated as milliseconds.
+func conversationLastMessageTime(c *gmproto.Conversation) (time.Time, bool) {
+	ts := c.GetLastMessageTimestamp()
+	if ts <= 0 {
+		return time.Time{}, false
+	}
+	if ts > 1e14 {
+		return time.UnixMicro(ts), true
+	}
+	return time.UnixMilli(ts), true
+}
+
+// withListState copies the phone's ordering hints.
 func withListState(out Conversation, c *gmproto.Conversation) Conversation {
 	out.Unread = c.GetUnread()
 	out.Pinned = c.GetPinned()
-	if ts := c.GetLastMessageTimestamp(); ts > 0 {
-		var t time.Time
-		if ts > 1e14 {
-			t = time.UnixMicro(ts)
-		} else {
-			t = time.UnixMilli(ts)
-		}
+	if t, ok := conversationLastMessageTime(c); ok {
 		out.LastMessageAt = t.UTC().Format(time.RFC3339)
 	}
 	return out

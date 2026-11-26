@@ -85,6 +85,13 @@ type ConversationLookup interface {
 	LookupConversation(context.Context, string) (Conversation, error)
 }
 
+// SharedConversationLookup coalesces concurrent in-flight live lookups for the
+// same conversation ID. Only read paths use it; send paths must keep an
+// isolated Lookup.
+type SharedConversationLookup interface {
+	LookupConversationShared(context.Context, string) (Conversation, error)
+}
+
 // CachedLookup returns the phone record already held for a conversation
 // without a phone round trip. Use it only to decide what to show or while
 // polling a worker task; anything that uploads, sends or acts must check again
@@ -268,6 +275,17 @@ func Lookup(ctx context.Context, t Transport, id string) (Conversation, error) {
 		}
 	}
 	return Conversation{}, errors.New("conversation_unavailable")
+}
+
+// LookupShared returns the live identity of one conversation, coalescing
+// concurrent in-flight read lookups when the transport supports it.
+func LookupShared(ctx context.Context, t Transport, id string) (Conversation, error) {
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	if shared, ok := t.(SharedConversationLookup); ok {
+		return shared.LookupConversationShared(ctx, id)
+	}
+	return Lookup(ctx, t, id)
 }
 
 // Same reports whether two records of a conversation are identical, including

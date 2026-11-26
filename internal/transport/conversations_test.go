@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"go.mau.fi/mautrix-gmessages/pkg/libgm/gmproto"
 	"google.golang.org/protobuf/proto"
@@ -214,5 +217,89 @@ func TestLookupConversationIDMismatchReturnsTypedIneligibleError(t *testing.T) {
 				t.Fatalf("%s cached mismatched conversation baseline: %+v", tc.name, g.conversations)
 			}
 		})
+	}
+}
+
+func TestLookupConversationSharedCoalescesAndDetachesContext(t *testing.T) {
+	t.Parallel()
+	g := NewGoogle(nil, "")
+	g.ready.Store(true)
+	g.connected = func() bool { return true }
+
+	var calls atomic.Int32
+	started := make(chan struct{}, 4)
+	release := make(chan struct{})
+	var callCtxErr atomic.Value
+	g.getConversation = func(ctx context.Context, id string) (*gmproto.Conversation, error) {
+		calls.Add(1)
+		started <- struct{}{}
+		<-release
+		callCtxErr.Store(ctx.Err() != nil)
+		return individual(id), nil
+	}
+
+	// 1. Concurrent callers for the same ID share one in-flight LookupConversation;
+	// cancelling the initiating caller does not abort the shared RPC for others.
+	ctx1, cancel1 := context.WithCancel(context.Background())
+	type res struct {
+		c   Conversation
+		err error
+	}
+	ch1 := make(chan res, 1)
+	ch2 := make(chan res, 1)
+	go func() {
+		c, err := g.LookupConversationShared(ctx1, "chat-1")
+		ch1 <- res{c, err}
+	}()
+	<-started
+	go func() {
+		c, err := g.LookupConversationShared(context.Background(), "chat-1")
+		ch2 <- res{c, err}
+	}()
+	// Wait briefly until ch2 is waiting on the flight, then cancel ctx1.
+	time.Sleep(15 * time.Millisecond)
+	cancel1()
+	r1 := <-ch1
+	if !errors.Is(r1.err, ErrLookupFailed) {
+		t.Fatalf("cancelled caller got %v, want ErrLookupFailed", r1.err)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("coalesced calls = %d, want 1", calls.Load())
+	}
+
+	close(release)
+	r2 := <-ch2
+	if r2.err != nil || r2.c.ID != "chat-1" || r2.c.ParticipantID != "peer" {
+		t.Fatalf("surviving caller failed after peer cancel: %+v", r2)
+	}
+	if hadErr, _ := callCtxErr.Load().(bool); hadErr {
+		t.Fatal("shared call context was cancelled when first caller cancelled")
+	}
+
+	// 2. Results are not cached across completed flights: a subsequent call runs again.
+	g.getConversation = func(_ context.Context, id string) (*gmproto.Conversation, error) {
+		calls.Add(1)
+		return individual(id), nil
+	}
+	c3, err := g.LookupConversationShared(context.Background(), "chat-1")
+	if err != nil || c3.ID != "chat-1" || calls.Load() != 2 {
+		t.Fatalf("post-flight call: c=%+v err=%v calls=%d", c3, err, calls.Load())
+	}
+
+	// 3. Plain LookupConversation does not coalesce with LookupConversationShared
+	// (send paths stay independent), and different IDs do not coalesce.
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		_, _ = Lookup(context.Background(), g, "chat-1")
+	}()
+	go func() {
+		defer wg.Done()
+		_, _ = LookupShared(context.Background(), g, "chat-2")
+	}()
+	wg.Wait()
+	if calls.Load() != 4 {
+		t.Fatalf("expected 4 total calls (2 shared + 1 plain + 1 different ID), got %d", calls.Load())
 	}
 }

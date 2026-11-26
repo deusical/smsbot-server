@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"time"
@@ -30,14 +31,56 @@ func fetchConversation(ctx context.Context, id string, pause time.Duration, get 
 // lookupFailure decides what a failed conversation lookup says about the
 // connection. One conversation the phone did not answer, while the session is
 // otherwise up, must not take the whole phone offline: that stopped every send
-// until reconnection. A login problem or a phone that did not answer in time
-// still do; brief stream rollovers are left to Google.Run's disconnect grace.
+// until reconnection. Credential errors still mark offline immediately; a
+// lookup timeout triggers a coalesced readiness probe off the caller's path and
+// only marks offline if that probe fails.
 func lookupFailure(err error) (reason string, hard, markOffline bool) {
-	switch {
-	case credentialError(err):
+	if credentialError(err) {
 		return "login_required", true, true
-	case errors.Is(err, context.DeadlineExceeded):
-		return "reconnecting", false, true
 	}
 	return "", false, false
+}
+
+func (g *Google) bugleDefaultProbe() func(context.Context) (*gmproto.IsBugleDefaultResponse, error) {
+	if g.probeBugleDefault != nil {
+		return g.probeBugleDefault
+	}
+	if g.client == nil {
+		return func(context.Context) (*gmproto.IsBugleDefaultResponse, error) {
+			return nil, errors.New("client_uninitialized")
+		}
+	}
+	return g.client.IsBugleDefault
+}
+
+// probeReadinessOnTimeout runs at most one off-path readiness probe when a
+// conversation lookup times out, marking the phone offline only if it fails.
+func (g *Google) probeReadinessOnTimeout() {
+	if !g.SessionUp() || !g.probeInflight.CompareAndSwap(false, true) {
+		return
+	}
+	g.recoveryWG.Add(1)
+	go func() {
+		defer g.recoveryWG.Done()
+		defer g.probeInflight.Store(false)
+		if !g.SessionUp() {
+			return
+		}
+		ctx, cancel := context.WithTimeout(WithPhonePurpose(context.Background(), "readiness"), cmp.Or(g.probeTimeout, 10*time.Second))
+		defer cancel()
+		g.countPhone(ctx, phoneProbe)
+		resp, err := g.bugleDefaultProbe()(ctx)
+		probeErr := err
+		if probeErr == nil && !resp.GetSuccess() {
+			probeErr = errors.New("phone_unreachable")
+		}
+		g.diagnose("phone_readiness", probeErr)
+		if probeErr != nil && g.SessionUp() {
+			if credentialError(probeErr) {
+				g.noteFailure("login_required", true)
+			} else {
+				g.noteFailure("reconnecting", false)
+			}
+		}
+	}()
 }

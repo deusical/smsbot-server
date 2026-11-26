@@ -3,6 +3,8 @@ package transport
 import (
 	"context"
 	"errors"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -64,7 +66,7 @@ func TestLookupFailureOnlyDropsThePhoneWhenTheConnectionIsAtFault(t *testing.T) 
 		offline bool
 	}{
 		{"one unanswered lookup leaves stream grace in charge", errors.New("transient"), "", false, false},
-		{"phone did not answer in time", context.DeadlineExceeded, "reconnecting", false, true},
+		{"single lookup timeout triggers probe instead of dropping phone directly", context.DeadlineExceeded, "", false, false},
 		{"login problem", events.ErrInvalidCredentials, "login_required", true, true},
 	}
 	for _, c := range cases {
@@ -165,7 +167,7 @@ func TestLookupConversationDuringStreamRolloverAndSessionFailures(t *testing.T) 
 		}
 	})
 
-	t.Run("deadline_exceeded_notes_reconnecting_failure", func(t *testing.T) {
+	t.Run("deadline_exceeded_with_probe_ok_keeps_session_up", func(t *testing.T) {
 		t.Parallel()
 		g := NewGoogle(nil, "")
 		g.ready.Store(true)
@@ -174,13 +176,101 @@ func TestLookupConversationDuringStreamRolloverAndSessionFailures(t *testing.T) 
 		g.getConversation = func(context.Context, string) (*gmproto.Conversation, error) {
 			return nil, context.DeadlineExceeded
 		}
-		_, err := g.LookupConversation(ctx, "c1")
-		if !errors.Is(err, ErrUnavailable) {
-			t.Fatalf("timeout returned %v, want ErrUnavailable", err)
+		var probes atomic.Int32
+		g.probeBugleDefault = func(context.Context) (*gmproto.IsBugleDefaultResponse, error) {
+			probes.Add(1)
+			return &gmproto.IsBugleDefaultResponse{Success: true}, nil
 		}
-		if !g.healthFailure.Load() || g.ready.Load() || g.SessionUp() || g.ConnectionStatus().State != "reconnecting" {
-			t.Fatalf("timeout did not mark reconnecting: healthFailure=%v ready=%v status=%+v",
-				g.healthFailure.Load(), g.ready.Load(), g.ConnectionStatus())
+		_, err := g.LookupConversation(ctx, "c1")
+		if !errors.Is(err, ErrLookupFailed) || errors.Is(err, ErrUnavailable) {
+			t.Fatalf("timeout with healthy phone returned %v, want ErrLookupFailed", err)
+		}
+		g.recoveryWG.Wait()
+		if probes.Load() != 1 || g.PhoneRequests()[phoneProbe].Total != 1 {
+			t.Fatalf("probe count = %d (metric=%d), want 1", probes.Load(), g.PhoneRequests()[phoneProbe].Total)
+		}
+		if g.healthFailure.Load() || !g.ready.Load() || !g.SessionUp() {
+			t.Fatalf("healthy probe still marked phone offline: healthFailure=%v ready=%v sessionUp=%v",
+				g.healthFailure.Load(), g.ready.Load(), g.SessionUp())
+		}
+	})
+
+	t.Run("deadline_exceeded_with_probe_failure_marks_offline", func(t *testing.T) {
+		t.Parallel()
+		for _, tc := range []struct {
+			name string
+			resp *gmproto.IsBugleDefaultResponse
+			err  error
+		}{
+			{"probe_error", nil, errors.New("probe timeout")},
+			{"probe_not_success", &gmproto.IsBugleDefaultResponse{Success: false}, nil},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+				g := NewGoogle(nil, "")
+				g.ready.Store(true)
+				g.lookupPause = time.Millisecond
+				g.connected = func() bool { return true }
+				g.getConversation = func(context.Context, string) (*gmproto.Conversation, error) {
+					return nil, context.DeadlineExceeded
+				}
+				g.probeBugleDefault = func(context.Context) (*gmproto.IsBugleDefaultResponse, error) {
+					return tc.resp, tc.err
+				}
+				_, err := g.LookupConversation(ctx, "c1")
+				if !errors.Is(err, ErrLookupFailed) {
+					t.Fatalf("timeout returned %v, want ErrLookupFailed", err)
+				}
+				g.recoveryWG.Wait()
+				if !g.healthFailure.Load() || g.ready.Load() || g.SessionUp() || g.ConnectionStatus().State != "reconnecting" {
+					t.Fatalf("failed probe did not mark reconnecting: healthFailure=%v ready=%v status=%+v",
+						g.healthFailure.Load(), g.ready.Load(), g.ConnectionStatus())
+				}
+			})
+		}
+	})
+
+	t.Run("concurrent_timeouts_coalesce_to_one_probe", func(t *testing.T) {
+		t.Parallel()
+		g := NewGoogle(nil, "")
+		g.ready.Store(true)
+		g.lookupPause = time.Millisecond
+		g.connected = func() bool { return true }
+		g.getConversation = func(context.Context, string) (*gmproto.Conversation, error) {
+			return nil, context.DeadlineExceeded
+		}
+		var probes atomic.Int32
+		probeStarted := make(chan struct{})
+		releaseProbe := make(chan struct{})
+		g.probeBugleDefault = func(context.Context) (*gmproto.IsBugleDefaultResponse, error) {
+			if probes.Add(1) == 1 {
+				close(probeStarted)
+			}
+			<-releaseProbe
+			return &gmproto.IsBugleDefaultResponse{Success: true}, nil
+		}
+		const n = 5
+		var wg sync.WaitGroup
+		wg.Add(n)
+		for range n {
+			go func() {
+				defer wg.Done()
+				_, err := g.LookupConversation(ctx, "c1")
+				if !errors.Is(err, ErrLookupFailed) {
+					t.Errorf("concurrent timeout returned %v, want ErrLookupFailed", err)
+				}
+			}()
+		}
+		wg.Wait()
+		<-probeStarted
+		if probes.Load() != 1 || g.PhoneRequests()[phoneProbe].Total != 1 {
+			t.Fatalf("concurrent timeouts started %d probes (metric=%d), want 1", probes.Load(), g.PhoneRequests()[phoneProbe].Total)
+		}
+		close(releaseProbe)
+		g.recoveryWG.Wait()
+		if probes.Load() != 1 || g.healthFailure.Load() || !g.SessionUp() {
+			t.Fatalf("unexpected state after coalesced probe: probes=%d healthFailure=%v sessionUp=%v",
+				probes.Load(), g.healthFailure.Load(), g.SessionUp())
 		}
 	})
 
@@ -269,6 +359,63 @@ func TestFetchHistoryDistinguishesIneligibleConversationFromLookupFailure(t *tes
 		return individual("c1"), nil
 	}, noMessages); err != nil {
 		t.Fatalf("eligible conversation failed: %v", err)
+	}
+}
+
+func TestFetchHistorySkipsPreLookupWhenCachedAndVerifiesPostFetch(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	g := NewGoogle(nil, "")
+	g.ready.Store(true)
+	g.connected = func() bool { return true }
+	g.cacheDetail(individual("c1"))
+
+	getCalls := 0
+	fetchCalls := 0
+	_, err := g.fetchHistory(ctx, "c1", "peer", "", func(context.Context, string) (*gmproto.Conversation, error) {
+		getCalls++
+		return individual("c1"), nil
+	}, func(context.Context, string, int64, *gmproto.Cursor) (*gmproto.ListMessagesResponse, error) {
+		fetchCalls++
+		return &gmproto.ListMessagesResponse{}, nil
+	})
+	if err != nil {
+		t.Fatalf("cached fetchHistory failed: %v", err)
+	}
+	if getCalls != 1 || fetchCalls != 1 {
+		t.Fatalf("got getCalls=%d fetchCalls=%d, want 1 and 1 (post-fetch guard only)", getCalls, fetchCalls)
+	}
+
+	// Post-fetch identity mismatch rejects the page and marks cache stale so the
+	// next call runs the pre-check again.
+	getCalls, fetchCalls = 0, 0
+	wrongPeer := individual("c1")
+	wrongPeer.Participants[0].ID.ParticipantID = "other-peer"
+	_, err = g.fetchHistory(ctx, "c1", "peer", "", func(context.Context, string) (*gmproto.Conversation, error) {
+		getCalls++
+		return wrongPeer, nil
+	}, func(context.Context, string, int64, *gmproto.Cursor) (*gmproto.ListMessagesResponse, error) {
+		fetchCalls++
+		return &gmproto.ListMessagesResponse{}, nil
+	})
+	if err == nil || err.Error() != "conversation_identity_changed" {
+		t.Fatalf("identity mismatch returned %v, want conversation_identity_changed", err)
+	}
+	if _, ok := g.CachedConversation("c1"); ok {
+		t.Fatal("post-fetch identity mismatch left stale conversation cached")
+	}
+
+	// Next call runs the pre-check and returns ErrIneligibleConversation without fetching messages.
+	getCalls, fetchCalls = 0, 0
+	_, err = g.fetchHistory(ctx, "c1", "peer", "", func(context.Context, string) (*gmproto.Conversation, error) {
+		getCalls++
+		return wrongPeer, nil
+	}, func(context.Context, string, int64, *gmproto.Cursor) (*gmproto.ListMessagesResponse, error) {
+		fetchCalls++
+		return &gmproto.ListMessagesResponse{}, nil
+	})
+	if !errors.Is(err, ErrIneligibleConversation) || getCalls != 1 || fetchCalls != 0 {
+		t.Fatalf("post-stale fetchHistory returned %v (getCalls=%d fetchCalls=%d), want ErrIneligibleConversation without fetch", err, getCalls, fetchCalls)
 	}
 }
 

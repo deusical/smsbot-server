@@ -25,7 +25,7 @@ func (svc *Service) InboxAttachmentContent(ctx context.Context, conv, message, a
 	if err != nil || !s.Enabled {
 		return media.Info{}, nil, errors.New("inbox_access_disabled")
 	}
-	c, err := svc.lookup(ctx, conv)
+	c, err := svc.cachedOrLookup(ctx, conv)
 	if err != nil || !s.Allows(c) {
 		return media.Info{}, nil, errors.New("inbox_access_disabled")
 	}

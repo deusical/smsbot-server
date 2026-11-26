@@ -1,6 +1,8 @@
 package transport
 
 import (
+	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -102,4 +104,142 @@ func TestBackwardClockDoesNotLockOutForcedRefresh(t *testing.T) {
 	if !g.forceDiscoveryRefresh(now) || !g.forceDiscoveryRefresh(now.Add(-time.Hour)) {
 		t.Fatal("a clock stepped backwards locked out forced refreshes")
 	}
+}
+
+func TestMarkReadUsesLatestMessageIDAndFallsBackWhenEmpty(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	through := time.Unix(1_700_000_000, 0).UTC()
+
+	t.Run("latest_message_id_skips_fetch_and_recheck", func(t *testing.T) {
+		t.Parallel()
+		g := NewGoogle(nil, "")
+		g.ready.Store(true)
+		g.connected = func() bool { return true }
+		c := individual("c1")
+		c.Unread = true
+		c.LatestMessageID = "msg-latest"
+		c.LastMessageTimestamp = through.UnixMicro()
+
+		var gets, fetches, marks int
+		var markedID string
+		err := g.markReadWith(ctx, "c1", "peer", through,
+			func(context.Context, string) (*gmproto.Conversation, error) {
+				gets++
+				return c, nil
+			},
+			func(context.Context, string, int64, *gmproto.Cursor) (*gmproto.ListMessagesResponse, error) {
+				fetches++
+				return &gmproto.ListMessagesResponse{}, nil
+			},
+			func(_ context.Context, _, messageID string) error {
+				marks++
+				markedID = messageID
+				return nil
+			},
+		)
+		if err != nil {
+			t.Fatalf("markReadWith failed: %v", err)
+		}
+		if gets != 1 || fetches != 0 || marks != 1 || markedID != "msg-latest" {
+			t.Fatalf("gets=%d fetches=%d marks=%d markedID=%q", gets, fetches, marks, markedID)
+		}
+	})
+
+	t.Run("latest_message_id_rejects_newer_message", func(t *testing.T) {
+		t.Parallel()
+		g := NewGoogle(nil, "")
+		g.ready.Store(true)
+		g.connected = func() bool { return true }
+		c := individual("c1")
+		c.Unread = true
+		c.LatestMessageID = "msg-newer"
+		c.LastMessageTimestamp = through.Add(5 * time.Second).UnixMicro()
+
+		var fetches, marks int
+		err := g.markReadWith(ctx, "c1", "peer", through,
+			func(context.Context, string) (*gmproto.Conversation, error) { return c, nil },
+			func(context.Context, string, int64, *gmproto.Cursor) (*gmproto.ListMessagesResponse, error) {
+				fetches++
+				return &gmproto.ListMessagesResponse{}, nil
+			},
+			func(context.Context, string, string) error {
+				marks++
+				return nil
+			},
+		)
+		if !errors.Is(err, ErrNewerMessage) || fetches != 0 || marks != 0 {
+			t.Fatalf("err=%v fetches=%d marks=%d, want ErrNewerMessage without fetch or mark", err, fetches, marks)
+		}
+	})
+
+	t.Run("empty_latest_message_id_falls_back_to_fetch_and_recheck", func(t *testing.T) {
+		t.Parallel()
+		g := NewGoogle(nil, "")
+		g.ready.Store(true)
+		g.connected = func() bool { return true }
+		c := individual("c1")
+		c.Unread = true
+
+		var gets, fetches, marks int
+		var markedID string
+		err := g.markReadWith(ctx, "c1", "peer", through,
+			func(context.Context, string) (*gmproto.Conversation, error) {
+				gets++
+				return c, nil
+			},
+			func(context.Context, string, int64, *gmproto.Cursor) (*gmproto.ListMessagesResponse, error) {
+				fetches++
+				return &gmproto.ListMessagesResponse{Messages: []*gmproto.Message{
+					{ConversationID: "c1", MessageID: "msg-fetched", Timestamp: through.UnixMicro()},
+				}}, nil
+			},
+			func(_ context.Context, _, messageID string) error {
+				marks++
+				markedID = messageID
+				return nil
+			},
+		)
+		if err != nil {
+			t.Fatalf("fallback markReadWith failed: %v", err)
+		}
+		if gets != 2 || fetches != 1 || marks != 1 || markedID != "msg-fetched" {
+			t.Fatalf("gets=%d fetches=%d marks=%d markedID=%q", gets, fetches, marks, markedID)
+		}
+	})
+
+	t.Run("fallback_identity_change_refuses_mark_read", func(t *testing.T) {
+		t.Parallel()
+		g := NewGoogle(nil, "")
+		g.ready.Store(true)
+		g.connected = func() bool { return true }
+		first := individual("c1")
+		first.Unread = true
+		second := individual("c1")
+		second.Unread = true
+		second.Participants[0].ID.ParticipantID = "other-peer"
+
+		gets, marks := 0, 0
+		err := g.markReadWith(ctx, "c1", "peer", through,
+			func(context.Context, string) (*gmproto.Conversation, error) {
+				gets++
+				if gets == 1 {
+					return first, nil
+				}
+				return second, nil
+			},
+			func(context.Context, string, int64, *gmproto.Cursor) (*gmproto.ListMessagesResponse, error) {
+				return &gmproto.ListMessagesResponse{Messages: []*gmproto.Message{
+					{ConversationID: "c1", MessageID: "msg-fetched", Timestamp: through.UnixMicro()},
+				}}, nil
+			},
+			func(context.Context, string, string) error {
+				marks++
+				return nil
+			},
+		)
+		if err == nil || err.Error() != "conversation_identity_changed" || marks != 0 {
+			t.Fatalf("err=%v marks=%d, want conversation_identity_changed without marking read", err, marks)
+		}
+	})
 }
