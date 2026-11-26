@@ -138,14 +138,6 @@ func (g *Google) DownloadFile(ctx context.Context, file media.File) ([]byte, err
 	if len(file.Data) > 0 {
 		return file.Data, nil
 	}
-	release, err := g.acquireDownloadSlot(ctx)
-	if err != nil {
-		return nil, errors.New("attachment_unavailable")
-	}
-	defer release()
-	if !g.Ready() {
-		return nil, errors.New("attachment_unavailable")
-	}
 	if file.RemoteID == "" && file.MessageID != "" && file.ActionID != "" {
 		var err error
 		file, err = g.fullSizeFile(ctx, file)
@@ -157,6 +149,14 @@ func (g *Google) DownloadFile(ctx context.Context, file media.File) ([]byte, err
 		return nil, errors.New("attachment_size_limit")
 	}
 	if file.RemoteID == "" || len(file.Key) != 32 {
+		return nil, errors.New("attachment_unavailable")
+	}
+	release, err := g.acquireDownloadSlot(ctx)
+	if err != nil {
+		return nil, errors.New("attachment_unavailable")
+	}
+	defer release()
+	if !g.Ready() {
 		return nil, errors.New("attachment_unavailable")
 	}
 	r, err := g.mediaDownloader()(file.RemoteID, file.Key)
@@ -207,13 +207,20 @@ type StreamingFileSource interface {
 }
 type cancelReadCloser struct {
 	io.ReadCloser
-	once sync.Once
-	done chan struct{}
+	once    sync.Once
+	done    chan struct{}
+	release func()
 }
 
 func (r *cancelReadCloser) Close() error {
 	var err error
-	r.once.Do(func() { close(r.done); err = r.ReadCloser.Close() })
+	r.once.Do(func() {
+		close(r.done)
+		if r.release != nil {
+			r.release()
+		}
+		err = r.ReadCloser.Close()
+	})
 	return err
 }
 func (g *Google) OpenFile(ctx context.Context, file media.File) (io.ReadCloser, error) {
@@ -233,13 +240,22 @@ func (g *Google) OpenFile(ctx context.Context, file media.File) (io.ReadCloser, 
 	if file.RemoteID == "" || len(file.Key) != 32 {
 		return nil, errors.New("attachment_unavailable")
 	}
-	// libgm's setup request is bounded by its HTTP client's timeout. Once the
-	// response stream exists cancellation closes it, including blocked reads.
-	r, err := g.client.DownloadMedia(file.RemoteID, file.Key)
+	release, err := g.acquireDownloadSlot(ctx)
 	if err != nil {
 		return nil, errors.New("attachment_unavailable")
 	}
-	wrapped := &cancelReadCloser{ReadCloser: r, done: make(chan struct{})}
+	if !g.Ready() {
+		release()
+		return nil, errors.New("attachment_unavailable")
+	}
+	// libgm's setup request is bounded by its HTTP client's timeout. Once the
+	// response stream exists cancellation closes it, including blocked reads.
+	r, err := g.mediaDownloader()(file.RemoteID, file.Key)
+	if err != nil {
+		release()
+		return nil, errors.New("attachment_unavailable")
+	}
+	wrapped := &cancelReadCloser{ReadCloser: r, done: make(chan struct{}), release: release}
 	go func() {
 		select {
 		case <-ctx.Done():
