@@ -308,16 +308,6 @@ func (e *Engine) checkPeerConversation(c transport.Conversation, peer, roster st
 	return c.OutgoingID, true
 }
 
-// validGroupMember reports whether member is in the group conv, which can be
-// sent to and has exactly the people in roster. The owner is not in the list.
-func (e *Engine) validGroupMember(ctx context.Context, conv, member, roster string, mode lookupMode) (string, bool, error) {
-	c, err := e.conversationForCheck(ctx, conv, mode)
-	if err != nil {
-		return "", false, err
-	}
-	outgoing, ok := e.checkPeerConversation(c, member, roster, false)
-	return outgoing, ok, nil
-}
 func (e *Engine) Cancel(id string) error {
 	e.mu.Lock()
 	if cancel := e.pending[id]; cancel != nil {
@@ -393,15 +383,6 @@ func (e *Engine) validConversation(ctx context.Context, conv, peer, roster strin
 	}
 	_, ok := e.checkPeerConversation(c, peer, roster, allowGroup)
 	return ok, nil
-}
-
-func (e *Engine) matchConversation(ctx context.Context, conv, peer, roster string, allowGroup bool, mode lookupMode) (string, bool, error) {
-	c, err := e.conversationForCheck(ctx, conv, mode)
-	if err != nil {
-		return "", false, err
-	}
-	outgoing, ok := e.checkPeerConversation(c, peer, roster, allowGroup)
-	return outgoing, ok, nil
 }
 
 // Accept turns a fresh command into a queued job. Each step can decline the
