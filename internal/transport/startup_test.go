@@ -34,10 +34,14 @@ func TestStartupWithUnreachablePhoneRecoversInBackground(t *testing.T) {
 	}
 }
 
-func TestStartupWithRejectedCredentialsStops(t *testing.T) {
+func TestStartupWithRejectedCredentialsStartsUnready(t *testing.T) {
 	t.Parallel()
 	g := NewGoogle(nil, "")
-	if g.startUnready(events.ErrInvalidCredentials) == nil {
-		t.Fatal("rejected credentials started the service")
+	if err := g.startUnready(events.ErrInvalidCredentials); err != nil {
+		t.Fatal("startup failed on rejected credentials:", err)
+	}
+	status := g.ConnectionStatus()
+	if g.Ready() || status.State != "login_required" || status.RetryAt != "" {
+		t.Fatalf("want unready with login_required and no retry, got %+v", status)
 	}
 }

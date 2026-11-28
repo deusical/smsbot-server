@@ -215,11 +215,11 @@ func (g *Google) Connect(ctx context.Context) error {
 	defer cancel()
 	if e = g.client.FetchConfig(deadline); e != nil {
 		g.diagnose("config_fetch", e)
-		return errors.New("session needs reauthentication or network recovery")
+		return g.startUnready(e)
 	}
 	if e = g.client.Connect(ctx); e != nil {
 		g.diagnose("paired_connect", e)
-		return errors.New("paired connection failed")
+		return g.startUnready(e)
 	}
 	g.countPhone(ctx, phoneProbe)
 	probe, e := g.client.IsBugleDefault(deadline)
@@ -235,16 +235,18 @@ func (g *Google) Connect(ctx context.Context) error {
 	return nil
 }
 
-// startUnready handles a failed startup readiness probe. Rejected credentials
-// stop startup. Otherwise the phone is only unreachable for now: start anyway,
-// unready, and let the recovery worker verify it with backoff, as after a
-// disconnect. Exiting instead would restart the service and probe every minute.
+// startUnready handles a failed startup readiness probe or connection error.
+// The service starts unready and reports its status to the dashboard so the
+// owner can view diagnostics, update cookies, or re-pair. Rejected credentials
+// enter the login_required state without repeated background retries.
+// An unreachable phone will be verified by the recovery worker with backoff.
 func (g *Google) startUnready(err error) error {
 	if credentialError(err) {
 		if g.client != nil {
 			g.client.Disconnect()
 		}
-		return errors.New("phone readiness check failed")
+		g.noteFailure("login_required", true)
+		return nil
 	}
 	g.noteFailure("phone_unreachable", false)
 	return nil
