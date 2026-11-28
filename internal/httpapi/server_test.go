@@ -2,13 +2,17 @@ package httpapi
 
 import (
 	"bytes"
+	"compress/gzip"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/deusical/smsbot-server/internal/app"
+	"github.com/deusical/smsbot-server/internal/bot"
 	"github.com/deusical/smsbot-server/internal/store"
 	"github.com/deusical/smsbot-server/internal/transport"
 	"github.com/deusical/smsbot-server/internal/vault"
@@ -20,7 +24,7 @@ func apiSetup(t *testing.T) *Server {
 	if e != nil {
 		t.Fatal(e)
 	}
-	t.Cleanup(func() { s.DB.Close() })
+	t.Cleanup(func() { s.Close() })
 	s.AddCredential("fixture-owner", "test", "owner", 0)
 	s.AddCredential("fixture-client", "test", "session", 0)
 	service := app.New(s, transport.NewFixture(), filepath.Join(filepath.Dir(s.Path), "archive"))
@@ -244,4 +248,100 @@ func useTransport(s *Server, t transport.Transport) {
 	s.Transport = t
 	s.Engine.Transport = t
 	s.Collection.Transport = t
+}
+
+func TestGzipCompressionAssetsAndJSON(t *testing.T) {
+	t.Parallel()
+	s := apiSetup(t)
+
+	// 1. Static asset with Accept-Encoding: gzip
+	r1 := httptest.NewRequest("GET", s.Origin+"/assets/index-C5qRCPra.js", nil)
+	r1.Header.Set("Accept-Encoding", "gzip, deflate, br")
+	w1 := httptest.NewRecorder()
+	s.ServeHTTP(w1, r1)
+	if w1.Code != 200 {
+		t.Fatalf("asset request returned %d", w1.Code)
+	}
+	if w1.Header().Get("Content-Encoding") != "gzip" {
+		t.Fatalf("expected Content-Encoding: gzip, got %q", w1.Header().Get("Content-Encoding"))
+	}
+	if !strings.Contains(w1.Header().Get("Vary"), "Accept-Encoding") {
+		t.Fatalf("expected Vary: Accept-Encoding, got %q", w1.Header().Get("Vary"))
+	}
+	gzr, err := gzip.NewReader(w1.Body)
+	if err != nil {
+		t.Fatalf("gzip.NewReader failed: %v", err)
+	}
+	decompressed, err := io.ReadAll(gzr)
+	if err != nil {
+		t.Fatalf("reading decompressed body: %v", err)
+	}
+	if len(decompressed) < 100000 {
+		t.Fatalf("decompressed size too small: %d", len(decompressed))
+	}
+
+	// 2. Static asset without Accept-Encoding: gzip
+	r2 := httptest.NewRequest("GET", s.Origin+"/assets/index-C5qRCPra.js", nil)
+	w2 := httptest.NewRecorder()
+	s.ServeHTTP(w2, r2)
+	if w2.Code != 200 {
+		t.Fatalf("asset request returned %d", w2.Code)
+	}
+	if w2.Header().Get("Content-Encoding") != "" {
+		t.Fatalf("expected no Content-Encoding without Accept-Encoding, got %q", w2.Header().Get("Content-Encoding"))
+	}
+
+	// 3. Small JSON response (< 1KB) must NOT be gzipped
+	r3 := httptest.NewRequest("GET", s.Origin+"/healthz", nil)
+	r3.Header.Set("Accept-Encoding", "gzip")
+	w3 := httptest.NewRecorder()
+	s.ServeHTTP(w3, r3)
+	if w3.Code != 200 {
+		t.Fatalf("healthz returned %d", w3.Code)
+	}
+	if w3.Header().Get("Content-Encoding") != "" {
+		t.Fatalf("small JSON should not be gzipped, got %q", w3.Header().Get("Content-Encoding"))
+	}
+
+	// 4. Large JSON response (>= 1KB) with Accept-Encoding: gzip
+	cfg, _ := s.Engine.Configuration()
+	cfg.Commands = append(cfg.Commands,
+		bot.Command{Name: "c1", Type: "fixed", Instructions: strings.Repeat("instruction text ", 50), Enabled: true},
+		bot.Command{Name: "c2", Type: "fixed", Instructions: strings.Repeat("instruction text ", 50), Enabled: true},
+	)
+	_ = s.Engine.SetConfiguration(cfg)
+
+	r4 := httptest.NewRequest("GET", s.Origin+"/api/v1/config", nil)
+	r4.Header.Set("Accept-Encoding", "gzip")
+	r4.AddCookie(&http.Cookie{Name: "smsbot_session", Value: "fixture-client"})
+	w4 := httptest.NewRecorder()
+	s.ServeHTTP(w4, r4)
+	if w4.Code != 200 {
+		t.Fatalf("config returned %d: %s", w4.Code, w4.Body.String())
+	}
+	if w4.Header().Get("Content-Encoding") != "gzip" {
+		t.Fatalf("expected gzipped JSON for config, got %q (len=%d)", w4.Header().Get("Content-Encoding"), w4.Body.Len())
+	}
+	gzr4, err := gzip.NewReader(w4.Body)
+	if err != nil {
+		t.Fatalf("gzip.NewReader config failed: %v", err)
+	}
+	cfgBytes, err := io.ReadAll(gzr4)
+	if err != nil {
+		t.Fatalf("decompressed config read error: %v", err)
+	}
+	var cfgObj map[string]any
+	if err := json.Unmarshal(cfgBytes, &cfgObj); err != nil {
+		t.Fatalf("config JSON invalid: %v", err)
+	}
+
+	// 5. Range request on asset must not be gzipped
+	r5 := httptest.NewRequest("GET", s.Origin+"/assets/index-C5qRCPra.js", nil)
+	r5.Header.Set("Accept-Encoding", "gzip")
+	r5.Header.Set("Range", "bytes=0-100")
+	w5 := httptest.NewRecorder()
+	s.ServeHTTP(w5, r5)
+	if w5.Header().Get("Content-Encoding") != "" {
+		t.Fatalf("range request must not be gzipped, got %q", w5.Header().Get("Content-Encoding"))
+	}
 }

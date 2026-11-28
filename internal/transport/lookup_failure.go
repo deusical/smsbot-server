@@ -10,14 +10,14 @@ import (
 )
 
 // lookupRetryPause is how long a conversation lookup waits before its one retry.
-const lookupRetryPause = 400 * time.Millisecond
+const lookupRetryPause = 150 * time.Millisecond
 
 // fetchConversation asks the phone for one conversation and asks once more if
 // the first try fails for a reason that is not a cancelled request or a
 // credential problem. A lookup only reads, so repeating it is always safe.
 func fetchConversation(ctx context.Context, id string, pause time.Duration, get func(context.Context, string) (*gmproto.Conversation, error)) (*gmproto.Conversation, error) {
 	c, err := get(ctx, id)
-	if err == nil || errors.Is(err, context.Canceled) || credentialError(err) || ctx.Err() != nil {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || credentialError(err) || ctx.Err() != nil {
 		return c, err
 	}
 	select {

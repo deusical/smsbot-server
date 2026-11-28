@@ -198,21 +198,28 @@ func (e *Engine) QueueReactionIn(ctx context.Context, conv, roster, target, emoj
 	}
 	intent := &store.MutationIntent{Target: target, WireTarget: v.UpstreamID, Protocol: "RCS", Emoji: emoji, Operation: operation, Version: version}
 	_, err = e.Store.Enqueue(id, conv, "reaction", store.Plan{Participant: c.ParticipantID, Roster: c.Roster, OutgoingID: c.OutgoingID, Manual: true, InboxOwnerOnly: true, Mutation: intent})
+	if err == nil {
+		e.nudgeDispatch()
+	}
 	return id, err
 }
 
 // Dispatch owns both engine locks. A reaction is not a text send and must never
 // enter the normal message/receipt reconciliation path.
-func (e *Engine) dispatchReaction(ctx context.Context, j store.Job, p store.Plan) error {
-	defer e.mu.Unlock()
+func (e *Engine) dispatchReaction(ctx context.Context, j store.Job, p store.Plan, preloaded ...transport.Conversation) error {
 	m := p.Mutation
 	v, err := e.Store.Interaction(j.ConversationID, m.Target)
 	if err != nil {
 		return err
 	}
-	c, err := e.lookupConversation(ctx, j.ConversationID)
-	if err != nil {
-		return err
+	var c transport.Conversation
+	if len(preloaded) > 0 {
+		c = preloaded[0]
+	} else {
+		c, err = e.lookupConversation(ctx, j.ConversationID)
+		if err != nil {
+			return err
+		}
 	}
 	if m.Protocol != "RCS" || v == nil || v.Protocol != "RCS" || v.OwnerID == "" || v.UpstreamID != m.WireTarget || store.InteractionVersion(v) != m.Version || !isRCS(c.Protocol) || c.Roster != p.Roster {
 		return e.Store.Complete(j.ID, "failed", "reaction_conflict")

@@ -90,3 +90,67 @@ func TestRequestLimitsCountBotRepliesOnly(t *testing.T) {
 		t.Fatalf("a bot reply did not count: %v %v", ok, err)
 	}
 }
+
+func TestSessionValidityCacheAndInvalidation(t *testing.T) {
+	t.Parallel()
+	v, _ := vault.New(make([]byte, 32))
+	s, err := Open(filepath.Join(t.TempDir(), "test.db"), v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	if err := s.AddCredential("token-1", "test", "session", 0); err != nil {
+		t.Fatal(err)
+	}
+
+	exp, ok := s.SessionExpiry("token-1")
+	if !ok || exp != 0 {
+		t.Fatalf("expected valid session (0, true), got (%d, %v)", exp, ok)
+	}
+
+	// Verify cached
+	s.sessionMu.RLock()
+	_, inCache := s.sessions[Hash("token-1")]
+	s.sessionMu.RUnlock()
+	if !inCache {
+		t.Fatal("session not cached")
+	}
+
+	// Delete from DB directly behind cache
+	if _, err := s.DB.Exec("DELETE FROM credentials WHERE hash=?", Hash("token-1")); err != nil {
+		t.Fatal(err)
+	}
+
+	// Next call within TTL hits cache and still returns true
+	exp2, ok2 := s.SessionExpiry("token-1")
+	if !ok2 || exp2 != 0 {
+		t.Fatalf("expected cache hit (0, true), got (%d, %v)", exp2, ok2)
+	}
+
+	// RevokeSession invalidates cache entry
+	if err := s.RevokeSession("token-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	exp3, ok3 := s.SessionExpiry("token-1")
+	if ok3 {
+		t.Fatalf("expected invalid session after RevokeSession, got (%d, %v)", exp3, ok3)
+	}
+
+	// RevokeSessions clears all cached sessions
+	_ = s.AddCredential("token-2", "test", "session", 0)
+	_ = s.AddCredential("token-3", "test", "session", 0)
+	_, _ = s.SessionExpiry("token-2")
+	_, _ = s.SessionExpiry("token-3")
+
+	if err := s.RevokeSessions(); err != nil {
+		t.Fatal(err)
+	}
+	s.sessionMu.RLock()
+	cacheLen := len(s.sessions)
+	s.sessionMu.RUnlock()
+	if cacheLen != 0 {
+		t.Fatalf("expected empty session cache after RevokeSessions, got %d entries", cacheLen)
+	}
+}

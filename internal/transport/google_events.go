@@ -7,6 +7,7 @@ import (
 	"cmp"
 	"context"
 	"errors"
+	"sync"
 	"time"
 
 	"go.mau.fi/mautrix-gmessages/pkg/libgm"
@@ -23,9 +24,9 @@ const disconnectGraceTicks = 5
 // libgm invokes this synchronously on its receive loop. Never wait for the
 // consumer, touch storage, or make a phone request here.
 func (g *Google) enqueue(event any) {
-	_, reason, hard, _, failed := connectionFailure(event)
+	_, reason, hard, soft, _, failed := connectionFailure(event)
 	if failed {
-		g.noteFailure(reason, hard)
+		g.noteFailureType(reason, hard, soft)
 	}
 	// Typing and activity hints bypass the bounded queue: they are ephemeral and
 	// must never contribute to overflow recovery or pause automation.
@@ -143,6 +144,22 @@ func normalize(w *libgm.WrappedMessage, started time.Time) (Incoming, bool) {
 func (g *Google) Run(ctx context.Context, incoming func(Incoming), pause func(), receipt func(string, string, string, string), interrupted ...func() error) {
 	// Session replacement must not race an old recovery probe saving its session.
 	defer g.recoveryWG.Wait()
+	workerQueue := make(chan func(), 256)
+	var workerWG sync.WaitGroup
+	workerWG.Add(1)
+	go func() {
+		defer workerWG.Done()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case task := <-workerQueue:
+				task()
+			}
+		}
+	}()
+	defer workerWG.Wait()
+
 	timer := time.NewTicker(cmp.Or(g.saveInterval, 30*time.Second))
 	defer timer.Stop()
 	recoveryTimer := time.NewTicker(cmp.Or(g.recoveryInterval, time.Second))
@@ -223,30 +240,52 @@ func (g *Google) Run(ctx context.Context, incoming func(Incoming), pause func(),
 		case <-g.overflowWake:
 			// The next iteration pauses and drains; the callback stays nonblocking.
 		case <-timer.C:
-
-			if g.Save() != nil {
-				g.diagnose("periodic_save_failed", errors.New("save_failed"))
-				g.noteFailure("storage_error", true)
-				pause()
+			select {
+			case workerQueue <- func() {
+				if g.Save() != nil {
+					g.diagnose("periodic_save_failed", errors.New("save_failed"))
+					g.noteFailure("storage_error", true)
+					pause()
+				}
+			}:
+			default:
+				go func() {
+					if g.Save() != nil {
+						g.diagnose("periodic_save_failed", errors.New("save_failed"))
+						g.noteFailure("storage_error", true)
+						pause()
+					}
+				}()
 			}
 		case event := <-g.updates:
 			if wrapped, ok := event.(connectionEvent); ok {
 				event = wrapped.event
 			} else {
-				if _, reason, hard, _, failed := connectionFailure(event); failed {
-					g.noteFailure(reason, hard)
+				if _, reason, hard, soft, _, failed := connectionFailure(event); failed {
+					g.noteFailureType(reason, hard, soft)
 				}
 			}
-			if name, _, _, err, failed := connectionFailure(event); failed {
+			if name, _, _, _, err, failed := connectionFailure(event); failed {
 				handleFailure()
 				g.diagnose(name, err)
 				continue
 			}
 			switch e := event.(type) {
 			case *events.AuthTokenRefreshed:
-				if g.persistRefresh() != nil {
-					g.noteFailure("storage_error", true)
-					pause()
+				select {
+				case workerQueue <- func() {
+					if g.persistRefresh() != nil {
+						g.noteFailure("storage_error", true)
+						pause()
+					}
+				}:
+				default:
+					go func() {
+						if g.persistRefresh() != nil {
+							g.noteFailure("storage_error", true)
+							pause()
+						}
+					}()
 				}
 			case *gmproto.Settings:
 				g.mu.Lock()
@@ -268,21 +307,37 @@ func (g *Google) Run(ctx context.Context, incoming func(Incoming), pause func(),
 					state = "read"
 				}
 				if state != "" && e.GetTmpID() != "" {
-					receipt(e.GetConversationID(), e.GetTmpID(), state, status.String())
+					convID := e.GetConversationID()
+					tmpID := e.GetTmpID()
+					statusStr := status.String()
+					select {
+					case workerQueue <- func() { receipt(convID, tmpID, state, statusStr) }:
+					default:
+						go receipt(convID, tmpID, state, statusStr)
+					}
 				}
 				if m, ok := normalize(e, g.started); ok && !g.overflow.Load() && !g.healthFailure.Load() {
 					g.mu.Lock()
 					c := g.conversations[m.ConversationID]
 					g.mu.Unlock()
 					m.Interaction = conversationSnapshot(c, e.Message, time.Now().UTC())
-					incoming(m)
+					select {
+					case workerQueue <- func() { incoming(m) }:
+					default:
+						go incoming(m)
+					}
 				} else if !g.overflow.Load() {
 					if item, ok := historicalText(e.Message, e.GetConversationID()); ok {
 						g.mu.Lock()
 						c := g.conversations[e.GetConversationID()]
 						g.mu.Unlock()
 						item.Interaction = conversationSnapshot(c, e.Message, time.Now().UTC())
-						incoming(Incoming{ID: item.ID, ConversationID: e.GetConversationID(), ParticipantID: e.GetParticipantID(), Text: item.Text, Attachments: item.Attachments, At: item.At, Historical: true, Outgoing: item.Direction == "outgoing", TransactionID: item.TransactionID, Status: item.Status, Interaction: item.Interaction})
+						inc := Incoming{ID: item.ID, ConversationID: e.GetConversationID(), ParticipantID: e.GetParticipantID(), Text: item.Text, Attachments: item.Attachments, At: item.At, Historical: true, Outgoing: item.Direction == "outgoing", TransactionID: item.TransactionID, Status: item.Status, Interaction: item.Interaction}
+						select {
+						case workerQueue <- func() { incoming(inc) }:
+						default:
+							go incoming(inc)
+						}
 					}
 				}
 			case *events.AccountChange:

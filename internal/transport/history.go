@@ -44,7 +44,7 @@ func (f *Fixture) DiscoverConversations(ctx context.Context, cursor string) (Con
 	return ConversationPage{Conversations: list}, err
 }
 func (g *Google) DiscoverConversations(ctx context.Context, cursor string) (ConversationPage, error) {
-	if !g.Ready() {
+	if !g.SessionUp() {
 		return ConversationPage{}, errors.New("transport_unavailable")
 	}
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
@@ -111,7 +111,7 @@ func (f *Fixture) FetchHistory(ctx context.Context, conv, expectedPeer, cursor s
 	}}, nil
 }
 func (g *Google) FetchHistory(ctx context.Context, conv, expectedPeer, cursor string) (HistoryPage, error) {
-	if !g.Ready() {
+	if !g.SessionUp() {
 		return HistoryPage{}, ErrUnavailable
 	}
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
@@ -120,7 +120,7 @@ func (g *Google) FetchHistory(ctx context.Context, conv, expectedPeer, cursor st
 	if g.client != nil {
 		fetch = g.client.FetchMessages
 	}
-	return g.fetchHistory(ctx, conv, expectedPeer, cursor, g.conversationGetter(), fetch)
+	return g.fetchHistory(ctx, conv, expectedPeer, cursor, g.lookupConversationProtoShared, fetch)
 }
 
 func (g *Google) fetchHistory(
@@ -169,13 +169,28 @@ func (g *Google) fetchHistory(
 		}
 		return HistoryPage{}, errors.New("history_fetch_failed")
 	}
-	g.countPhone(ctx, phoneLookup)
-	c, err = getConversation(ctx, conv)
-	if err != nil {
-		if !g.Ready() {
-			return HistoryPage{}, ErrUnavailable
+	if cursor != "" {
+		if cached, ok := g.cachedConversationProto(conv); ok && readable(cached) && peer(cached) == expectedPeer {
+			c = cached
+		} else {
+			g.countPhone(ctx, phoneLookup)
+			c, err = getConversation(ctx, conv)
+			if err != nil {
+				if !g.Ready() {
+					return HistoryPage{}, ErrUnavailable
+				}
+				return HistoryPage{}, ErrLookupFailed
+			}
 		}
-		return HistoryPage{}, ErrLookupFailed
+	} else {
+		g.countPhone(ctx, phoneLookup)
+		c, err = getConversation(ctx, conv)
+		if err != nil {
+			if !g.Ready() {
+				return HistoryPage{}, ErrUnavailable
+			}
+			return HistoryPage{}, ErrLookupFailed
+		}
 	}
 	if !readable(c) || peer(c) != expectedPeer {
 		g.mu.Lock()

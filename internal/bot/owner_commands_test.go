@@ -32,7 +32,7 @@ func TestOwnerCommandsAreOffByDefault(t *testing.T) {
 	if ok, err := e.Accept(context.Background(), ownerCommand("!ping")); ok || err != nil {
 		t.Fatalf("accepted=%t error=%v", ok, err)
 	}
-	if len(f.Sent) != 0 {
+	if f.SentCount() != 0 {
 		t.Fatal("sent without the setting")
 	}
 }
@@ -48,10 +48,10 @@ func TestOwnerCommandRepliesInEnrolledConversation(t *testing.T) {
 	if err := e.Dispatch(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if len(f.Sent) != 1 {
+	if f.SentCount() != 1 {
 		t.Fatal("owner command not answered")
 	}
-	for _, text := range f.Sent {
+	for _, text := range f.SentSnapshot() {
 		if text != "pong" {
 			t.Fatal("unexpected reply")
 		}
@@ -98,7 +98,7 @@ func TestBotNeverAnswersItsOwnReplies(t *testing.T) {
 		t.Fatal(err)
 	}
 	var txn string
-	for id := range f.Sent {
+	for id := range f.SentSnapshot() {
 		txn = id
 	}
 	echo := ownerCommand("!ping")
@@ -117,7 +117,7 @@ func TestBotNeverAnswersItsOwnReplies(t *testing.T) {
 	if ok, err := e.Accept(context.Background(), echo); ok || err != nil {
 		t.Fatalf("answered own reply by text: accepted=%t error=%v", ok, err)
 	}
-	if len(f.Sent) != 1 {
+	if f.SentCount() != 1 {
 		t.Fatal("reply loop")
 	}
 }
@@ -158,7 +158,7 @@ func TestTurningOwnerCommandsOffStopsQueuedReplies(t *testing.T) {
 		t.Fatal(err)
 	}
 	jobs, _ := e.Store.Jobs()
-	if len(f.Sent) != 0 || len(jobs) != 1 || jobs[0].Code != "owner_commands_disabled" {
+	if f.SentCount() != 0 || len(jobs) != 1 || jobs[0].Code != "owner_commands_disabled" {
 		t.Fatalf("sent after the setting was turned off: %+v", jobs)
 	}
 }
@@ -179,7 +179,7 @@ func TestDashboardSendRunsAsOwnerCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 	var txn string
-	for id := range f.Sent {
+	for id := range f.SentSnapshot() {
 		txn = id
 	}
 	echo := ownerCommand("!echo")
@@ -191,7 +191,7 @@ func TestDashboardSendRunsAsOwnerCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 	var reply string
-	for id, text := range f.Sent {
+	for id, text := range f.SentSnapshot() {
 		if id != txn {
 			reply = id
 			if text != "!ping" {

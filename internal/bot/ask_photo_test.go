@@ -142,7 +142,7 @@ func TestAskOnAPhotoTheModelCannotRead(t *testing.T) {
 
 // sentContains reports whether any message the fixture sent contains text.
 func sentContains(f *transport.Fixture, text string) bool {
-	for _, sent := range f.Sent {
+	for _, sent := range f.SentSnapshot() {
 		if strings.Contains(sent, text) {
 			return true
 		}

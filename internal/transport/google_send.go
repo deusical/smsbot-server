@@ -48,7 +48,7 @@ func (g *Google) sendPartsWith(
 		d.Result = reason
 		return Receipt{}, refuse(reason)
 	}
-	if !g.Ready() {
+	if !g.SessionUp() {
 		return refused("not_ready")
 	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -62,7 +62,9 @@ func (g *Google) sendPartsWith(
 	}
 
 	g.countPhone(ctx, phoneLookup)
+	lookupStart := time.Now()
 	c, e := fetchConversation(ctx, id, pause, getConversation)
+	d.LookupLatencyMs = time.Since(lookupStart).Milliseconds()
 	if e != nil {
 		return refused("conversation_lookup_failed")
 	}

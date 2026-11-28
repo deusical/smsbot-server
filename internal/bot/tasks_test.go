@@ -351,7 +351,7 @@ func runTaskVideo(t *testing.T, tasks *Tasks, between func()) (*Engine, int, str
 		}
 		time.Sleep(2 * time.Millisecond)
 	}
-	return e, len(f.Sent), id
+	return e, f.SentCount(), id
 }
 
 func TestVideoCommandRunsAsTasksOnTheLaptop(t *testing.T) {
@@ -629,5 +629,71 @@ func TestTasksPollHandlesCancelledStageWithoutPanicking(t *testing.T) {
 	var failed taskFailed
 	if status.Stage != "cancelled" || !errorsAs(err, &failed) || failed.code != "task_cancelled" {
 		t.Fatalf("status=%+v err=%v", status, err)
+	}
+}
+
+func TestWorkerCircuitBreakerSkipsFailedWorker(t *testing.T) {
+	t.Parallel()
+	video := map[string]int{"video.download": 1}
+	tasks, laptop, _ := taskRouter(t, video, video)
+
+	now := time.Now()
+	var clockMu sync.Mutex
+	tasks.now = func() time.Time {
+		clockMu.Lock()
+		defer clockMu.Unlock()
+		return now
+	}
+
+	// Initially laptop is down
+	laptop.down.Store(true)
+
+	// Poll: laptop fails capabilities/probe, trips breaker, falls back to local!
+	var st TaskState
+	req := TaskRequest{Task: "video.download", Version: 1, Inputs: map[string]TaskValue{"url": {Type: "url", Text: "https://v.douyin.com/synthetic/"}}}
+	status, err := tasks.Poll(context.Background(), &st, "job-1", "scope-1", now.Add(time.Minute), req)
+	if err != nil {
+		t.Fatalf("poll failed: %v", err)
+	}
+	if st.Worker != LocalWorker {
+		t.Fatalf("expected fallback to local worker, got %q (status: %+v)", st.Worker, status)
+	}
+	if !tasks.isBroken("laptop") {
+		t.Fatal("laptop worker circuit breaker was not tripped")
+	}
+
+	// While broken (< 30s), another task does not probe laptop
+	laptop.down.Store(false)
+	laptop.mu.Lock()
+	capsBefore := laptop.caps
+	laptop.mu.Unlock()
+	var st2 TaskState
+	_, err = tasks.Poll(context.Background(), &st2, "job-2", "scope-2", now.Add(time.Minute), req)
+	if err != nil {
+		t.Fatalf("poll 2 failed: %v", err)
+	}
+	if st2.Worker != LocalWorker {
+		t.Fatalf("expected local worker while laptop breaker active, got %q", st2.Worker)
+	}
+	laptop.mu.Lock()
+	capsAfter := laptop.caps
+	laptop.mu.Unlock()
+	if capsAfter != capsBefore {
+		t.Fatalf("circuit-broken worker was probed: %d -> %d", capsBefore, capsAfter)
+	}
+
+	// Advance time past 30s
+	clockMu.Lock()
+	now = now.Add(35 * time.Second)
+	clockMu.Unlock()
+
+	// Now breaker has reset, laptop is healthy and should be chosen first
+	var st3 TaskState
+	_, err = tasks.Poll(context.Background(), &st3, "job-3", "scope-3", now.Add(time.Minute), req)
+	if err != nil {
+		t.Fatalf("poll 3 failed: %v", err)
+	}
+	if st3.Worker != "laptop" {
+		t.Fatalf("expected laptop worker after breaker reset, got %q", st3.Worker)
 	}
 }

@@ -1,6 +1,8 @@
 package httpapi
 
 import (
+	"bytes"
+	"compress/gzip"
 	"embed"
 	"encoding/json"
 	"errors"
@@ -11,6 +13,7 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -131,12 +134,65 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		limit = 4 * 1024 * 1024
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, limit)
-	s.mux.ServeHTTP(w, r)
+	gw := &gzipResponseWriter{
+		ResponseWriter: w,
+		acceptsGzip:    strings.Contains(r.Header.Get("Accept-Encoding"), "gzip"),
+		isRange:        r.Header.Get("Range") != "",
+	}
+	s.mux.ServeHTTP(gw, r)
 }
+
+type gzipAcceptor interface {
+	AcceptsGzip() bool
+}
+
+type gzipResponseWriter struct {
+	http.ResponseWriter
+	acceptsGzip bool
+	isRange     bool
+}
+
+func (g *gzipResponseWriter) AcceptsGzip() bool {
+	return g.acceptsGzip && !g.isRange
+}
+
+func (g *gzipResponseWriter) Unwrap() http.ResponseWriter {
+	return g.ResponseWriter
+}
+
+func (g *gzipResponseWriter) Flush() {
+	if f, ok := g.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
 func (s *Server) json(w http.ResponseWriter, status int, v any) {
+	b, err := json.Marshal(v)
+	if err != nil {
+		s.bad(w, 500, "internal_error")
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
+	var acceptsGzip bool
+	if ga, ok := w.(gzipAcceptor); ok {
+		acceptsGzip = ga.AcceptsGzip()
+	}
+	if acceptsGzip && len(b) >= 1024 {
+		var buf bytes.Buffer
+		gz, _ := gzip.NewWriterLevel(&buf, gzip.BestSpeed)
+		_, _ = gz.Write(b)
+		_ = gz.Close()
+		compressed := buf.Bytes()
+		w.Header().Set("Content-Encoding", "gzip")
+		w.Header().Add("Vary", "Accept-Encoding")
+		w.Header().Set("Content-Length", strconv.Itoa(len(compressed)))
+		w.WriteHeader(status)
+		_, _ = w.Write(compressed)
+		return
+	}
+	w.Header().Set("Content-Length", strconv.Itoa(len(b)))
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
+	_, _ = w.Write(b)
 }
 func (s *Server) bad(w http.ResponseWriter, status int, code string) {
 	s.json(w, status, map[string]string{"error": code})

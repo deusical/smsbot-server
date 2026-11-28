@@ -188,3 +188,56 @@ func TestDownloadFileBoundsConcurrentPhoneDownloadsAndBypassesMemoryData(t *test
 		t.Fatalf("maxActive=%d startedCalls=%d, want <=2 and 3", maxActive.Load(), startedCalls.Load())
 	}
 }
+
+func TestOpenFileBoundsConcurrentPhoneDownloads(t *testing.T) {
+	t.Parallel()
+	g := NewGoogle(nil, "")
+	g.ready.Store(true)
+	g.connected = func() bool { return true }
+
+	g.downloadMedia = func(remoteID string, _ []byte) (io.ReadCloser, error) {
+		return io.NopCloser(strings.NewReader("payload-" + remoteID)), nil
+	}
+
+	remoteFile := func(id string) media.File {
+		return media.File{RemoteID: id, Key: make([]byte, 32)}
+	}
+
+	// Start 2 OpenFiles that occupy both semaphore slots.
+	rc1, err := g.OpenFile(context.Background(), remoteFile("open-1"))
+	if err != nil {
+		t.Fatalf("OpenFile 1: %v", err)
+	}
+	rc2, err := g.OpenFile(context.Background(), remoteFile("open-2"))
+	if err != nil {
+		t.Fatalf("OpenFile 2: %v", err)
+	}
+
+	// 3rd OpenFile must wait for a slot because both slots are held by unclosed readers.
+	opened3 := make(chan struct{})
+	go func() {
+		rc3, err := g.OpenFile(context.Background(), remoteFile("open-3"))
+		if err != nil {
+			t.Errorf("OpenFile 3: %v", err)
+			return
+		}
+		close(opened3)
+		rc3.Close()
+	}()
+
+	select {
+	case <-opened3:
+		t.Fatal("OpenFile 3 completed while slots were full")
+	case <-time.After(30 * time.Millisecond):
+	}
+
+	// Close rc1: freeing a slot
+	rc1.Close()
+
+	select {
+	case <-opened3:
+	case <-time.After(time.Second):
+		t.Fatal("OpenFile 3 did not acquire freed slot")
+	}
+	rc2.Close()
+}

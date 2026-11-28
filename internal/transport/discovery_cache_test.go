@@ -322,3 +322,48 @@ func backdate(cache *conversationPageCache, by time.Duration) {
 	cache.changedAt = cache.changedAt.Add(-by)
 	cache.resetAt = cache.resetAt.Add(-by)
 }
+
+func TestDiscoveryCacheServesStalePageOnFailureAndShortBackoff(t *testing.T) {
+	t.Parallel()
+	var cache conversationPageCache
+	calls := 0
+	fetchOK := func(context.Context) (ConversationPage, error) {
+		calls++
+		return ConversationPage{Conversations: []Conversation{{ID: "c1"}}}, nil
+	}
+	p, err := cache.get(context.Background(), "", fetchOK)
+	if err != nil || len(p.Conversations) != 1 || p.Stale {
+		t.Fatalf("initial get failed: %v", err)
+	}
+
+	// Invalidate via activity so next get will try to refetch
+	cache.markChanged(time.Now())
+	backdate(&cache, listInvalidateGap)
+
+	failCalls := 0
+	fetchFail := func(context.Context) (ConversationPage, error) {
+		failCalls++
+		return ConversationPage{}, errors.New("temporary_rpc_error")
+	}
+
+	// Fetch fails: it should serve the stale cached page rather than failing
+	p2, err2 := cache.get(context.Background(), "", fetchFail)
+	if err2 != nil {
+		t.Fatalf("expected stale page on failure, got err: %v", err2)
+	}
+	if !p2.Stale || len(p2.Conversations) != 1 || p2.Conversations[0].ID != "c1" {
+		t.Fatalf("expected stale page with c1, got %+v", p2)
+	}
+	if failCalls != 1 {
+		t.Fatalf("expected 1 failCall, got %d", failCalls)
+	}
+
+	// Inside failure backoff, it should continue serving stale page without calling fetch again
+	p3, err3 := cache.get(context.Background(), "", fetchFail)
+	if err3 != nil || !p3.Stale {
+		t.Fatalf("expected stale page during backoff, got %v, %+v", err3, p3)
+	}
+	if failCalls != 1 {
+		t.Fatalf("fetch was called again during backoff: %d", failCalls)
+	}
+}

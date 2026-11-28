@@ -91,10 +91,12 @@ func (e *Engine) pollWorkerStep(ctx context.Context, j store.Job, p *store.Plan,
 	e.videoChecked = ""
 	e.workerUnlocked = true
 	e.mu.Unlock()
+	e.dispatchMu.Unlock()
 	requestctx, requestcancel := context.WithTimeout(workctx, 10*time.Second)
 	stage, workerr := poll(requestctx, deadline)
 	requestcancel()
 	cancel()
+	e.dispatchMu.Lock()
 	e.mu.Lock()
 	delete(e.pending, j.ID)
 	current, loaderr := e.Store.Job(j.ID)
@@ -135,6 +137,9 @@ func (e *Engine) finishWorkerStep(j store.Job) (bool, error) {
 		return true, err
 	}
 	ok, err := e.Store.Transition(j.ID, "generating", "queued")
+	if err == nil && ok {
+		e.nudgeDispatch()
+	}
 	return !ok || err != nil, err
 }
 
@@ -221,7 +226,7 @@ func (e *Engine) prepareDownloadUpload(ctx context.Context, j store.Job, p *stor
 		_, code, err := e.check(ctx, j, *p, liveLookup)
 		if err != nil {
 			if errors.Is(err, transport.ErrLookupFailed) {
-				e.backoffPreflight(j.ID)
+				e.backoffPreflight(j.ID, j.ConversationID)
 			}
 			return true, err
 		}
@@ -312,8 +317,9 @@ func (e *Engine) collectDownloadUploads(ctx context.Context) error {
 			if _, err = e.Store.Transition(id, "generating", "queued"); err != nil {
 				return err
 			}
+			e.nudgeDispatch()
 			if checkErr != nil {
-				e.backoffPreflight(id)
+				e.backoffPreflight(id, j.ConversationID)
 				lookupErr = checkErr
 			}
 		default:
@@ -340,6 +346,15 @@ func (e *Engine) nudgeWorkerCancel() {
 	select {
 	case e.cancelNudge <- struct{}{}:
 	default:
+	}
+}
+
+func (e *Engine) nudgeDispatch() {
+	if e.dispatchNudge != nil {
+		select {
+		case e.dispatchNudge <- struct{}{}:
+		default:
+		}
 	}
 }
 

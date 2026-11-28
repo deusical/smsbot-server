@@ -84,7 +84,7 @@ func TestFixtureAIRequiresNoKeyAndIsOffline(t *testing.T) {
 	if err := e.Dispatch(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if stateOf(t, e, id) != "submitted" || len(f.Sent) != 1 {
+	if stateOf(t, e, id) != "submitted" || f.SentCount() != 1 {
 		t.Fatal("fixture AI did not submit synthetic answer")
 	}
 	if _, ok := e.Provider.(SimulatedProvider); !ok {
@@ -157,7 +157,7 @@ func TestPauseCancelsGenerationWithoutWaiting(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("generation did not cancel")
 	}
-	if stateOf(t, e, id) != "cancelled" || len(f.Sent) != 0 {
+	if stateOf(t, e, id) != "cancelled" || f.SentCount() != 0 {
 		t.Fatal("cancelled generation was sent")
 	}
 }
@@ -210,7 +210,7 @@ func TestNewApprovalAfterGenerationDoesNotRegenerate(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
-	if stateOf(t, e, id) != "awaiting_approval" || len(f.Sent) != 0 {
+	if stateOf(t, e, id) != "awaiting_approval" || f.SentCount() != 0 {
 		t.Fatal("new approval bypassed")
 	}
 	if err := e.Approve(id); err != nil {
@@ -219,7 +219,7 @@ func TestNewApprovalAfterGenerationDoesNotRegenerate(t *testing.T) {
 	if err := e.Dispatch(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if p.calls.Load() != 1 || stateOf(t, e, id) != "submitted" || len(f.Sent) != 1 {
+	if p.calls.Load() != 1 || stateOf(t, e, id) != "submitted" || f.SentCount() != 1 {
 		t.Fatal("approved saved answer regenerated or not sent")
 	}
 }
@@ -243,7 +243,7 @@ func TestUnknownCostBlocksNextAIRequest(t *testing.T) {
 	if err := e.Dispatch(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if p.calls.Load() != 1 || len(f.Sent) != 1 {
+	if p.calls.Load() != 1 || f.SentCount() != 1 {
 		t.Fatal("unknown-cost budget was bypassed")
 	}
 }
@@ -256,7 +256,7 @@ func TestApprovalExpiryAndRecipePreview(t *testing.T) {
 	if err := e.Dispatch(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if len(f.Sent) != 0 {
+	if f.SentCount() != 0 {
 		t.Fatal("approval bypassed")
 	}
 	e.now = func() time.Time { return time.Now().Add(3 * time.Minute) }
@@ -275,6 +275,62 @@ func TestApprovalExpiryAndRecipePreview(t *testing.T) {
 	saved, _ := e.Configuration()
 	if saved.Commands[0].Enabled {
 		t.Fatal("preview enabled saved command")
+	}
+}
+
+func TestConfigurationCacheAndInvalidation(t *testing.T) {
+	t.Parallel()
+	e, _ := setup(t)
+	c1, err := e.Configuration()
+	if err != nil {
+		t.Fatalf("first Configuration failed: %v", err)
+	}
+	// Verify cache is populated
+	e.configMu.RLock()
+	cached := e.cachedConfig
+	e.configMu.RUnlock()
+	if cached == nil {
+		t.Fatal("cachedConfig was not populated")
+	}
+
+	// Mutating returned config must not mutate cached config
+	c1.Commands = append(c1.Commands, Command{Name: "mutated"})
+	c2, err := e.Configuration()
+	if err != nil {
+		t.Fatalf("second Configuration failed: %v", err)
+	}
+	if len(c2.Commands) == len(c1.Commands) {
+		t.Fatal("modifying returned Configuration mutated cachedConfig")
+	}
+
+	// SetConfiguration updates cache
+	c := DefaultConfiguration()
+	c.Revision = c2.Revision
+	c.Commands = []Command{{Name: "testcmd", Type: "fixed", Instructions: "test", Enabled: true}}
+	if err := e.SetConfiguration(c); err != nil {
+		t.Fatalf("SetConfiguration failed: %v", err)
+	}
+	c3, err := e.Configuration()
+	if err != nil || len(c3.Commands) != 1 || c3.Commands[0].Name != "testcmd" {
+		t.Fatalf("unexpected c3: %+v, err: %v", c3, err)
+	}
+	if *c3.Revision != *c2.Revision+1 {
+		t.Fatalf("expected revision %d, got %d", *c2.Revision+1, *c3.Revision)
+	}
+
+	// InvalidateConfig clears cache
+	e.InvalidateConfig()
+	e.configMu.RLock()
+	cachedAfter := e.cachedConfig
+	e.configMu.RUnlock()
+	if cachedAfter != nil {
+		t.Fatal("InvalidateConfig did not clear cache")
+	}
+
+	// Next call repopulates cache from DB
+	c4, err := e.Configuration()
+	if err != nil || len(c4.Commands) != 1 || c4.Commands[0].Name != "testcmd" {
+		t.Fatalf("unexpected c4 after invalidation: %+v, err: %v", c4, err)
 	}
 }
 func TestConsentRemovalInvalidatesQueuedContext(t *testing.T) {
@@ -326,7 +382,7 @@ func TestProviderFailureNeverSubmits(t *testing.T) {
 		t.Fatal(err)
 	}
 	jobs, _ := e.Store.Jobs()
-	if stateOf(t, e, id) != "failed" || jobs[0].Code != "provider_failed" || len(f.Sent) != 0 {
+	if stateOf(t, e, id) != "failed" || jobs[0].Code != "provider_failed" || f.SentCount() != 0 {
 		t.Fatal("provider error leaked or sent")
 	}
 }

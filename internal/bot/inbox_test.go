@@ -99,7 +99,7 @@ func TestInboxManualSendDeduplicatesAndRechecksRevocation(t *testing.T) {
 	if err = e.Dispatch(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if len(f.Sent) != 1 {
+	if f.SentCount() != 1 {
 		t.Fatal("manual reply unavailable without enrollment or automation")
 	}
 	legacy, _ := e.Store.MessagePage("demo-chat", "", "", 50)
@@ -111,7 +111,7 @@ func TestInboxManualSendDeduplicatesAndRechecksRevocation(t *testing.T) {
 	s.Enabled = false
 	e.Collection.SetSettings(context.Background(), s)
 	e.Dispatch(context.Background())
-	if len(f.Sent) != 1 {
+	if f.SentCount() != 1 {
 		t.Fatal("send after inbox revocation")
 	}
 }

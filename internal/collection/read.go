@@ -65,9 +65,7 @@ func (svc *Service) MarkConversationRead(ctx context.Context, conv string, throu
 	if through.IsZero() || through.After(svc.now().Add(5*time.Minute)) {
 		return errors.New("invalid_time")
 	}
-	svc.mu.Lock()
-	s, err := svc.Settings()
-	svc.mu.Unlock()
+	s, err := svc.policySettings()
 	if err != nil {
 		return err
 	}
@@ -92,9 +90,7 @@ func (svc *Service) MarkConversationRead(ctx context.Context, conv string, throu
 	if a, archiveErr := svc.Store.Archive(conv); archiveErr == nil && a.Conversation.ParticipantID != c.ParticipantID {
 		return errors.New("archive_identity_changed")
 	}
-	svc.mu.Lock()
-	current, err := svc.Settings()
-	svc.mu.Unlock()
+	current, err := svc.policySettings()
 	if err != nil {
 		return err
 	}

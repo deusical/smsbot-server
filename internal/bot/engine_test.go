@@ -25,7 +25,7 @@ func setup(t *testing.T) (*Engine, *transport.Fixture) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	t.Cleanup(func() { s.DB.Close() })
+	t.Cleanup(func() { s.Close() })
 	f := transport.NewFixture()
 	return assemble(t, s, f), f
 }
@@ -126,7 +126,7 @@ func TestDedupAndDispatch(t *testing.T) {
 	if err := e.Dispatch(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if len(f.Sent) != 1 {
+	if f.SentCount() != 1 {
 		t.Fatal("duplicate sends")
 	}
 	jobs, _ := e.Store.Jobs()
@@ -148,7 +148,7 @@ func TestPauseCancelsQueued(t *testing.T) {
 	}
 	e.Pause(false)
 	e.Dispatch(context.Background())
-	if len(f.Sent) != 0 {
+	if f.SentCount() != 0 {
 		t.Fatal("sent paused request")
 	}
 	jobs, _ := e.Store.Jobs()
@@ -164,7 +164,7 @@ func TestUnenrollCancelsQueued(t *testing.T) {
 	e.Unenroll("demo-chat")
 	e.Store.Enroll("demo-chat", "demo-peer")
 	e.Dispatch(context.Background())
-	if len(f.Sent) != 0 {
+	if f.SentCount() != 0 {
 		t.Fatal("replayed after reenrollment")
 	}
 }
@@ -180,7 +180,7 @@ func TestUnknownNotRetried(t *testing.T) {
 	f.Fail = ""
 	e.Dispatch(context.Background())
 	jobs, _ := e.Store.Jobs()
-	if jobs[0].State != "unknown_submission" || len(f.Sent) != 0 {
+	if jobs[0].State != "unknown_submission" || f.SentCount() != 0 {
 		t.Fatal("uncertain send retried")
 	}
 }
@@ -196,7 +196,7 @@ func TestCrashRecovery(t *testing.T) {
 	}
 	e.Dispatch(context.Background())
 	jobs, _ = e.Store.Jobs()
-	if jobs[0].State != "unknown_submission" || len(f.Sent) != 0 {
+	if jobs[0].State != "unknown_submission" || f.SentCount() != 0 {
 		t.Fatal("crashed send retried")
 	}
 }
@@ -208,7 +208,7 @@ func TestExpiredQueue(t *testing.T) {
 	e.now = func() time.Time { return time.Now().Add(3 * time.Minute) }
 	e.Dispatch(context.Background())
 	jobs, _ := e.Store.Jobs()
-	if jobs[0].State != "expired" || len(f.Sent) != 0 {
+	if jobs[0].State != "expired" || f.SentCount() != 0 {
 		t.Fatal("stale request sent")
 	}
 }
@@ -219,7 +219,7 @@ func TestIdentityChange(t *testing.T) {
 	e.Accept(context.Background(), incoming())
 	e.Store.Enroll("demo-chat", "new-peer")
 	e.Dispatch(context.Background())
-	if len(f.Sent) != 0 {
+	if f.SentCount() != 0 {
 		t.Fatal("identity change did not stop send")
 	}
 }
@@ -255,7 +255,7 @@ func TestKnownRejectionIsFailedAndNeverRetried(t *testing.T) {
 	f.Fail = ""
 	e.Dispatch(context.Background())
 	jobs, _ := e.Store.Jobs()
-	if jobs[0].State != "failed" || len(f.Sent) != 0 {
+	if jobs[0].State != "failed" || f.SentCount() != 0 {
 		t.Fatal("known rejection retried or mislabeled")
 	}
 	if jobs[0].Code != "not_submitted" || jobs[0].Reason != "upstream_rejected" {

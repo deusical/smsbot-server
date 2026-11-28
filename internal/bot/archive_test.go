@@ -56,7 +56,7 @@ func TestArchiveConversationCreatesReusesAndRearchivesWithoutDeletingSavedHistor
 		t.Fatal("completed archive did not rescan", err)
 	}
 	page, err := e.Store.OwnerMessagePage("demo-chat", "", "", 50)
-	if err != nil || len(page.Messages) != 1 || len(f.Sent) != 0 {
+	if err != nil || len(page.Messages) != 1 || f.SentCount() != 0 {
 		t.Fatal("rearchive deleted history or sent a message", err)
 	}
 }

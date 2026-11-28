@@ -109,46 +109,165 @@ func (s *Store) Retention(days int) (int64, error) {
 		return 0, nil
 	}
 	cutoff := time.Now().UTC().AddDate(0, 0, -days).Format(time.RFC3339Nano)
+
+	// 1. Batch delete messages in chunks with LIMIT per transaction
+	var totalDeleted int64
+	for {
+		rows, err := s.DB.Query("SELECT id FROM messages WHERE julianday(at)<julianday(?) AND conversation NOT IN (SELECT conversation FROM archive_conversations UNION SELECT conversation FROM archive_pending) LIMIT 500", cutoff)
+		if err != nil {
+			return totalDeleted, err
+		}
+		var ids []string
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				rows.Close()
+				return totalDeleted, err
+			}
+			ids = append(ids, id)
+		}
+		rows.Close()
+		if len(ids) == 0 {
+			break
+		}
+		tx, err := s.DB.Begin()
+		if err != nil {
+			return totalDeleted, err
+		}
+		query := "DELETE FROM messages WHERE id IN (" + placeholders(len(ids)) + ")"
+		args := make([]any, len(ids))
+		for i, id := range ids {
+			args[i] = id
+		}
+		res, err := tx.Exec(query, args...)
+		if err != nil {
+			tx.Rollback()
+			return totalDeleted, err
+		}
+		n, _ := res.RowsAffected()
+		if err := tx.Commit(); err != nil {
+			return totalDeleted, err
+		}
+		totalDeleted += n
+	}
+
+	// 2. Compute pruned jobs set once
+	rows, err := s.DB.Query("SELECT id FROM jobs WHERE julianday(created)<julianday(?) AND state NOT IN ('queued','generating','processing','awaiting_approval','submitting') AND id NOT IN (SELECT id FROM jobs ORDER BY created DESC LIMIT 200)", cutoff)
+	if err != nil {
+		return totalDeleted, err
+	}
+	var prunedJobs []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return totalDeleted, err
+		}
+		prunedJobs = append(prunedJobs, id)
+	}
+	rows.Close()
+
+	if len(prunedJobs) > 0 {
+		const batchSize = 100
+		for i := 0; i < len(prunedJobs); i += batchSize {
+			end := min(i+batchSize, len(prunedJobs))
+			batch := prunedJobs[i:end]
+			ph := placeholders(len(batch))
+			args := make([]any, len(batch))
+			for idx, id := range batch {
+				args[idx] = id
+			}
+
+			tx, err := s.DB.Begin()
+			if err != nil {
+				return totalDeleted, err
+			}
+			if _, err = tx.Exec("UPDATE jobs SET plan='' WHERE plan!='' AND id IN ("+ph+")", args...); err != nil {
+				tx.Rollback()
+				return totalDeleted, err
+			}
+			if _, err = tx.Exec("DELETE FROM job_work WHERE job IN ("+ph+") AND (cancel_sent!=0 OR stage IN ('','complete','receiving','waiting_upload','uploading','ready','failed','expired','cancelled'))", args...); err != nil {
+				tx.Rollback()
+				return totalDeleted, err
+			}
+			if _, err = tx.Exec("DELETE FROM job_steps WHERE job IN ("+ph+")", args...); err != nil {
+				tx.Rollback()
+				return totalDeleted, err
+			}
+			if _, err = tx.Exec("DELETE FROM usage_steps WHERE job IN ("+ph+")", args...); err != nil {
+				tx.Rollback()
+				return totalDeleted, err
+			}
+			if _, err = tx.Exec("DELETE FROM settings WHERE (key LIKE 'used_tools:%' OR key LIKE 'requested_reasoning:%' OR key LIKE 'send_reason:%') AND substr(key, instr(key, ':')+1) IN ("+ph+")", args...); err != nil {
+				tx.Rollback()
+				return totalDeleted, err
+			}
+			if err = tx.Commit(); err != nil {
+				return totalDeleted, err
+			}
+		}
+	}
+
+	// 3. Clear plan on other old finished jobs, and memory/credentials/changes/observed in a short final transaction
 	tx, e := s.DB.Begin()
 	if e != nil {
-		return 0, e
+		return totalDeleted, e
 	}
 	defer tx.Rollback()
-	// Keep julianday(...) comparisons: jobs.created and memory.expires mix
-	// variable-precision RFC3339Nano with fixed 9-digit UTC backups, and archive
-	// restores accept any RFC3339Nano messages.at without normalizing width/zone.
-	result, e := tx.Exec("DELETE FROM messages WHERE julianday(at)<julianday(?) AND conversation NOT IN (SELECT conversation FROM archive_conversations UNION SELECT conversation FROM archive_pending)", cutoff)
-	if e != nil {
-		return 0, e
-	}
+
 	if _, e = tx.Exec("UPDATE jobs SET plan='' WHERE plan!='' AND julianday(created)<julianday(?) AND state NOT IN ('queued','generating','processing','awaiting_approval','submitting')", cutoff); e != nil {
-		return 0, e
-	}
-	prunedJobs := "SELECT id FROM jobs WHERE julianday(created)<julianday(?) AND state NOT IN ('queued','generating','processing','awaiting_approval','submitting') AND id NOT IN (SELECT id FROM jobs ORDER BY created DESC LIMIT 200)"
-	if _, e = tx.Exec("DELETE FROM job_work WHERE job IN ("+prunedJobs+") AND (cancel_sent!=0 OR stage IN ('','complete','receiving','waiting_upload','uploading','ready','failed','expired','cancelled'))", cutoff); e != nil {
-		return 0, e
-	}
-	if _, e = tx.Exec("DELETE FROM job_steps WHERE job IN ("+prunedJobs+")", cutoff); e != nil {
-		return 0, e
-	}
-	if _, e = tx.Exec("DELETE FROM usage_steps WHERE job IN ("+prunedJobs+")", cutoff); e != nil {
-		return 0, e
-	}
-	if _, e = tx.Exec("DELETE FROM settings WHERE (key LIKE 'used_tools:%' OR key LIKE 'requested_reasoning:%' OR key LIKE 'send_reason:%') AND substr(key, instr(key, ':')+1) IN ("+prunedJobs+")", cutoff); e != nil {
-		return 0, e
+		return totalDeleted, e
 	}
 	if _, e = tx.Exec("DELETE FROM memory WHERE julianday(expires)<=julianday('now')"); e != nil {
-		return 0, e
+		return totalDeleted, e
 	}
-	n, e := result.RowsAffected()
-	if e != nil {
-		return 0, e
+	if _, e = tx.Exec("DELETE FROM credentials WHERE kind='session' AND expires>0 AND expires<=?", time.Now().Unix()); e != nil {
+		return totalDeleted, e
+	}
+	if _, e = tx.Exec("DELETE FROM message_changes WHERE conversation NOT IN (SELECT conversation FROM archive_conversations UNION SELECT conversation FROM archive_pending)"); e != nil {
+		return totalDeleted, e
+	}
+	if _, e = tx.Exec("DELETE FROM message_changes WHERE seq < (SELECT coalesce(max(seq) - 5000, 0) FROM message_changes)"); e != nil {
+		return totalDeleted, e
+	}
+	if _, e = tx.Exec("DELETE FROM observed_events WHERE id NOT IN (SELECT id FROM messages UNION SELECT alias FROM message_alias)"); e != nil {
+		return totalDeleted, e
 	}
 	if e = tx.Commit(); e != nil {
-		return 0, e
+		return totalDeleted, e
 	}
-	if n > 0 {
+	if totalDeleted > 0 {
 		s.noteMessageDeletion()
 	}
-	return n, nil
+	return totalDeleted, nil
+}
+
+// PruneExpiredSessions removes browser sessions whose expires timestamp is in the past.
+func (s *Store) PruneExpiredSessions() (int64, error) {
+	res, err := s.DB.Exec("DELETE FROM credentials WHERE kind='session' AND expires>0 AND expires<=?", time.Now().Unix())
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// PruneObservedEvents removes deduplication hashes that no longer correspond to existing messages or message aliases.
+func (s *Store) PruneObservedEvents() (int64, error) {
+	res, err := s.DB.Exec("DELETE FROM observed_events WHERE id NOT IN (SELECT id FROM messages UNION SELECT alias FROM message_alias)")
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// PruneMessageChanges removes message_changes with seq < minSeq.
+func (s *Store) PruneMessageChanges(minSeq int64) (int64, error) {
+	if minSeq <= 0 {
+		return 0, nil
+	}
+	res, err := s.DB.Exec("DELETE FROM message_changes WHERE seq < ?", minSeq)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }

@@ -146,7 +146,7 @@ func (g *Google) markReadWith(
 	markRead func(context.Context, string, string) error,
 ) error {
 	ctx = WithPhonePurpose(ctx, "read")
-	if !g.Ready() {
+	if !g.SessionUp() {
 		return ErrUnavailable
 	}
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)

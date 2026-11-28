@@ -2,6 +2,7 @@ package transport
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"sync"
 	"sync/atomic"
@@ -419,6 +420,33 @@ func TestFetchHistorySkipsPreLookupWhenCachedAndVerifiesPostFetch(t *testing.T) 
 	}
 }
 
+func TestFetchHistoryPagingReusesFreshCachedConversationWithoutLookup(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	g := NewGoogle(nil, "")
+	g.ready.Store(true)
+	g.connected = func() bool { return true }
+	g.cacheDetail(individual("c1"))
+
+	cursor := base64.RawURLEncoding.EncodeToString([]byte{0x08, 0x01})
+
+	getCalls := 0
+	fetchCalls := 0
+	_, err := g.fetchHistory(ctx, "c1", "peer", cursor, func(context.Context, string) (*gmproto.Conversation, error) {
+		getCalls++
+		return individual("c1"), nil
+	}, func(context.Context, string, int64, *gmproto.Cursor) (*gmproto.ListMessagesResponse, error) {
+		fetchCalls++
+		return &gmproto.ListMessagesResponse{}, nil
+	})
+	if err != nil {
+		t.Fatalf("paged fetchHistory failed: %v", err)
+	}
+	if getCalls != 0 || fetchCalls != 1 {
+		t.Fatalf("got getCalls=%d fetchCalls=%d, want 0 and 1 (cached reuse for paged history)", getCalls, fetchCalls)
+	}
+}
+
 func TestSendPartsRetriesGetConversationOnce(t *testing.T) {
 	t.Parallel()
 	ctx := WithOutgoingID(context.Background(), "self")
@@ -586,5 +614,49 @@ func TestReactRetriesGetConversationOnce(t *testing.T) {
 	)
 	if !errors.Is(err, ErrNotSubmitted) || RefusalReason(err) != "conversation_lookup_failed" || getCalls != 2 || reactCalls != 0 {
 		t.Fatalf("err=%v reason=%q getCalls=%d reactCalls=%d", err, RefusalReason(err), getCalls, reactCalls)
+	}
+}
+
+func TestFetchConversationDeadlineExceededDoesNotRetry(t *testing.T) {
+	t.Parallel()
+	calls := 0
+	get := func(ctx context.Context, id string) (*gmproto.Conversation, error) {
+		calls++
+		return nil, context.DeadlineExceeded
+	}
+	_, err := fetchConversation(context.Background(), "c1", 100*time.Millisecond, get)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected DeadlineExceeded, got %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("expected 1 call on DeadlineExceeded without retry, got %d", calls)
+	}
+}
+
+func TestSoftFailureDoesNotWipeCachesOnRecovery(t *testing.T) {
+	t.Parallel()
+	g := NewGoogle(nil, "")
+	g.ready.Store(true)
+	g.conversations["c1"] = individual("c1")
+
+	// Trigger a soft failure event (e.g. PingFailed)
+	_, reason, hard, soft, _, ok := connectionFailure(&events.PingFailed{Error: errors.New("ping timeout")})
+	if !ok || !soft || hard {
+		t.Fatalf("expected soft failure: ok=%v soft=%v hard=%v", ok, soft, hard)
+	}
+	g.noteFailureType(reason, hard, soft)
+
+	// Recovery completes successfully
+	recovered, hardRec := g.finishRecovery(recoveryResult{epoch: g.recovery.epoch, err: nil}, time.Now())
+	if !recovered || hardRec {
+		t.Fatalf("expected recovered=true hard=false, got recovered=%v hard=%v", recovered, hardRec)
+	}
+
+	// Verify conversation cache is NOT wiped!
+	g.mu.Lock()
+	conv := g.conversations["c1"]
+	g.mu.Unlock()
+	if conv == nil {
+		t.Fatal("soft failure wiped conversation cache on recovery")
 	}
 }

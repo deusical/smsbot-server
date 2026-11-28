@@ -20,6 +20,7 @@ type recoveryControl struct {
 	epoch         uint64
 	reason        string
 	hard          bool
+	soft          bool
 	inflight      bool
 	inflightEpoch uint64
 	attempts      int
@@ -53,41 +54,47 @@ func credentialError(err error) bool {
 }
 
 // Return only fixed identifiers and typed errors; no upstream free text is exposed.
-func connectionFailure(event any) (name, reason string, hard bool, err error, ok bool) {
+func connectionFailure(event any) (name, reason string, hard, soft bool, err error, ok bool) {
 	ok = true
 	switch e := event.(type) {
 	case *events.ListenTemporaryError:
-		name, reason, err = "listen_temporary", "reconnecting", e.Error
+		name, reason, soft, err = "listen_temporary", "reconnecting", true, e.Error
 	case *events.PingFailed:
-		name, reason, err = "ping_failed", "reconnecting", e.Error
+		name, reason, soft, err = "ping_failed", "reconnecting", true, e.Error
 	case *events.ListenFatalError:
 		name, reason, hard, err = "listen_fatal", "connection_error", true, e.Error
 	case *events.PhoneNotResponding:
 		name, reason = "phone_not_responding", "phone_unreachable"
 	case *events.NoDataReceived:
-		name, reason = "no_data_received", "reconnecting"
+		name, reason, soft = "no_data_received", "reconnecting", true
 	case *events.GaiaLoggedOut:
 		name, reason, hard = "google_logged_out", "login_required", true
 	case *events.HackySetActiveMayFail:
 		name, reason, hard = "active_session_warning", "session_conflict", true
 	case *events.AccountChange:
 		if e.IsFake {
-			return "", "", false, nil, false
+			return "", "", false, false, nil, false
 		}
 		name, reason, hard = "account_change", "account_changed", true
 	default:
-		return "", "", false, nil, false
+		return "", "", false, false, nil, false
 	}
 	if credentialError(err) {
 		reason = "login_required"
 		hard = true
+		soft = false
 	}
 	if err == nil {
 		err = errors.New("unavailable")
 	}
 	return
 }
+
 func (g *Google) noteFailure(reason string, hard bool) {
+	g.noteFailureType(reason, hard, false)
+}
+
+func (g *Google) noteFailureType(reason string, hard, soft bool) {
 	g.identityEpoch.Add(1)
 	r := &g.recovery
 	r.mu.Lock()
@@ -95,6 +102,7 @@ func (g *Google) noteFailure(reason string, hard bool) {
 	if !r.hard {
 		r.reason = reason
 		r.hard = hard
+		r.soft = soft
 	}
 	// A later temporary event can never clear an authentication/session blocker.
 	if r.next.IsZero() {
@@ -246,12 +254,15 @@ func (g *Google) finishRecovery(result recoveryResult, now time.Time) (recovered
 		return false, true
 	}
 	valid := r.epoch == result.epoch && !r.hard && g.healthFailure.Load()
+	soft := r.soft
 	r.mu.Unlock()
 	if !valid {
 		return false, false
 	}
 	if result.err == nil {
-		g.invalidateIdentities()
+		if !soft || r.hard || g.overflow.Load() {
+			g.invalidateIdentities()
+		}
 	}
 	g.queueMu.Lock()
 	defer g.queueMu.Unlock()
@@ -281,6 +292,7 @@ func (g *Google) finishRecovery(result recoveryResult, now time.Time) (recovered
 func (g *Google) invalidateIdentities() {
 	g.identityEpoch.Add(1)
 	g.listMu.Lock()
+	g.listGen++
 	g.mu.Lock()
 	g.listed = time.Time{}
 	g.list = nil

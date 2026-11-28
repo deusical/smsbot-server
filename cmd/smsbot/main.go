@@ -488,6 +488,11 @@ func (o *options) serve(s *store.Store, v *vault.Vault, sessionPath string) erro
 	}
 	// Push services require a contact for the sending server: its origin.
 	service.Notify.Subject = origin
+	service.Engine.DispatchLog = func(d bot.DispatchDiagnostic) {
+		if b, err := json.Marshal(d); err == nil {
+			fmt.Fprintln(os.Stderr, "Dispatch:", string(b))
+		}
+	}
 	if e = service.Init(); e != nil {
 		return e
 	}

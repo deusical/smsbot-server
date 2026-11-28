@@ -182,7 +182,7 @@ func TestCaptureGapPersistsRepairsAndNeverRunsCommands(t *testing.T) {
 	}
 	jobs, _ := e.Store.Jobs()
 	paused, _ := e.Store.Paused()
-	if len(jobs) != 0 || paused || len(f.Sent) != 0 {
+	if len(jobs) != 0 || paused || f.SentCount() != 0 {
 		t.Fatal("repair affected routing or Live choice")
 	}
 	var raw string

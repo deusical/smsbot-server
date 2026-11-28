@@ -47,6 +47,10 @@ type Google struct {
 	ready             atomic.Bool
 	mu                sync.Mutex
 	listMu            sync.Mutex
+	listGen           uint64
+	listFlightMu      sync.Mutex
+	listFlights       *listConversationsFlight
+	listConversations func(context.Context, *gmproto.ListConversationsRequest) (*gmproto.ListConversationsResponse, error) // offline fault injection; nil in production
 	listed            time.Time
 	list              []Conversation
 	settings          *gmproto.Settings

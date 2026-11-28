@@ -172,9 +172,43 @@ type Tasks struct {
 	statusGen   uint64
 	statusAt    time.Time
 	statusCache []WorkerStatus
+	breakerMu   sync.Mutex
+	failures    map[string]time.Time
 }
 
-const statusCacheTTL = 30 * time.Second
+const (
+	statusCacheTTL               = 30 * time.Second
+	workerCircuitBreakerDuration = 30 * time.Second
+)
+
+func (t *Tasks) recordFailure(worker string) {
+	t.breakerMu.Lock()
+	defer t.breakerMu.Unlock()
+	if t.failures == nil {
+		t.failures = make(map[string]time.Time)
+	}
+	t.failures[worker] = t.clock()
+}
+
+func (t *Tasks) recordSuccess(worker string) {
+	t.breakerMu.Lock()
+	defer t.breakerMu.Unlock()
+	delete(t.failures, worker)
+}
+
+func (t *Tasks) isBroken(worker string) bool {
+	t.breakerMu.Lock()
+	defer t.breakerMu.Unlock()
+	failedAt, ok := t.failures[worker]
+	if !ok {
+		return false
+	}
+	if t.clock().Sub(failedAt) >= workerCircuitBreakerDuration {
+		delete(t.failures, worker)
+		return false
+	}
+	return true
+}
 
 func tokenKey(name string) string { return "worker_token:" + name }
 
@@ -494,10 +528,16 @@ func (t *Tasks) Poll(ctx context.Context, st *TaskState, id, scope string, deadl
 		}
 		st.Worker, st.Waiting = "", 0
 		for _, name := range order(cfg, req.Task, t.Local != nil) {
+			if t.isBroken(name) {
+				continue
+			}
 			if d := workers[name]; d != nil {
 				if tasks, ok := t.capabilities(ctx, d); ok && tasks[req.Task] == req.Version {
+					t.recordSuccess(name)
 					st.Worker = name
 					break
+				} else if !ok {
+					t.recordFailure(name)
 				}
 			}
 		}
@@ -510,7 +550,13 @@ func (t *Tasks) Poll(ctx context.Context, st *TaskState, id, scope string, deadl
 		"inputs": inputs, "settings": req.Settings, "deadline": deadline.Unix(),
 	})
 	if err != nil {
+		t.recordFailure(st.Worker)
 		return status, err
+	}
+	if status.Stage == "waiting_worker" && st.Waiting != 0 && t.clock().Sub(time.UnixMilli(st.Waiting)) >= t.grace() {
+		t.recordFailure(st.Worker)
+	} else if status.Stage != "waiting_worker" {
+		t.recordSuccess(st.Worker)
 	}
 	switch status.Stage {
 	case "waiting_worker":
@@ -553,7 +599,13 @@ func (t *Tasks) File(ctx context.Context, handle string, limit int64) ([]byte, s
 	if d == nil || !ok {
 		return nil, "", taskFailed{"worker_unavailable"}
 	}
-	return d.file(ctx, job, name, limit)
+	data, stage, err := d.file(ctx, job, name, limit)
+	if err != nil {
+		t.recordFailure(w)
+	} else if stage == "complete" {
+		t.recordSuccess(w)
+	}
+	return data, stage, err
 }
 
 // pollTask sends one protocol-4 poll. An unreachable worker is

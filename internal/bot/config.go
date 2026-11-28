@@ -140,6 +140,20 @@ func (c Configuration) Validate() error {
 	return nil
 }
 func (e *Engine) Configuration() (Configuration, error) {
+	e.configMu.RLock()
+	if e.cachedConfig != nil {
+		c := cloneConfig(*e.cachedConfig)
+		e.configMu.RUnlock()
+		return c, nil
+	}
+	e.configMu.RUnlock()
+
+	e.configMu.Lock()
+	defer e.configMu.Unlock()
+	if e.cachedConfig != nil {
+		return cloneConfig(*e.cachedConfig), nil
+	}
+
 	var c Configuration
 	b, err := e.Store.GetSecretSetting("bot_config", "config")
 	if err != nil {
@@ -149,6 +163,8 @@ func (e *Engine) Configuration() (Configuration, error) {
 		c := DefaultConfiguration()
 		var revision int64
 		c.Revision = &revision
+		cloned := cloneConfig(c)
+		e.cachedConfig = &cloned
 		return c, nil
 	}
 	if json.Unmarshal(b, &c) != nil {
@@ -164,7 +180,71 @@ func (e *Engine) Configuration() (Configuration, error) {
 	if err := normalizeCommands(&c); err != nil {
 		return c, err
 	}
-	return c, c.Validate()
+	if err := c.Validate(); err != nil {
+		return c, err
+	}
+	cloned := cloneConfig(c)
+	e.cachedConfig = &cloned
+	return c, nil
+}
+
+func (e *Engine) InvalidateConfig() {
+	e.configMu.Lock()
+	e.cachedConfig = nil
+	e.configMu.Unlock()
+}
+
+func cloneConfig(c Configuration) Configuration {
+	out := c
+	if c.Revision != nil {
+		rev := *c.Revision
+		out.Revision = &rev
+	}
+	if c.Settings.Favorites != nil {
+		out.Settings.Favorites = append([]string{}, c.Settings.Favorites...)
+	}
+	if c.Settings.ModelGeneration != nil {
+		out.Settings.ModelGeneration = make(map[string]Generation, len(c.Settings.ModelGeneration))
+		for k, v := range c.Settings.ModelGeneration {
+			if v.Temperature != nil {
+				t := *v.Temperature
+				v.Temperature = &t
+			}
+			out.Settings.ModelGeneration[k] = v
+		}
+	}
+	if c.Commands != nil {
+		out.Commands = make([]Command, len(c.Commands))
+		for i, cmd := range c.Commands {
+			if cmd.Settings != nil {
+				cmd.Settings = append(json.RawMessage{}, cmd.Settings...)
+			}
+			if cmd.AllowedConversations != nil {
+				cmd.AllowedConversations = append([]string{}, cmd.AllowedConversations...)
+			}
+			if cmd.Generation != nil {
+				g := *cmd.Generation
+				if g.Temperature != nil {
+					t := *g.Temperature
+					g.Temperature = &t
+				}
+				cmd.Generation = &g
+			}
+			if cmd.Tools != nil {
+				t := *cmd.Tools
+				cmd.Tools = &t
+			}
+			if cmd.Pipeline != nil {
+				pl := clonePipeline(*cmd.Pipeline)
+				cmd.Pipeline = &pl
+			}
+			out.Commands[i] = cmd
+		}
+	}
+	if c.Profiles != nil {
+		out.Profiles = append([]Profile{}, c.Profiles...)
+	}
+	return out
 }
 func (e *Engine) SetConfiguration(c Configuration) error {
 	if c.Settings.AIPhotoMaxMB == 0 {
@@ -245,7 +325,14 @@ func (e *Engine) SetConfiguration(c Configuration) error {
 	if err != nil {
 		return err
 	}
-	return e.Store.SetSecretSetting("bot_config", "config", b)
+	if err := e.Store.SetSecretSetting("bot_config", "config", b); err != nil {
+		return err
+	}
+	e.configMu.Lock()
+	cloned := cloneConfig(c)
+	e.cachedConfig = &cloned
+	e.configMu.Unlock()
+	return nil
 }
 func quiet(s Settings, now time.Time) bool {
 	if !s.QuietEnabled {
