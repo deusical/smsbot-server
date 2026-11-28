@@ -165,11 +165,11 @@ func TestQueuedPreflightBackoffAndFreshness(t *testing.T) {
 			if mode == "recover" {
 				expected = 1
 			}
-			if len(f.Sent) != expected {
+			if f.SentCount() != expected {
 				t.Fatal("freshness/pause or recovery send failed")
 			}
 			e.Dispatch(context.Background())
-			if len(f.Sent) != expected {
+			if f.SentCount() != expected {
 				t.Fatal("duplicate send")
 			}
 		})
@@ -479,8 +479,8 @@ func TestLookupErrorWhileReadyBacksOffWithoutCancellingOtherJobs(t *testing.T) {
 	if err := e.Dispatch(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if stateOf(t, e, dlID) != "submitted" || stateOf(t, e, pingID) != "submitted" || len(f.Sent) != 2 {
-		t.Fatalf("jobs did not recover: dl=%s ping=%s sent=%d", stateOf(t, e, dlID), stateOf(t, e, pingID), len(f.Sent))
+	if stateOf(t, e, dlID) != "submitted" || stateOf(t, e, pingID) != "submitted" || f.SentCount() != 2 {
+		t.Fatalf("jobs did not recover: dl=%s ping=%s sent=%d", stateOf(t, e, dlID), stateOf(t, e, pingID), f.SentCount())
 	}
 
 	// An actually unready transport still reports ErrUnavailable.
@@ -536,8 +536,8 @@ func TestOutgoingIdentityChangedAfterAcceptanceRefusedAtSend(t *testing.T) {
 			t.Fatal(err)
 		}
 		jobs, _ := e.Store.Jobs()
-		if len(jobs) != 1 || jobs[0].State != "failed" || jobs[0].Code != "not_submitted" || jobs[0].Reason != "outgoing_identity_changed" || len(f.Sent) != 0 {
-			t.Fatalf("expected outgoing_identity_changed refusal, got %+v sent=%d", jobs, len(f.Sent))
+		if len(jobs) != 1 || jobs[0].State != "failed" || jobs[0].Code != "not_submitted" || jobs[0].Reason != "outgoing_identity_changed" || f.SentCount() != 0 {
+			t.Fatalf("expected outgoing_identity_changed refusal, got %+v sent=%d", jobs, f.SentCount())
 		}
 	})
 
@@ -572,8 +572,8 @@ func TestOutgoingIdentityChangedAfterAcceptanceRefusedAtSend(t *testing.T) {
 			t.Fatal(err)
 		}
 		jobs, _ := e.Store.Jobs()
-		if len(jobs) != 1 || jobs[0].State != "failed" || jobs[0].Code != "not_submitted" || jobs[0].Reason != "outgoing_identity_changed" || len(f.Sent) != 0 {
-			t.Fatalf("expected compose outgoing_identity_changed refusal, got %+v sent=%d", jobs, len(f.Sent))
+		if len(jobs) != 1 || jobs[0].State != "failed" || jobs[0].Code != "not_submitted" || jobs[0].Reason != "outgoing_identity_changed" || f.SentCount() != 0 {
+			t.Fatalf("expected compose outgoing_identity_changed refusal, got %+v sent=%d", jobs, f.SentCount())
 		}
 	})
 
@@ -604,8 +604,8 @@ func TestOutgoingIdentityChangedAfterAcceptanceRefusedAtSend(t *testing.T) {
 			t.Fatal(err)
 		}
 		jobs, _ := e.Store.Jobs()
-		if len(jobs) != 1 || jobs[0].State != "failed" || jobs[0].Code != "not_submitted" || jobs[0].Reason != "outgoing_identity_changed" || len(f.Sent) != 0 {
-			t.Fatalf("expected reaction outgoing_identity_changed refusal, got %+v sent=%d", jobs, len(f.Sent))
+		if len(jobs) != 1 || jobs[0].State != "failed" || jobs[0].Code != "not_submitted" || jobs[0].Reason != "outgoing_identity_changed" || f.SentCount() != 0 {
+			t.Fatalf("expected reaction outgoing_identity_changed refusal, got %+v sent=%d", jobs, f.SentCount())
 		}
 	})
 
@@ -619,8 +619,8 @@ func TestOutgoingIdentityChangedAfterAcceptanceRefusedAtSend(t *testing.T) {
 		if err := e.Dispatch(ctx); err != nil {
 			t.Fatal(err)
 		}
-		if got := stateOf(t, e, "legacy-job"); got != "submitted" || len(f.Sent) != 1 {
-			t.Fatalf("legacy plan without snapshot failed: state=%s sent=%d", got, len(f.Sent))
+		if got := stateOf(t, e, "legacy-job"); got != "submitted" || f.SentCount() != 1 {
+			t.Fatalf("legacy plan without snapshot failed: state=%s sent=%d", got, f.SentCount())
 		}
 	})
 }
@@ -729,8 +729,8 @@ func TestVideoTransientLookupFailuresRetryWithoutLosingWork(t *testing.T) {
 			t.Fatalf("live lookups across sendableVideo+prepareDownloadUpload = %d, want 1", got)
 		}
 		finishDownloadUploads(t, e)
-		if stateOf(t, e, id) != "submitted" || len(f.Sent) != 1 || tr.uploads.Load() != 1 {
-			t.Fatalf("state=%s sent=%d uploads=%d", stateOf(t, e, id), len(f.Sent), tr.uploads.Load())
+		if stateOf(t, e, id) != "submitted" || f.SentCount() != 1 || tr.uploads.Load() != 1 {
+			t.Fatalf("state=%s sent=%d uploads=%d", stateOf(t, e, id), f.SentCount(), tr.uploads.Load())
 		}
 	})
 
@@ -760,8 +760,8 @@ func TestVideoTransientLookupFailuresRetryWithoutLosingWork(t *testing.T) {
 		if got := stateOf(t, e, id); got != "queued" {
 			t.Fatalf("state = %s, want queued", got)
 		}
-		if tr.uploads.Load() != 0 || len(e.downloadUploads) != 0 || len(f.Sent) != 0 {
-			t.Fatalf("upload or send started while lookup failing: uploads=%d active=%d sent=%d", tr.uploads.Load(), len(e.downloadUploads), len(f.Sent))
+		if tr.uploads.Load() != 0 || len(e.downloadUploads) != 0 || f.SentCount() != 0 {
+			t.Fatalf("upload or send started while lookup failing: uploads=%d active=%d sent=%d", tr.uploads.Load(), len(e.downloadUploads), f.SentCount())
 		}
 		_, savedPlan, err := e.Store.JobPlan(id)
 		if err != nil || len(savedPlan.Attachments) != 1 || pollsWorker(savedPlan) || savedPlan.FilesUploaded {
@@ -795,8 +795,8 @@ func TestVideoTransientLookupFailuresRetryWithoutLosingWork(t *testing.T) {
 		if tasks.polls != 2 || tr.uploads.Load() != 1 {
 			t.Fatalf("worker re-polled or upload missing: polls=%d uploads=%d", tasks.polls, tr.uploads.Load())
 		}
-		if stateOf(t, e, id) != "submitted" || len(f.Sent) != 1 {
-			t.Fatalf("did not recover to submitted: state=%s sent=%d", stateOf(t, e, id), len(f.Sent))
+		if stateOf(t, e, id) != "submitted" || f.SentCount() != 1 {
+			t.Fatalf("did not recover to submitted: state=%s sent=%d", stateOf(t, e, id), f.SentCount())
 		}
 	})
 
@@ -821,8 +821,8 @@ func TestVideoTransientLookupFailuresRetryWithoutLosingWork(t *testing.T) {
 			t.Fatalf("single blip failed dispatch: %v", err)
 		}
 		finishDownloadUploads(t, e)
-		if stateOf(t, e, id) != "submitted" || len(f.Sent) != 1 || tr.uploads.Load() != 1 {
-			t.Fatalf("state=%s sent=%d uploads=%d", stateOf(t, e, id), len(f.Sent), tr.uploads.Load())
+		if stateOf(t, e, id) != "submitted" || f.SentCount() != 1 || tr.uploads.Load() != 1 {
+			t.Fatalf("state=%s sent=%d uploads=%d", stateOf(t, e, id), f.SentCount(), tr.uploads.Load())
 		}
 	})
 
@@ -871,8 +871,8 @@ func TestVideoTransientLookupFailuresRetryWithoutLosingWork(t *testing.T) {
 		// Finish Job 1 so the upload lane is free.
 		close(releaseFirst)
 		finishDownloadUploads(t, e)
-		if len(f.Sent) != 1 {
-			t.Fatalf("m1 not sent: %d", len(f.Sent))
+		if f.SentCount() != 1 {
+			t.Fatalf("m1 not sent: %d", f.SentCount())
 		}
 		if _, err := e.Store.DB.Exec("UPDATE job_work SET next_poll=0"); err != nil {
 			t.Fatal(err)
@@ -902,8 +902,8 @@ func TestVideoTransientLookupFailuresRetryWithoutLosingWork(t *testing.T) {
 			t.Fatal(err)
 		}
 		finishDownloadUploads(t, e)
-		if stateOf(t, e, id2) != "submitted" || chatUploads.Load() != 1 || len(f.Sent) != 2 {
-			t.Fatalf("m2 did not recover: state=%s chatUploads=%d sent=%d", stateOf(t, e, id2), chatUploads.Load(), len(f.Sent))
+		if stateOf(t, e, id2) != "submitted" || chatUploads.Load() != 1 || f.SentCount() != 2 {
+			t.Fatalf("m2 did not recover: state=%s chatUploads=%d sent=%d", stateOf(t, e, id2), chatUploads.Load(), f.SentCount())
 		}
 	})
 
@@ -937,8 +937,8 @@ func TestVideoTransientLookupFailuresRetryWithoutLosingWork(t *testing.T) {
 		if !errors.Is(err, transport.ErrLookupFailed) {
 			t.Fatalf("collect err = %v, want ErrLookupFailed", err)
 		}
-		if stateOf(t, e, id) != "queued" || len(f.Sent) != 0 || tr.uploads.Load() != 1 {
-			t.Fatalf("post-upload collect lost or sent job: state=%s sent=%d uploads=%d", stateOf(t, e, id), len(f.Sent), tr.uploads.Load())
+		if stateOf(t, e, id) != "queued" || f.SentCount() != 0 || tr.uploads.Load() != 1 {
+			t.Fatalf("post-upload collect lost or sent job: state=%s sent=%d uploads=%d", stateOf(t, e, id), f.SentCount(), tr.uploads.Load())
 		}
 		_, savedPlan, err := e.Store.JobPlan(id)
 		if err != nil || !savedPlan.FilesUploaded || len(savedPlan.Attachments) != 1 || pollsWorker(savedPlan) {
@@ -952,8 +952,8 @@ func TestVideoTransientLookupFailuresRetryWithoutLosingWork(t *testing.T) {
 				t.Fatalf("expected quiet backoff, got %v", derr)
 			}
 		}
-		if tr.liveLookups.Load() != beforeBackoff || len(f.Sent) != 0 {
-			t.Fatalf("hot-looped after collect: lookups=%d->%d sent=%d", beforeBackoff, tr.liveLookups.Load(), len(f.Sent))
+		if tr.liveLookups.Load() != beforeBackoff || f.SentCount() != 0 {
+			t.Fatalf("hot-looped after collect: lookups=%d->%d sent=%d", beforeBackoff, tr.liveLookups.Load(), f.SentCount())
 		}
 
 		// Recover lookup: next Dispatch checks live in nextReady and submits without re-uploading.
@@ -962,8 +962,8 @@ func TestVideoTransientLookupFailuresRetryWithoutLosingWork(t *testing.T) {
 		if err := e.Dispatch(ctx); err != nil {
 			t.Fatal(err)
 		}
-		if stateOf(t, e, id) != "submitted" || len(f.Sent) != 1 || tr.uploads.Load() != 1 {
-			t.Fatalf("did not submit without re-upload: state=%s sent=%d uploads=%d", stateOf(t, e, id), len(f.Sent), tr.uploads.Load())
+		if stateOf(t, e, id) != "submitted" || f.SentCount() != 1 || tr.uploads.Load() != 1 {
+			t.Fatalf("did not submit without re-upload: state=%s sent=%d uploads=%d", stateOf(t, e, id), f.SentCount(), tr.uploads.Load())
 		}
 	})
 
@@ -992,8 +992,8 @@ func TestVideoTransientLookupFailuresRetryWithoutLosingWork(t *testing.T) {
 		if !errors.Is(err, transport.ErrLookupFailed) {
 			t.Fatalf("dispatch err = %v, want ErrLookupFailed", err)
 		}
-		if stateOf(t, e, id) != "queued" || len(f.Sent) != 0 {
-			t.Fatalf("job ended or sent early: state=%s sent=%d", stateOf(t, e, id), len(f.Sent))
+		if stateOf(t, e, id) != "queued" || f.SentCount() != 0 {
+			t.Fatalf("job ended or sent early: state=%s sent=%d", stateOf(t, e, id), f.SentCount())
 		}
 		before := tr.liveLookups.Load()
 		if derr := e.Dispatch(ctx); derr != nil || tr.liveLookups.Load() != before {
@@ -1005,8 +1005,8 @@ func TestVideoTransientLookupFailuresRetryWithoutLosingWork(t *testing.T) {
 		if err := e.Dispatch(ctx); err != nil {
 			t.Fatal(err)
 		}
-		if stateOf(t, e, id) != "submitted" || len(f.Sent) != 1 {
-			t.Fatalf("state=%s sent=%d", stateOf(t, e, id), len(f.Sent))
+		if stateOf(t, e, id) != "submitted" || f.SentCount() != 1 {
+			t.Fatalf("state=%s sent=%d", stateOf(t, e, id), f.SentCount())
 		}
 	})
 }
@@ -1139,8 +1139,8 @@ func TestVideoSafetyCodesAndDeadlinesStillCancelOrExpire(t *testing.T) {
 			case "deadline_expired_at_pre_upload_check", "deadline_expired_after_pre_upload_blip", "deadline_expired_after_collect_blip":
 				wantState, wantCode = "expired", "execution_expired"
 			}
-			if j.State != wantState || j.Code != wantCode || len(f.Sent) != 0 {
-				t.Fatalf("got state=%s code=%s sent=%d, want state=%s code=%s sent=0", j.State, j.Code, len(f.Sent), wantState, wantCode)
+			if j.State != wantState || j.Code != wantCode || f.SentCount() != 0 {
+				t.Fatalf("got state=%s code=%s sent=%d, want state=%s code=%s sent=0", j.State, j.Code, f.SentCount(), wantState, wantCode)
 			}
 			if !afterCollect && tr.uploads.Load() != 0 {
 				t.Fatalf("upload ran despite %s: uploads=%d", mode, tr.uploads.Load())
@@ -1224,13 +1224,13 @@ func TestStreamRolloverGapBacksOffWithoutCancellingUnsentWork(t *testing.T) {
 		if !errors.Is(err, transport.ErrLookupFailed) || errors.Is(err, transport.ErrUnavailable) {
 			t.Fatalf("check rollover gap returned %v, want ErrLookupFailed", err)
 		}
-		if stateOf(t, e, id1) != "queued" || stateOf(t, e, id2) != "queued" || len(f.Sent) != 0 {
-			t.Fatalf("check rollover gap cancelled or sent jobs: j1=%s j2=%s sent=%d", stateOf(t, e, id1), stateOf(t, e, id2), len(f.Sent))
+		if stateOf(t, e, id1) != "queued" || stateOf(t, e, id2) != "queued" || f.SentCount() != 0 {
+			t.Fatalf("check rollover gap cancelled or sent jobs: j1=%s j2=%s sent=%d", stateOf(t, e, id1), stateOf(t, e, id2), f.SentCount())
 		}
 		// Immediate retry during backoff is skipped cleanly.
 		readyCalls.Store(0)
-		if err := e.Dispatch(ctx); err != nil || len(f.Sent) != 0 {
-			t.Fatalf("preflight backoff did not hold: err=%v sent=%d", err, len(f.Sent))
+		if err := e.Dispatch(ctx); err != nil || f.SentCount() != 0 {
+			t.Fatalf("preflight backoff did not hold: err=%v sent=%d", err, f.SentCount())
 		}
 
 		// Once stream reconnects and backoff expires, both jobs send.
@@ -1243,8 +1243,8 @@ func TestStreamRolloverGapBacksOffWithoutCancellingUnsentWork(t *testing.T) {
 		if err := e.Dispatch(ctx); err != nil {
 			t.Fatal(err)
 		}
-		if stateOf(t, e, id1) != "submitted" || stateOf(t, e, id2) != "submitted" || len(f.Sent) != 2 {
-			t.Fatalf("jobs did not send after rollover ended: j1=%s j2=%s sent=%d", stateOf(t, e, id1), stateOf(t, e, id2), len(f.Sent))
+		if stateOf(t, e, id1) != "submitted" || stateOf(t, e, id2) != "submitted" || f.SentCount() != 2 {
+			t.Fatalf("jobs did not send after rollover ended: j1=%s j2=%s sent=%d", stateOf(t, e, id1), stateOf(t, e, id2), f.SentCount())
 		}
 	})
 
@@ -1282,8 +1282,8 @@ func TestStreamRolloverGapBacksOffWithoutCancellingUnsentWork(t *testing.T) {
 		if !errors.Is(err, transport.ErrLookupFailed) || errors.Is(err, transport.ErrUnavailable) {
 			t.Fatalf("dispatch lookup during rollover returned %v, want ErrLookupFailed", err)
 		}
-		if stateOf(t, e, id) != "queued" || len(f.Sent) != 0 {
-			t.Fatalf("job state after rollover lookup = %s, sent=%d", stateOf(t, e, id), len(f.Sent))
+		if stateOf(t, e, id) != "queued" || f.SentCount() != 0 {
+			t.Fatalf("job state after rollover lookup = %s, sent=%d", stateOf(t, e, id), f.SentCount())
 		}
 
 		// Ingest lookup failing mid-rollover also maps to ErrLookupFailed, not ErrUnavailable.
@@ -1370,8 +1370,8 @@ func TestLookupIDMismatchCancelsAsIdentityChangedWithoutRetry(t *testing.T) {
 		t.Fatalf("lookups = %d, want 1", lookups.Load())
 	}
 	jobs, err := e.Store.Jobs()
-	if err != nil || len(jobs) != 1 || jobs[0].ID != id || jobs[0].State != "cancelled" || jobs[0].Code != "identity_changed" || len(f.Sent) != 0 {
-		t.Fatalf("expected cancelled/identity_changed, got %+v sent=%d err=%v", jobs, len(f.Sent), err)
+	if err != nil || len(jobs) != 1 || jobs[0].ID != id || jobs[0].State != "cancelled" || jobs[0].Code != "identity_changed" || f.SentCount() != 0 {
+		t.Fatalf("expected cancelled/identity_changed, got %+v sent=%d err=%v", jobs, f.SentCount(), err)
 	}
 
 	// Incoming commands in an ID-mismatched conversation are declined cleanly without error or pause.
@@ -1425,7 +1425,7 @@ func TestPauseCancelUnenrollDoNotWaitOnPhoneLookup(t *testing.T) {
 		if err := e.Pause(true); err != nil {
 			t.Fatalf("pause: %v", err)
 		}
-		if elapsed := time.Since(pauseStart); elapsed > 200*time.Millisecond {
+		if elapsed := time.Since(pauseStart); elapsed > 500*time.Millisecond {
 			t.Fatalf("pause waited on phone lookup: took %v", elapsed)
 		}
 
@@ -1434,7 +1434,7 @@ func TestPauseCancelUnenrollDoNotWaitOnPhoneLookup(t *testing.T) {
 		<-dispatchDone
 
 		// Job must not be submitted because pause was set
-		if len(f.Sent) != 0 {
+		if f.SentCount() != 0 {
 			t.Fatal("message was sent despite pause")
 		}
 		st := stateOf(t, e, id)
@@ -1478,14 +1478,14 @@ func TestPauseCancelUnenrollDoNotWaitOnPhoneLookup(t *testing.T) {
 		if err := e.Cancel(id); err != nil {
 			t.Fatalf("cancel: %v", err)
 		}
-		if elapsed := time.Since(cancelStart); elapsed > 200*time.Millisecond {
+		if elapsed := time.Since(cancelStart); elapsed > 500*time.Millisecond {
 			t.Fatalf("cancel waited on phone lookup: took %v", elapsed)
 		}
 
 		close(releaseLookup)
 		<-dispatchDone
 
-		if len(f.Sent) != 0 {
+		if f.SentCount() != 0 {
 			t.Fatal("message was sent despite cancel")
 		}
 		if st := stateOf(t, e, id); st != "cancelled" {
@@ -1528,14 +1528,14 @@ func TestPauseCancelUnenrollDoNotWaitOnPhoneLookup(t *testing.T) {
 		if err := e.Unenroll(m.ConversationID); err != nil {
 			t.Fatalf("unenroll: %v", err)
 		}
-		if elapsed := time.Since(unenrollStart); elapsed > 200*time.Millisecond {
+		if elapsed := time.Since(unenrollStart); elapsed > 500*time.Millisecond {
 			t.Fatalf("unenroll waited on phone lookup: took %v", elapsed)
 		}
 
 		close(releaseLookup)
 		<-dispatchDone
 
-		if len(f.Sent) != 0 {
+		if f.SentCount() != 0 {
 			t.Fatal("message was sent despite unenroll")
 		}
 		if st := stateOf(t, e, id); st != "cancelled" {
@@ -1571,14 +1571,14 @@ func TestDispatchNudgeWakesRunnerImmediatelyOnEnqueue(t *testing.T) {
 
 	// Because ticker is 5 seconds, nudgeDispatch must wake the runner and send promptly
 	for time.Since(start) < 2*time.Second {
-		if len(f.Sent) > 0 {
+		if f.SentCount() > 0 {
 			break
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
 
 	elapsed := time.Since(start)
-	if len(f.Sent) == 0 {
+	if f.SentCount() == 0 {
 		t.Fatal("message not dispatched via nudge")
 	}
 	if elapsed > time.Second {

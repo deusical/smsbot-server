@@ -35,8 +35,8 @@ func TestTheOwnerRepliesAndReactsInAGroupAsTheyAreShownIt(t *testing.T) {
 	if _, p, _ := e.Store.JobPlan(id); p.ReplyWireTarget != m.ID || p.Roster != roster {
 		t.Fatalf("plan: %+v", p)
 	}
-	if err = e.Dispatch(ctx); err != nil || len(f.Sent) != 1 {
-		t.Fatalf("reply not sent: %v %v", f.Sent, err)
+	if err = e.Dispatch(ctx); err != nil || f.SentCount() != 1 {
+		t.Fatalf("reply not sent: %v %v", f.SentSnapshot(), err)
 	}
 
 	// A reaction needs the roster the owner saw, like a message does.
@@ -78,8 +78,8 @@ func TestAGroupThatChangedBeforeAReactionGoesGetsNoReaction(t *testing.T) {
 	if err = e.Dispatch(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if j, _, _ := e.Store.JobPlan(rid); j.State != "cancelled" || j.Code != "identity_changed" || len(f.Sent) != 0 {
-		t.Fatalf("job %s %s, sent %v", j.State, j.Code, f.Sent)
+	if j, _, _ := e.Store.JobPlan(rid); j.State != "cancelled" || j.Code != "identity_changed" || f.SentCount() != 0 {
+		t.Fatalf("job %s %s, sent %v", j.State, j.Code, f.SentSnapshot())
 	}
 	// Told to react to the old people, the engine refuses outright.
 	if _, err = e.QueueReactionIn(ctx, "demo-group", roster, target, "❤️", "add", a.Version, "group-reaction-request-3"); err == nil || err.Error() != "group_changed" {

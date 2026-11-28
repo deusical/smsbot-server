@@ -47,8 +47,8 @@ func TestAnEnrolledMemberRunsCommandsInAGroupAndTheGroupSeesTheAnswer(t *testing
 	if err = e.Dispatch(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if len(f.Sent) != 1 || stateOf(t, e, store.Hash("demo-group\x00group-ping-1")) != "submitted" {
-		t.Fatalf("sent %v", f.Sent)
+	if f.SentCount() != 1 || stateOf(t, e, store.Hash("demo-group\x00group-ping-1")) != "submitted" {
+		t.Fatalf("sent %v", f.SentSnapshot())
 	}
 }
 
@@ -71,8 +71,8 @@ func TestOnlyEnrolledMembersAndNotTheOwnerWithoutTheSettingRunCommandsInAGroup(t
 			t.Errorf("%s: accepted=%t err=%v", name, ok, err)
 		}
 	}
-	if err := e.Dispatch(ctx); err != nil || len(f.Sent) != 0 {
-		t.Fatalf("something was sent: %v %v", f.Sent, err)
+	if err := e.Dispatch(ctx); err != nil || f.SentCount() != 0 {
+		t.Fatalf("something was sent: %v %v", f.SentSnapshot(), err)
 	}
 }
 
@@ -98,8 +98,8 @@ func TestTheOwnerRunsCommandsInAnyGroupTheyCanSendTo(t *testing.T) {
 	if _, p, _ := e.Store.JobPlan(id); p.Participant != store.OwnerMember || p.Roster != roster || !p.Owner || p.MemberOf() != store.OwnerMember {
 		t.Fatalf("plan: %+v", p)
 	}
-	if err := e.Dispatch(ctx); err != nil || len(f.Sent) != 1 || stateOf(t, e, id) != "submitted" {
-		t.Fatalf("sent %v %v", f.Sent, err)
+	if err := e.Dispatch(ctx); err != nil || f.SentCount() != 1 || stateOf(t, e, id) != "submitted" {
+		t.Fatalf("sent %v %v", f.SentSnapshot(), err)
 	}
 	// The bot's own answer comes back as an outgoing message and runs nothing.
 	if ok, err := e.Accept(ctx, ownerGroupCommand("group-own-echo", "pong")); err != nil || ok {
@@ -110,8 +110,8 @@ func TestTheOwnerRunsCommandsInAnyGroupTheyCanSendTo(t *testing.T) {
 		t.Fatalf("not queued: %t %v", ok, err)
 	}
 	f.SetGroupMembers("demo-member-a", "demo-member-b", "demo-member-c")
-	if err := e.Dispatch(ctx); err != nil || len(f.Sent) != 1 {
-		t.Fatalf("sent to the new people: %v %v", f.Sent, err)
+	if err := e.Dispatch(ctx); err != nil || f.SentCount() != 1 {
+		t.Fatalf("sent to the new people: %v %v", f.SentSnapshot(), err)
 	}
 	if j, _, _ := e.Store.JobPlan(store.Hash("demo-group\x00group-own-3")); j.State != "cancelled" || j.Code != "identity_changed" {
 		t.Fatalf("job: %s %s", j.State, j.Code)
@@ -141,8 +141,8 @@ func TestTheBotGoesSilentInAGroupWhosePeopleChangedUntilTheOwnerApproves(t *test
 	if err = e.Dispatch(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if j, _, _ := e.Store.JobPlan(store.Hash("demo-group\x00group-ping-2")); j.State != "cancelled" || j.Code != "identity_changed" || len(f.Sent) != 0 {
-		t.Fatalf("queued answer: %s %s sent %v", j.State, j.Code, f.Sent)
+	if j, _, _ := e.Store.JobPlan(store.Hash("demo-group\x00group-ping-2")); j.State != "cancelled" || j.Code != "identity_changed" || f.SentCount() != 0 {
+		t.Fatalf("queued answer: %s %s sent %v", j.State, j.Code, f.SentSnapshot())
 	}
 	// New commands are ignored while the roster is not the approved one.
 	if ok, err := e.Accept(ctx, groupCommand("group-ping-3", "demo-member-a", "!ping")); err != nil || ok {
@@ -197,8 +197,8 @@ func TestStoppingOneMemberCancelsWaitingWorkAndOthersKeepTheirAccess(t *testing.
 	if err := e.UnenrollMember("demo-group", "demo-member-a"); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.Dispatch(ctx); err != nil || len(f.Sent) != 0 {
-		t.Fatalf("sent after unenrolling: %v %v", f.Sent, err)
+	if err := e.Dispatch(ctx); err != nil || f.SentCount() != 0 {
+		t.Fatalf("sent after unenrolling: %v %v", f.SentSnapshot(), err)
 	}
 	if ok, _ := e.Accept(ctx, groupCommand("group-ping-6", "demo-member-a", "!ping")); ok {
 		t.Fatal("a removed member still ran a command")

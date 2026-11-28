@@ -48,8 +48,8 @@ func TestTheOwnerSendsToAGroupAsTheyAreShownIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	j, _, _ := e.Store.JobPlan(id)
-	if j.State != "submitted" || len(f.Sent) != 1 {
-		t.Fatalf("state %s, sent %v", j.State, f.Sent)
+	if j.State != "submitted" || f.SentCount() != 1 {
+		t.Fatalf("state %s, sent %v", j.State, f.SentSnapshot())
 	}
 }
 
@@ -71,8 +71,8 @@ func TestASendToAGroupNeedsTheRosterTheOwnerSawAndNothingElse(t *testing.T) {
 	if _, err := e.ComposeInboxTo(ctx, "demo-group", roster, "hello", "group-request-late-0001", nil); err == nil || err.Error() != "group_changed" {
 		t.Errorf("stale roster: %v", err)
 	}
-	if jobCount(t, e) != 0 || len(f.Sent) != 0 {
-		t.Fatalf("something was queued or sent: %d jobs, %v", jobCount(t, e), f.Sent)
+	if jobCount(t, e) != 0 || f.SentCount() != 0 {
+		t.Fatalf("something was queued or sent: %d jobs, %v", jobCount(t, e), f.SentSnapshot())
 	}
 }
 
@@ -89,8 +89,8 @@ func TestAQueuedGroupSendIsCancelledIfThePeopleChange(t *testing.T) {
 		t.Fatal(err)
 	}
 	j, _, _ := e.Store.JobPlan(id)
-	if j.State != "cancelled" || j.Code != "identity_changed" || len(f.Sent) != 0 {
-		t.Fatalf("state %s code %s sent %v", j.State, j.Code, f.Sent)
+	if j.State != "cancelled" || j.Code != "identity_changed" || f.SentCount() != 0 {
+		t.Fatalf("state %s code %s sent %v", j.State, j.Code, f.SentSnapshot())
 	}
 }
 
@@ -130,7 +130,7 @@ func TestTheBotStillNeverActsInAGroup(t *testing.T) {
 	if ok, err := e.Receive(ctx, m); err != nil || ok {
 		t.Fatalf("a command in a group: %t %v", ok, err)
 	}
-	if len(f.Sent) != 0 {
-		t.Fatalf("bot sent %v", f.Sent)
+	if f.SentCount() != 0 {
+		t.Fatalf("bot sent %v", f.SentSnapshot())
 	}
 }

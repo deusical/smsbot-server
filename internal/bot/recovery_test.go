@@ -53,7 +53,7 @@ func TestConnectionInterruptedPreservesChoiceAndNeverRetriesUncertain(t *testing
 		if err := e.Dispatch(context.Background()); err != nil {
 			t.Fatal(err)
 		}
-		if len(f.Sent) != 0 {
+		if f.SentCount() != 0 {
 			t.Fatal("old or uncertain work replayed")
 		}
 		if !paused {
@@ -65,7 +65,7 @@ func TestConnectionInterruptedPreservesChoiceAndNeverRetriesUncertain(t *testing
 			if err := e.Dispatch(context.Background()); err != nil {
 				t.Fatal(err)
 			}
-			if len(f.Sent) != 1 {
+			if f.SentCount() != 1 {
 				t.Fatal("fresh command not submitted")
 			}
 		}
@@ -116,7 +116,7 @@ func TestConnectionInterruptionCancelsActiveGeneration(t *testing.T) {
 	if err != nil || paused {
 		t.Fatal("interruption changed Live")
 	}
-	if stateOf(t, e, id) != "cancelled" || len(f.Sent) != 0 {
+	if stateOf(t, e, id) != "cancelled" || f.SentCount() != 0 {
 		t.Fatal("old generation submitted")
 	}
 }
@@ -156,7 +156,7 @@ func TestConnectionInterruptionBlocksUploadCompletion(t *testing.T) {
 	if err != nil || paused {
 		t.Fatal("interruption changed Live")
 	}
-	if stateOf(t, e, id) != "cancelled" || len(f.Sent) != 0 {
+	if stateOf(t, e, id) != "cancelled" || f.SentCount() != 0 {
 		t.Fatal("old upload submitted")
 	}
 }

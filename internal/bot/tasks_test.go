@@ -351,7 +351,7 @@ func runTaskVideo(t *testing.T, tasks *Tasks, between func()) (*Engine, int, str
 		}
 		time.Sleep(2 * time.Millisecond)
 	}
-	return e, len(f.Sent), id
+	return e, f.SentCount(), id
 }
 
 func TestVideoCommandRunsAsTasksOnTheLaptop(t *testing.T) {

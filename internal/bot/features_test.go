@@ -84,7 +84,7 @@ func TestFixtureAIRequiresNoKeyAndIsOffline(t *testing.T) {
 	if err := e.Dispatch(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if stateOf(t, e, id) != "submitted" || len(f.Sent) != 1 {
+	if stateOf(t, e, id) != "submitted" || f.SentCount() != 1 {
 		t.Fatal("fixture AI did not submit synthetic answer")
 	}
 	if _, ok := e.Provider.(SimulatedProvider); !ok {
@@ -157,7 +157,7 @@ func TestPauseCancelsGenerationWithoutWaiting(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("generation did not cancel")
 	}
-	if stateOf(t, e, id) != "cancelled" || len(f.Sent) != 0 {
+	if stateOf(t, e, id) != "cancelled" || f.SentCount() != 0 {
 		t.Fatal("cancelled generation was sent")
 	}
 }
@@ -210,7 +210,7 @@ func TestNewApprovalAfterGenerationDoesNotRegenerate(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
-	if stateOf(t, e, id) != "awaiting_approval" || len(f.Sent) != 0 {
+	if stateOf(t, e, id) != "awaiting_approval" || f.SentCount() != 0 {
 		t.Fatal("new approval bypassed")
 	}
 	if err := e.Approve(id); err != nil {
@@ -219,7 +219,7 @@ func TestNewApprovalAfterGenerationDoesNotRegenerate(t *testing.T) {
 	if err := e.Dispatch(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if p.calls.Load() != 1 || stateOf(t, e, id) != "submitted" || len(f.Sent) != 1 {
+	if p.calls.Load() != 1 || stateOf(t, e, id) != "submitted" || f.SentCount() != 1 {
 		t.Fatal("approved saved answer regenerated or not sent")
 	}
 }
@@ -243,7 +243,7 @@ func TestUnknownCostBlocksNextAIRequest(t *testing.T) {
 	if err := e.Dispatch(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if p.calls.Load() != 1 || len(f.Sent) != 1 {
+	if p.calls.Load() != 1 || f.SentCount() != 1 {
 		t.Fatal("unknown-cost budget was bypassed")
 	}
 }
@@ -256,7 +256,7 @@ func TestApprovalExpiryAndRecipePreview(t *testing.T) {
 	if err := e.Dispatch(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if len(f.Sent) != 0 {
+	if f.SentCount() != 0 {
 		t.Fatal("approval bypassed")
 	}
 	e.now = func() time.Time { return time.Now().Add(3 * time.Minute) }
@@ -382,7 +382,7 @@ func TestProviderFailureNeverSubmits(t *testing.T) {
 		t.Fatal(err)
 	}
 	jobs, _ := e.Store.Jobs()
-	if stateOf(t, e, id) != "failed" || jobs[0].Code != "provider_failed" || len(f.Sent) != 0 {
+	if stateOf(t, e, id) != "failed" || jobs[0].Code != "provider_failed" || f.SentCount() != 0 {
 		t.Fatal("provider error leaked or sent")
 	}
 }

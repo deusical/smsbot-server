@@ -52,7 +52,7 @@ func TestReplyProtocolAndIntentIdentity(t *testing.T) {
 	if err = e.Dispatch(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if len(f.Sent) != 1 {
+	if f.SentCount() != 1 {
 		t.Fatal("reply not submitted")
 	}
 	e.Pause(true)
@@ -265,7 +265,7 @@ func TestInteractionSubmissionRechecksPolicy(t *testing.T) {
 			if err := e.Dispatch(ctx); err != nil {
 				t.Fatal(err)
 			}
-			if len(f.Sent) != 0 {
+			if f.SentCount() != 0 {
 				t.Fatal("reaction submitted after policy changed")
 			}
 		})

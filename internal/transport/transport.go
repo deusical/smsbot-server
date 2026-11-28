@@ -257,6 +257,22 @@ func (f *Fixture) Send(ctx context.Context, conv, txn, text string) (Receipt, er
 	return Receipt{State: "submitted", MessageID: txn}, nil
 }
 
+func (f *Fixture) SentCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.Sent)
+}
+
+func (f *Fixture) SentSnapshot() map[string]string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	m := make(map[string]string, len(f.Sent))
+	for k, v := range f.Sent {
+		m[k] = v
+	}
+	return m
+}
+
 // Lookup returns the live identity of one conversation, bounded to 20 seconds.
 // It uses a direct lookup when the transport supports one.
 func Lookup(ctx context.Context, t Transport, id string) (Conversation, error) {

@@ -151,7 +151,7 @@ func TestFileComposeDurableIntentAndUncertainSubmission(t *testing.T) {
 		t.Fatal("uncertain send not preserved", j.State)
 	}
 	f.Fail = ""
-	if err = e.Dispatch(ctx); err != nil || len(f.Sent) != 0 {
+	if err = e.Dispatch(ctx); err != nil || f.SentCount() != 0 {
 		t.Fatal("uncertain file send retried")
 	}
 	e.Pause(true)
@@ -212,7 +212,7 @@ func TestPauseAndConsentRevocationDuringUploadPreventSend(t *testing.T) {
 				t.Fatal(err)
 			}
 			jobs, _ := e.Store.Jobs()
-			if len(jobs) != 1 || jobs[0].ID != id || jobs[0].State != "cancelled" || len(f.Sent) != 0 {
+			if len(jobs) != 1 || jobs[0].ID != id || jobs[0].State != "cancelled" || f.SentCount() != 0 {
 				t.Fatal("file sent after pause/revocation")
 			}
 		})

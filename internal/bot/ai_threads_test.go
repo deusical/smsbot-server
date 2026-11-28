@@ -232,13 +232,13 @@ func TestAskThreadExplicitCommandsResetAndNoResurrection(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- e.Dispatch(context.Background()) }()
 	<-provider.started
-	sentBefore := len(f.Sent)
+	sentBefore := f.SentCount()
 	threadAccept(t, e, threadPrompt("reset", "!new", "answer"))
 	close(provider.release)
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
-	if len(f.Sent) != sentBefore {
+	if f.SentCount() != sentBefore {
 		t.Fatal("reset generation sent stale answer")
 	}
 	if stateOf(t, e, store.Hash("demo-chat\x00child")) != "cancelled" {
